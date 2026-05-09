@@ -1,0 +1,5 @@
+(goimport ["stdDependencies" 'dep])
+
+(fun 'PrintLine '((spread args))
+    '(dep.PrintLine (spread args))
+)

@@ -1,0 +1,6 @@
+(import "std/io")
+
+(io.PrintLine "a" "b" "c")
+
+(io.ReadLine "heyo: ")
+
