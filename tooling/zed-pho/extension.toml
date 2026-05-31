@@ -1,0 +1,39 @@
+id = "pho"
+name = "Pho"
+description = "Pho language support for Zed: syntax highlighting, brackets, outline, indentation, plus diagnostics via the Pho LSP."
+version = "0.0.1"
+schema_version = 1
+authors = ["Pho Authors"]
+repository = "https://github.com/REPLACE_ME/pho"
+
+# Grammar source.
+#
+# Zed clones the grammar repo at the given commit, runs `tree-sitter
+# generate` if needed, and compiles it. For published grammars, set
+# `repository` to a real git URL (GitHub, etc.) and pin `commit` to a
+# specific SHA.
+#
+# For LOCAL DEV (until tree-sitter-pho has its own remote repo), use a
+# `file://` URL pointing at a checked-out copy of tree-sitter-pho. See
+# README.md for the full workflow — short version:
+#
+#     cd tooling/tree-sitter-pho
+#     git init && git add -A && git commit -m "init"
+#
+# then replace the `repository` value below with the absolute path:
+#
+#     repository = "file:///Users/you/.../pho/tooling/tree-sitter-pho"
+#     commit = "b0a6111bcfd88fe6804a158d19d21a9fb46e8a68"
+#
+[grammars.pho]
+repository = "file:///Users/redjive2/Dev/Pho/tooling/tree-sitter-pho"
+commit = "6bc6ae67f12ac9324fdae165e1ec7531208cd675"
+
+# Language server. The implementation lives in cmd/pho-lsp/ (Go); this
+# block tells Zed it exists and which language(s) to attach it to. The
+# actual command-line invocation is decided at runtime by the Rust
+# component (src/pho.rs), which resolves `pho-lsp` from the user's
+# PATH.
+[language_servers.pho-lsp]
+name = "Pho LSP"
+languages = ["Pho"]

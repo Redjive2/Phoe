@@ -1,0 +1,5 @@
+(goimport ["stdDependencies" 'dep])
+
+(fun 'Number '(str) 
+    '(dep.Atoi str)
+)

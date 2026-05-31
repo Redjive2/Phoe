@@ -1,0 +1,92 @@
+-- module std.core: provides -core- utilities that most programs use, but don't create effects and aren't central enough to warrant builtins.
+-- This file introduces basic operations on lists (most of which are compatible with strings)
+
+-- Concatenates any given lists (or strings) into a new list (or string).
+-- Called as follows: `(core.Concat [1 2] [3 4] [5 6])` becoming `[1 2 3 4 5 6]`
+(fun 'Concat '((spread lists)) '(do
+    (var 'joined [])
+    
+    (for 'item (Flatten lists) &(do
+        (= 'joined (append joined item))
+    ))
+    
+    joined
+))
+
+-- Puts the contents of each immediately nested list into the top list, respecting position, and returning the result in a new list.
+-- Called as follows: `(core.Flatten [1 [2] [3 [4] 5] 6])` becoming `[1 2 3 [4] 5 6]`
+(fun 'Flatten '(list) '(do
+    (var 'flat [])
+    
+    (for 'subList list 
+        -- TODO: add list type check here
+        &(for 'item subList 
+            &(= 'flat (append flat item))
+        )
+    )
+    
+    flat
+))
+
+-- Replaces all `list.i` with `(transform list.i)`, returning the result in a new list.
+-- Called as follows: `(core.Select [1 2 3] (function '(it) '(+ it 1)))`
+(fun 'Select '(list transform) '(do
+    (var 'newList [])
+    
+    (for 'item list 
+        &(= newList (append newList (transform item)))
+    )
+    
+    newList
+))
+
+-- Removes all elements that fail the predicate from the list, returning the result.
+-- Uses `(~= input Nil)` as the default predicate.
+-- Called as follows: `(core.Where [1 2 3] (fun '(it) '(> it 1)))`
+(fun 'Where '(list predicate) '(do
+    (var 'newList [])
+
+    (var 'pred (if (== predicate Nil)
+        &(fun '(value) '(~= value Nil))
+        &predicate))
+
+    (for 'item list
+        &(if (pred item) 
+            &(= newList (append newList item))
+        )
+    )
+    
+    newList
+))
+
+
+-- Folds a list into a single value. Called as follows: `(core.Fold 0 [1 2 3] +)`
+(fun 'Fold '(initial list function) '(do
+    (var 'acc initial)
+
+    (for 'item list
+        &(= 'acc (function acc item))
+    )
+    
+    acc
+))
+
+-- Checks if a list (or string) includes a sublist (or substring).
+-- Called as follows: `(core.Includes "abcdef" "cde")`
+(fun 'Includes '(list sublist) '(do
+    (var 'maxI (- (len list) (len sublist)))
+
+    (if (> maxI 0)
+        &(do
+            (var 'result False)
+            
+            (for 'i (range maxI) &(do
+                (if (== list.[i : (+ i (len sublist))] sublist)
+                    &(= 'result True))
+            ))
+        
+            result
+        )
+        &Nil
+    )
+))

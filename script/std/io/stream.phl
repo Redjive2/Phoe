@@ -1,0 +1,22 @@
+(goimport ["stdDependencies" 'dep])
+
+-- Just a thin box for an id; all functionality routed through stdDependencies 
+-- Passes strings from writers to readers sharing an id
+(struct 'Reader '(id))
+(struct 'Writer '(id))
+
+(method Reader 'ReadLine '(self prompt)
+    '(dep.ReadLine self.id prompt)
+)
+
+(method Reader 'Read '(self n) 
+    '(dep.Read self.id n)
+)
+
+(method Reader 'ReadUntil '(self stop)
+    '(dep.ReadUntil self.id stop)
+)
+
+(method Writer 'Write '(self content)
+    '(dep.Write self.id content)
+)

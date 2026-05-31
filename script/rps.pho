@@ -1,0 +1,16 @@
+(import "std/io"
+        "std/pctl")
+
+(var 'subproc (pctl.Spawn "./other_proc.pho" ["Rock Paper Scissors"]))
+(io.PrintLine "rps >  I'm 'Rock Paper Scissors'!")
+
+(var 'output (subproc.Stdout.ReadLine))
+(io.PrintLine "       " output "  < other_proc")
+
+(subproc.Write "Rock")
+(io.PrintLine ("rps >  I choose 'Rock'."))
+
+(= 'output (subproc.Stdout.ReadLine))
+(io.PrintLine "       " output "  < other_proc")
+
+(if (core.Includes output "You lose!") &())

@@ -1,0 +1,5 @@
+(goimport ["stdDependencies" 'dep])
+
+(fun 'ReadLine '(prompt)
+    '(dep.ReadLine prompt)
+)

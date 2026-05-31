@@ -1,0 +1,7 @@
+# Rust build artifacts (Cargo / Zed extension build).
+target/
+Cargo.lock
+
+# Zed's grammar checkout cache for this extension. Re-cloned from the
+# grammars.pho.repository URL on every install.
+grammars/

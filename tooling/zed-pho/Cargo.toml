@@ -1,0 +1,20 @@
+[package]
+name = "zed-pho"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# Zed extensions are loaded as WASM components, so the Rust crate is
+# built as a cdylib targeting wasm32. Zed's CLI handles the actual
+# wasm32 build when the extension is installed; we just declare the
+# crate type here.
+[lib]
+path = "src/pho.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+# zed_extension_api version is tied to Zed's extension schema. 0.2.0
+# corresponds to schema_version = 1, which is what extension.toml
+# declares. If Zed reports an ABI mismatch, bump this.
+zed_extension_api = "0.2.0"

@@ -1,0 +1,20 @@
+name = "Pho"
+grammar = "pho"
+path_suffixes = ["pho", "phl"]
+
+# Pho comments are line-based: `--` to end of line. The trailing space in
+# `"-- "` makes Zed's "toggle comment" command insert `-- ` (with space)
+# rather than just `--`, matching common style.
+line_comments = ["-- "]
+
+# Auto-pair these characters when the user types the opener. `not_in`
+# entries suppress auto-pairing inside string / comment contexts.
+brackets = [
+    { start = "(", end = ")", close = true, newline = true },
+    { start = "[", end = "]", close = true, newline = true },
+    { start = "{", end = "}", close = true, newline = true },
+    { start = "\"", end = "\"", close = true, newline = false, not_in = ["string", "comment"] },
+]
+
+# Characters that, when typed, will let an auto-paired closer step over them.
+autoclose_before = ".,;:)]}\""

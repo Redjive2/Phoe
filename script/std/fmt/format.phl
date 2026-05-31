@@ -1,0 +1,5 @@
+(goimport ["stdDependencies" 'dep])
+
+(fun 'Format '((spread args) a b)
+    '(dep.Sprint (spread args))
+)

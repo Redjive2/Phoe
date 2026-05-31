@@ -1,3 +1,3 @@
-module lithp2
+module pho
 
 go 1.24
