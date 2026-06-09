@@ -187,6 +187,14 @@ func flattenScope(s *Scope) []Definition {
 	seen := map[string]Definition{}
 	for cur := s; cur != nil; cur = cur.Parent {
 		for n, d := range cur.Defs {
+			// Methods aren't bindable by bare name — they're reached via
+			// `instance.method`. They sit in scope only under a
+			// receiver-qualified key ("Owner.name") so the redeclaration
+			// check can spot a method defined twice on the same owner;
+			// they must never surface as bare-name completions.
+			if d.Kind == DefMethod {
+				continue
+			}
 			if _, ok := seen[n]; !ok {
 				seen[n] = d
 			}

@@ -267,7 +267,7 @@ func evalTopLevel(ctx core.Context, fname string, form core.Node) {
 			fmt.Println("(ERR) 'continue' at the top level of '" + fname +
 				"' — continue is only valid inside a 'for' loop @ 'modload.evalTopLevel'.")
 		default:
-			panic(r)
+			fmt.Printf(">>> %s %s %s", fname, core.Inspect(form), fmt.Sprint(r))
 		}
 	}()
 	form.Evaluate(ctx)

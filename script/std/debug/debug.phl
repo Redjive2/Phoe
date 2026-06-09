@@ -1,0 +1,10 @@
+(goimport ["stdDependencies" 'dep])
+
+(import "std/core"
+        "std/fmt")
+
+(fun 'Log '(caller (spread args)) '(do
+    (const 'data (core.Select args (fun '(arg) 
+        '(fmt.Format "<" (pause arg) "=" arg ">"))))
+    (dep.DebugLog "[debug @ " caller "] " "<n=" (len args) "> : " (spread data))
+))

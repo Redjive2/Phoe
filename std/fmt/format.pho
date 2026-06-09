@@ -1,5 +1,0 @@
-(goimport ["stdDependencies" 'dep])
-
-(fun 'Format '(args...)
-    '(dep.Sprint args...)
-)

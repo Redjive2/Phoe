@@ -133,6 +133,72 @@ func TestLowerInterpInnerString(t *testing.T) {
 	}
 }
 
+// evalFirst lowers a single-form source and evaluates the resulting
+// top-level node. A plain string literal evaluates without touching the
+// environment (the leaf evaluator just unescapes), so a zero Context is
+// enough. This exercises the WHOLE escape path end to end — the lexer's
+// scanString preserving the backslash pairs, the lower pass passing the
+// leaf through unchanged, and core's unescapeStringLit translating them
+// — which the unescapeStringLit unit test in pkg/core can't prove on
+// its own.
+func evalFirst(t *testing.T, src string) core.Value {
+	t.Helper()
+	lowered, ok := lower(src).(core.Branch)
+	if !ok || len(lowered) == 0 {
+		t.Fatalf("expected at least one top-level form from %q", src)
+	}
+	return lowered[0].Evaluate(core.Context{})
+}
+
+// End-to-end string-escape handling: a literal written with C-style
+// backslash escapes in source must evaluate to a Go string carrying the
+// real control bytes.
+func TestEvalStringEscapes(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"newline", `"line1\nline2"`, "line1\nline2"},
+		{"tab", `"a\tb"`, "a\tb"},
+		{"carriage return", `"a\rb"`, "a\rb"},
+		{"escaped quote", `"say \"hi\""`, `say "hi"`},
+		{"escaped backslash", `"a\\b"`, `a\b`},
+		{"mixed run", `"a\n\tb\\c"`, "a\n\tb\\c"},
+		{"null byte", `"x\0y"`, "x\x00y"},
+		{"unknown escape passes through", `"\q"`, `\q`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := evalFirst(t, tc.src)
+			if v.Kind != core.KindStr {
+				t.Fatalf("eval(%s): expected str, got kind %q (%v)", tc.src, v.Kind, v.Val)
+			}
+			if got := v.Val.(string); got != tc.want {
+				t.Errorf("eval(%s) = %q, want %q", tc.src, got, tc.want)
+			}
+		})
+	}
+}
+
+// Interpolation must desugar even when the string sits inside a quoted
+// form. Fun/method bodies are quoted (they go through listifyP, not
+// lowerNode), so this is the COMMON case — a regression here means
+// `"%x"` inside any function body silently renders as literal text
+// instead of interpolating.
+func TestLowerInterpInsideQuote(t *testing.T) {
+	// String nested inside a quoted (...) body.
+	got := dumpTree(lower(`(fun 'f '(who) '(io.PrintLine "hi %who"))`))
+	if !strings.Contains(got, core.Strinterp) {
+		t.Errorf("expected Strinterp for interpolation inside quoted fun body, got %s", got)
+	}
+	// Quoted string used directly as a fun body (debug.phl style).
+	got = dumpTree(lower(`(fun '(arg) '"v=%arg")`))
+	if !strings.Contains(got, core.Strinterp) {
+		t.Errorf("expected Strinterp for quoted string body, got %s", got)
+	}
+}
+
 // Bracket / brace literals expand to (slice ...) / (map ...).
 func TestLowerArrayDictLiterals(t *testing.T) {
 	got := dumpTree(lower("[1 2 3]"))

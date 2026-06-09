@@ -6,17 +6,17 @@
 (struct 'Writer '(id))
 
 (method Reader 'ReadLine '(self prompt)
-    '(dep.ReadLine self.id prompt)
+    '(dep.IoReadLine self.id prompt)
 )
 
 (method Reader 'Read '(self n) 
-    '(dep.Read self.id n)
+    '(dep.IoRead self.id n)
 )
 
 (method Reader 'ReadUntil '(self stop)
-    '(dep.ReadUntil self.id stop)
+    '(dep.IoReadUntil self.id stop)
 )
 
 (method Writer 'Write '(self content)
-    '(dep.Write self.id content)
+    '(dep.IoWrite self.id content)
 )

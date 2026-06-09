@@ -105,6 +105,19 @@ func lowerNode(p core.PNode) core.Node {
 func listifyP(p core.PNode) core.Node {
 	switch n := p.(type) {
 	case *core.PLeaf:
+		// A string literal carrying interpolation must desugar even
+		// inside a quote. Fun/method bodies are quoted, so without this
+		// `'(... "%x" ...)` would re-quote the raw text and the
+		// interpolation would never run — it'd render as literal `%x`.
+		// Lower it to the (Strinterp ...) call, then listify THAT, so
+		// once the quoted body is Derepr'd and evaluated the
+		// interpolation fires. Mirrors the PLeaf case in lowerNode.
+		if len(n.Value) >= 2 && n.Value[0] == '"' && n.Value[len(n.Value)-1] == '"' {
+			body := n.Value[1 : len(n.Value)-1]
+			if HasInterpolation(body) {
+				return listifyNode(loweredInterp(body))
+			}
+		}
 		return core.Leaf("\"" + n.Value + "\"")
 	case *core.PBranch:
 		if n.Open != "(" {

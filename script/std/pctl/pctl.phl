@@ -2,12 +2,32 @@
 
 (goimport ["stdDependencies" 'dep])
 
+(import "std/io")
+
 (fun 'Quit '(code message)
     '(dep.PctlQuit code message)
 )
 
 -- Just a thin box for a pid; all functionality routed through stdDependencies
 (struct 'Process '(pid))
+
+(fun 'ThisProcess '() 
+    '(Process { 'pid 0 })
+)
+
+(fun 'Stdout '() 
+    '((ThisProcess).Stdout)
+)
+
+(fun 'Stdin '() 
+    '((ThisProcess).Stdin)
+)
+
+(fun 'Stderr '() 
+    '((ThisProcess).Stderr)
+)
+
+
 
 
 -- Starts and returns a `Process` instance
@@ -26,9 +46,21 @@
 )
 
 
--- Wires a given PID's stream (in, out, err) to the target stream.
--- Called like so: `(process.Wire (process.Stdout) (pctl.Stdout))
-(method Process 'Wire '(self sourceStream targetStream)
-    '(dep.PctlWire self.pid sourceStream targetStream)
+-- Wires a given source stream (in, out, err) to the target stream.
+-- Called like so: `(pctl.Wire (process.Stdout) (pctl.Stdout))
+(fun 'Wire '(sourceStream targetStream)
+    '(dep.PctlWire sourceStream targetStream)
+)
+
+(method Process 'Stdout '(self)
+    '(io.Reader { 'id (dep.PctlStdoutId self.pid) })
+)
+
+(method Process 'Stdin '(self)
+    '(io.Writer { 'id (dep.PctlStdinId self.pid) })
+)
+
+(method Process 'Stderr '(self)
+    '(io.Writer { 'id (dep.PctlStderrId self.pid) })
 )
 

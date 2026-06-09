@@ -45,7 +45,7 @@
 -- Called as follows: `(core.Where [1 2 3] (fun '(it) '(> it 1)))`
 (fun 'Where '(list predicate) '(do
     (var 'newList [])
-
+    
     (var 'pred (if (== predicate Nil)
         &(fun '(value) '(~= value Nil))
         &predicate))
@@ -74,19 +74,16 @@
 -- Checks if a list (or string) includes a sublist (or substring).
 -- Called as follows: `(core.Includes "abcdef" "cde")`
 (fun 'Includes '(list sublist) '(do
-    (var 'maxI (- (len list) (len sublist)))
+    (var 'maxI (- (len list) (len sublist))) -- highest index to iterate to; must satisfy: len(list) > maxI + len(sublist)
 
-    (if (> maxI 0)
-        &(do
-            (var 'result False)
-            
-            (for 'i (range maxI) &(do
-                (if (== list.[i : (+ i (len sublist))] sublist)
-                    &(= 'result True))
-            ))
-        
-            result
-        )
-        &Nil
+    (if (<= maxI 0)
+        &(return Nil)
     )
+        
+    (for 'i (range maxI) &(do
+        (if (== list.[i : (+ i (len sublist))] sublist)
+            &(return True))
+    ))
+
+    False
 ))

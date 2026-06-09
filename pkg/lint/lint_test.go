@@ -431,6 +431,41 @@ func TestPackageScopeDoesNotShadowOnRedeclare(t *testing.T) {
 	}
 }
 
+// A method shares no namespace with top-level bindings: the runtime
+// stores it on the owner struct (builtins.method) and never Declares
+// it. So (method Process 'Stdout ...) must not be reported as shadowing
+// (fun 'Stdout ...) or a 'Stdout method on a different receiver. Only a
+// second 'Stdout on Process itself is a genuine redeclaration.
+func TestMethodDoesNotShadowFunOrOtherReceiver(t *testing.T) {
+	// method vs fun of the same name — no redeclaration.
+	d := AnalyzeFile("test.pho", []byte(`(struct 'Process '(pid))
+(fun 'Stdout '() '(Nil))
+(method Process 'Stdout '(self) '(self.pid))
+`))
+	if hasDiag(d, "redeclaration") {
+		t.Errorf("method must not shadow a fun of the same name, got %#v", d)
+	}
+
+	// two methods named Stdout on DIFFERENT receivers — no redeclaration.
+	d = AnalyzeFile("test.pho", []byte(`(struct 'Process '(pid))
+(struct 'File '(fd))
+(method Process 'Stdout '(self) '(self.pid))
+(method File 'Stdout '(self) '(self.fd))
+`))
+	if hasDiag(d, "redeclaration") {
+		t.Errorf("methods named the same on different receivers must not collide, got %#v", d)
+	}
+
+	// the SAME method on the SAME receiver twice — still a redeclaration.
+	d = AnalyzeFile("test.pho", []byte(`(struct 'Process '(pid))
+(method Process 'Stdout '(self) '(self.pid))
+(method Process 'Stdout '(self) '(self.pid))
+`))
+	if !hasDiag(d, "redeclaration") {
+		t.Errorf("a method redefined on the same receiver should be flagged, got %#v", d)
+	}
+}
+
 // Empty `()` forms used to crash checkPhlSideEffects with an
 // out-of-range index when accessing Children[0]. Regression check —
 // the LSP runs lint on every keystroke, so any panic here kills the

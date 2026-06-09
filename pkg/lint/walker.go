@@ -128,9 +128,26 @@ func (w *walker) collectOne(scope *Scope, form core.PNode) {
 
 	case "method":
 		// (method Owner 'name '(args) '(body))
+		//
+		// A method is NOT a top-level binding. The runtime stores it in
+		// the owner struct's method table (builtins.method does
+		// `struct.Methods[name] = ...` and never calls ctx.Declare), and
+		// it's only ever reached via `instance.name` — never by bare
+		// name. So a method must not be reported as shadowing a fun,
+		// const, struct, or a method of the same name on a DIFFERENT
+		// owner: those live in separate namespaces. We register it under
+		// a receiver-qualified key ("Owner.name") so the one
+		// redeclaration still worth flagging — the same method defined
+		// twice on the same owner — keeps firing, while "Owner.name" can
+		// never match a bare identifier (identifiers can't contain '.'),
+		// so nothing else trips. If the owner isn't a plain identifier we
+		// can't form a stable key, so we skip it rather than risk a false
+		// positive.
 		if len(br.Children) >= 4 {
 			if name, span, ok := quotedIdent(br.Children[2]); ok {
-				w.define(scope, name, DefMethod, span)
+				if recv, ok := br.Children[1].(*core.PLeaf); ok && looksLikeIdentifier(recv.Value) {
+					w.define(scope, recv.Value+"."+name, DefMethod, span)
+				}
 			}
 		}
 
@@ -228,11 +245,16 @@ func pathBasename(path string) string {
 	return path
 }
 
-// define mirrors the runtime's Declare: var / const / fun / method /
-// struct / import can't shadow ANY visible binding (current scope,
-// enclosing scopes, or builtins). Parameters are special — they're
-// installed directly into the body frame at call time without going
-// through Declare, so they're allowed to shadow.
+// define mirrors the runtime's Declare: var / const / fun / struct /
+// import can't shadow ANY visible binding (current scope, enclosing
+// scopes, or builtins). Parameters are special — they're installed
+// directly into the body frame at call time without going through
+// Declare, so they're allowed to shadow. Methods are special too: the
+// runtime never Declares them (they live on the owner struct), so
+// collectOne passes a receiver-qualified key ("Owner.name") here —
+// that way a method only ever collides with another method of the same
+// name on the same owner, never with a fun/const/struct/import or a
+// method on a different owner.
 //
 // Always installs the new binding regardless, so subsequent lookups in
 // this scope resolve to the just-declared name.

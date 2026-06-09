@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"pho/pkg/core"
 	"pho/pkg/goop"
 	"pho/pkg/lint"
 	"pho/pkg/modload"
@@ -19,7 +20,22 @@ import (
 	_ "pho/pkg/builtins"
 )
 
+type Module struct {}
+
+func (Module) DoStuff(s string, f float64, m map[core.Tval]core.Tval) []core.Tval {
+	return []core.Tval{
+		core.TvBool(true),
+	}
+} 
+
 func main() {
+	goop.Expose(&goop.PhoModule{
+		Name: "Module",
+		Children: map[string]*goop.PhoModule{},
+		Data: Module{},
+	})
+
+	
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "usage: pho <file.pho | file.phl>")
 		os.Exit(2)
