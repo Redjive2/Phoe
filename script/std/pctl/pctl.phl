@@ -1,66 +1,80 @@
 -- module std/pctl: responsible for all process-related control functions
 
-(goimport ["stdDependencies" 'dep])
+(goimport ("stdDependencies" dep))
 
 (import "std/io")
 
-(fun 'Quit '(code message)
-    '(dep.PctlQuit code message)
+(fun Quit (code message)
+    (dep.PctlQuit code message)
 )
 
 -- Just a thin box for a pid; all functionality routed through stdDependencies
-(struct 'Process '(pid))
-
-(fun 'ThisProcess '() 
-    '(Process { 'pid 0 })
+(struct Process
+    pid
 )
 
-(fun 'Stdout '() 
-    '((ThisProcess).Stdout)
-)
-
-(fun 'Stdin '() 
-    '((ThisProcess).Stdin)
-)
-
-(fun 'Stderr '() 
-    '((ThisProcess).Stderr)
-)
-
-
-
+(const ThisProcess Process.{ pid 0 }
+       Stdout      ThisProcess.Stdout
+       Stdin       ThisProcess.Stdin
+       Stderr      ThisProcess.Stderr)
 
 -- Starts and returns a `Process` instance
 -- Called like so: `(pctl.Spawn "path/to/script" ["arg0" "arg1"] { 'stdout (pctl.Stdout) })`
-(fun 'Spawn '(path args config) '(do
-    (var 'pid (dep.PctlSpawn path args config))
+(fun Spawn (path args config)
+    Process.{ pid (dep.PctlSpawn path args config) }
+)
 
-    (var 'newConfig config)
-    (= newConfig.pid pid)
-    
-    (Process newConfig)
-))
+(method Process.Cancel (self)
+    (dep.PctlCancel self.pid)
+)
 
-(method Process 'Cancel '(self) 
-    '(dep.PctlCancel self.pid)
+-- Closes the child's stdin so a process that reads to EOF (cat, sort, ...)
+-- can finish instead of blocking forever. Call after writing its input.
+(method Process.CloseStdin (self)
+    (dep.PctlCloseStdin self.pid)
+)
+
+-- Releases the process's streams and registry entries. The runtime reaps
+-- the child automatically (no zombies), but its streams stay readable
+-- after it exits until you Close it, so call this when fully done.
+(method Process.Close (self)
+    (dep.PctlClose self.pid)
 )
 
 
 -- Wires a given source stream (in, out, err) to the target stream.
 -- Called like so: `(pctl.Wire (process.Stdout) (pctl.Stdout))
-(fun 'Wire '(sourceStream targetStream)
-    '(dep.PctlWire sourceStream targetStream)
+(fun Wire (sourceStream targetStream)
+    (dep.PctlWire sourceStream targetStream)
 )
 
-(method Process 'Stdout '(self)
-    '(io.Reader { 'id (dep.PctlStdoutId self.pid) })
+-- Stream directions depend on the perspective: the host process (pid 0)
+-- WRITES its own stdout/stderr and READS its own stdin, while a spawned
+-- child's stdout/stderr are READ by us and its stdin is WRITTEN by us.
+
+(property Process.Stdout
+    get (method Process (self) 
+        (if (== self.pid 0)
+            then io.Writer.{ id (dep.PctlStdoutId self.pid) }
+            else io.Reader.{ id (dep.PctlStdoutId self.pid) }
+        )
+    )
 )
 
-(method Process 'Stdin '(self)
-    '(io.Writer { 'id (dep.PctlStdinId self.pid) })
+(property Process.Stdin
+    get (method Process (self) 
+        (if (== self.pid 0)
+            then io.Writer.{ id (dep.PctlStdinId self.pid) }
+            else io.Reader.{ id (dep.PctlStdinId self.pid) }
+        )
+    )
 )
 
-(method Process 'Stderr '(self)
-    '(io.Writer { 'id (dep.PctlStderrId self.pid) })
+(property Process.Stderr
+    get (method Process (self) 
+        (if (== self.pid 0)
+            then io.Writer.{ id (dep.PctlStderrId self.pid) }
+            else io.Reader.{ id (dep.PctlStderrId self.pid) }
+        )
+    )
 )
-

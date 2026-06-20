@@ -1,0 +1,4 @@
+-- the phase-2 payoff: an error INSIDE a function body carets the body
+-- form itself (spans survive the quote round-trip via Derepr transfer)
+(fun half (n) (/ n "x"))
+(half 4)

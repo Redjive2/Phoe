@@ -18,23 +18,70 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"unicode"
 
 	"pho/pkg/core"
+	"pho/pkg/diag"
 	"pho/pkg/syntax"
 )
 
 // EnvFactory is the function used to construct a fresh package env with
 // all builtins installed. Set by `builtins.init()` so modload can use it
 // without importing builtins (which itself imports modload).
+// Notably: I hate this.
 var EnvFactory func() core.Env
+
+// AnnotationStasher, if set, is called for each file right after its
+// top-level forms are parsed; it evaluates the file's parse-time
+// annotations and stashes them on file.Annotations. Set by pkg/annot's
+// init so modload need not import annot (which imports modload). The tree
+// is the []ast.PNode the loader holds, passed as `any` to keep modload
+// free of a pkg/ast import.
+var AnnotationStasher func(tree any, file *core.File)
 
 var (
 	packageCache    = map[string]*core.Package{}
 	loadingPackages = map[string]bool{}
+	parseFailed     = map[string]*ParseFailedError{}
+	session         *diag.Session
 )
+
+// SetSession installs the run-wide diagnostic session that loader and
+// evaluation errors report through. Package-level (alongside
+// packageCache) because LoadPackage's signature is shared with the
+// import builtin; core itself stays free of global state. A nil session
+// degrades to plain one-line stderr reports.
+func SetSession(s *diag.Session) { session = s }
+
+// Invalidate drops any cached load (a success or a remembered parse
+// failure) for the package at path, so the next LoadPackage re-reads it
+// from disk. A long-lived host (the LSP) uses this to pick up edits to a
+// package — notably the annotation-macro library — without a restart.
+func Invalidate(path string) {
+	path = filepath.Clean(path)
+	delete(packageCache, path)
+	delete(parseFailed, path)
+}
+
+// ParseFailedError reports that a package was not evaluated because its
+// sources failed to lex or parse. The individual diagnostics were
+// already emitted through the session; this error carries the tally so
+// the CLI can pick the parse-specific exit code.
+type ParseFailedError struct {
+	Path  string
+	Count int
+}
+
+func (e *ParseFailedError) Error() string {
+	plural := ""
+	if e.Count != 1 {
+		plural = "s"
+	}
+	return fmt.Sprintf("%d parse error%s in '%s'", e.Count, plural, e.Path)
+}
 
 // libraryForms is the allow-list of head identifiers permitted at the
 // top level of a .phl file. Anything else is a side effect and gets
@@ -43,23 +90,33 @@ var libraryForms = map[string]bool{
 	"import":   true,
 	"goimport": true,
 	"fun":      true,
+	"macro":    true,
 	"method":   true,
 	"struct":   true,
 	"const":    true,
+	// A top-level `var` declares module-level state: mutable from within
+	// the module, exported (when capitalized) but read-only from outside
+	// it (the `=` builtin rejects `(= pkg.Name v)`).
+	"var": true,
+	// A top-level `property` is a declaration: free-standing it binds a
+	// faux variable (a getter/setter delegate, exported when capitalized);
+	// attached `(property Recv.Name …)` registers a computed member on a
+	// struct declared in the same module.
+	"property": true,
 }
 
 // isLibraryForm returns true if a top-level node in a .phl file is an
 // allowed declaration / import. The check is purely syntactic: we look
 // at the head identifier of a list and consult libraryForms.
 func isLibraryForm(form core.Node) bool {
-	branch, ok := form.(core.Branch)
+	branch, ok := core.AsBranch(form)
 	if !ok {
 		return false // bare atoms at top level are side effects
 	}
 	if len(branch) == 0 {
 		return false
 	}
-	head, ok := branch[0].(core.Leaf)
+	head, ok := core.AsLeaf(branch[0])
 	if !ok {
 		return false // a call whose head is itself a call isn't a declaration
 	}
@@ -93,6 +150,13 @@ func LoadPackage(path string) (*core.Package, error) {
 
 	if pkg, ok := packageCache[path]; ok {
 		return pkg, nil
+	}
+
+	// Negative cache: a package that failed to parse stays failed for the
+	// whole run. Without this, every repeated import of a broken package
+	// would re-parse it and re-emit each parse diagnostic.
+	if pf, ok := parseFailed[path]; ok {
+		return nil, pf
 	}
 
 	if loadingPackages[path] {
@@ -169,9 +233,14 @@ func LoadPackage(path string) (*core.Package, error) {
 	// declarations above the builtin globals; the frame stays live for the
 	// lifetime of the package (closures captured during loading reference
 	// it).
-	pkgCtx := core.Context{Env: pkg.Env, Package: pkg}
+	pkgCtx := core.Context{Env: pkg.Env, Package: pkg, Diag: session}
 	pkgCtx.PushFrame()
 
+	// Parse every file before evaluating any: a package with syntax
+	// errors does not run at all, and the diagnostics for all of its
+	// files surface in one pass. (The linter reports the same errors
+	// statically; this is the runtime's own surfacing of them.)
+	parseFailures := 0
 	for _, fname := range sourceFiles {
 		contents, err := os.ReadFile(filepath.Join(pkgDir, fname))
 		if err != nil {
@@ -180,13 +249,12 @@ func LoadPackage(path string) (*core.Package, error) {
 
 		// Positioned parser → syntactic-transform adapter → desugared
 		// core.Node tree the existing builtins know how to walk.
-		// Lex/parse errors are reported by the linter (cmd/pho-lint /
-		// the LSP); modload silently consumes whatever recoverable tree
-		// the parser produced.
-		ptokens, _ := syntax.LexPos(string(contents))
-		ptree, _ := syntax.ParsePos(ptokens)
+		ptokens, lexErrs := syntax.LexPos(string(contents))
+		ptree, parseErrs := syntax.ParsePos(ptokens)
 		file := &core.File{
 			FileName: fname,
+			Path:     filepath.Join(pkgDir, fname),
+			Src:      string(contents),
 			Pkg:      pkg,
 			Imports:  map[string]core.Value{},
 			Tree:     syntax.Lower(ptree),
@@ -194,6 +262,45 @@ func LoadPackage(path string) (*core.Package, error) {
 		}
 		pkg.Files[fname] = file
 
+		if AnnotationStasher != nil {
+			AnnotationStasher(ptree, file)
+		}
+
+		for _, e := range append(lexErrs, parseErrs...) {
+			session.Emit(diag.RuntimeError{
+				Diagnostic: diag.Diagnostic{
+					File:     file.Path,
+					Span:     e.Span,
+					Severity: diag.SeverityError,
+					Code:     diag.ErrParse,
+					Message:  e.Message,
+				},
+				Source: file.Src,
+			})
+			parseFailures++
+		}
+	}
+
+	if parseFailures > 0 {
+		pf := &ParseFailedError{Path: path, Count: parseFailures}
+		parseFailed[path] = pf
+		return nil, pf
+	}
+
+	// strictAbort reports whether PHO_STRICT is set and an error has
+	// already been reported — in which case the loader stops evaluating
+	// further top-level forms rather than continuing in print-and-continue
+	// mode. Checked between forms (and files), so it halts after the first
+	// form that errors.
+	strictAbort := func() bool {
+		return session != nil && session.Strict && session.ErrorCount() > 0
+	}
+
+	for _, fname := range sourceFiles {
+		if strictAbort() {
+			break
+		}
+		file := pkg.Files[fname]
 		fileCtx := pkgCtx.WithFile(file)
 
 		// The parser returns a top-level Branch whose children are the
@@ -202,10 +309,13 @@ func LoadPackage(path string) (*core.Package, error) {
 		// each form is gated through the library allow-list.
 		if topLevel, ok := file.Tree.(core.Branch); ok {
 			for _, form := range topLevel {
+				if strictAbort() {
+					break
+				}
 				if file.Mode == core.ModeLibrary && !isLibraryForm(form) {
-					fmt.Println("(ERR) library file '" + fname +
-						"' may only contain declarations and imports at the top level; rejected '" +
-						core.Inspect(form) + "' @ 'modload.LoadPackage'.")
+					fileCtx.Errorf(core.ErrLibraryForm,
+						"library file '%s' may only contain declarations and imports at the top level; rejected '%s'",
+						fname, core.Inspect(form))
 					continue
 				}
 				evalTopLevel(fileCtx, fname, form)
@@ -226,18 +336,16 @@ func LoadPackage(path string) (*core.Package, error) {
 	isScriptEntrypoint := len(sourceFiles) == 1 && fileMode(sourceFiles[0]) == core.ModeProgram
 
 	if !isScriptEntrypoint {
+		// Every capitalized top-level binding is exported. Functions,
+		// methods, and struct constructors are exposed as callables; var
+		// and const bindings are exposed as read-only values — an importer
+		// can read `pkg.Name` but cannot assign to it (see the `=` builtin's
+		// package case and the Dot accessor, which reads the live binding).
 		for name, entry := range pkg.Env.Stack[0] {
 			if len(name) == 0 || !unicode.IsUpper(rune(name[0])) {
 				continue
 			}
-
-			v := entry.Val
-			if v.Kind != core.KindFun && v.Kind != core.KindMethod && v.Kind != core.KindConstructor {
-				fmt.Println("(ERR): Cannot export symbol '" + name + "' of type '" + v.Kind + "'; only functions may be exported @ 'modload.LoadPackage'.")
-				continue
-			}
-
-			pkg.Exports[name] = v
+			pkg.Exports[name] = entry.Val
 		}
 	}
 
@@ -254,20 +362,53 @@ func LoadPackage(path string) (*core.Package, error) {
 // the host. The linter flags these cases too, but the runtime guard
 // is a backstop for unlinted code or AST-level shenanigans.
 func evalTopLevel(ctx core.Context, fname string, form core.Node) {
+	// Seed the current span from the form itself so the recover paths
+	// below report a position: ctx is a value copy, so span updates made
+	// during evaluation are invisible here — without this, a stray
+	// signal or Go panic would render with no location at all.
+	if sp, ok := core.SpanOf(form); ok {
+		ctx.At = &sp
+	}
+
+	// The root of every Pho stack trace. Record the frame depth on entry
+	// and truncate back to it afterward (rather than clearing outright):
+	// a nested package load via `import` runs more top-level forms while
+	// outer frames are still live, and those must be preserved. Truncate
+	// also cleans up frames a foreign panic left behind (the per-call
+	// pops are skipped during a panic unwind).
+	base := ctx.Diag.Depth()
+	ctx.PushCallFrame("<top level>")
+	defer ctx.Diag.Truncate(base)
+
 	defer func() {
 		switch r := recover(); r.(type) {
 		case nil:
 		case core.ReturnSignal:
-			fmt.Println("(ERR) 'return' at the top level of '" + fname +
-				"' — return is only valid inside a function or method body @ 'modload.evalTopLevel'.")
+			ctx.Errorf(core.ErrTopLevelFlow,
+				"'return' at the top level of '%s' — return is only valid inside a function or method body", fname)
 		case core.BreakSignal:
-			fmt.Println("(ERR) 'break' at the top level of '" + fname +
-				"' — break is only valid inside a 'for' loop @ 'modload.evalTopLevel'.")
+			ctx.Errorf(core.ErrTopLevelFlow,
+				"'break' at the top level of '%s' — break is only valid inside a 'for' loop", fname)
 		case core.ContinueSignal:
-			fmt.Println("(ERR) 'continue' at the top level of '" + fname +
-				"' — continue is only valid inside a 'for' loop @ 'modload.evalTopLevel'.")
+			ctx.Errorf(core.ErrTopLevelFlow,
+				"'continue' at the top level of '%s' — continue is only valid inside a 'for' loop", fname)
+		case core.RecursionSignal:
+			// The recursion guard fired deep in a call chain; the frame
+			// stack is intact, so EmitPanic shows the (collapsed) trace.
+			ctx.EmitPanic(core.ErrRecursion,
+				fmt.Sprintf("recursion limit exceeded (%d calls)", core.MaxCallDepth()),
+				"deep or infinite recursion — if this is intentional, raise the limit with PHO_MAX_DEPTH")
 		default:
-			fmt.Printf(">>> %s %s %s", fname, core.Inspect(form), fmt.Sprint(r))
+			// A foreign Go panic: the frame stack is still intact (the
+			// per-call pops were skipped during unwind), so EmitPanic
+			// snapshots a call-site trace. The precise throw point inside
+			// the innermost frame is unknown, hence no excerpt.
+			note := "this is likely a bug in the interpreter; re-run with PHO_DEBUG=1 for the Go stack"
+			if core.DebugMode {
+				note = "Go stack:\n" + string(debug.Stack())
+			}
+			ctx.EmitPanic(core.ErrGoPanic,
+				fmt.Sprintf("runtime panic while evaluating '%s': %v", core.Inspect(form), r), note)
 		}
 	}()
 	form.Evaluate(ctx)

@@ -1,0 +1,2 @@
+-- a library that fails to parse: one stray closing paren
+(fun 'Broken '() '(Nil)))

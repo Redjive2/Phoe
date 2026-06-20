@@ -36,10 +36,11 @@ flavors:
 - **`.pho` files** — *scripts*. Anything goes at the top level:
   declarations, imports, and arbitrary expressions / function calls.
 - **`.phl` files** — *libraries*. Top-level forms must be declarations
-  or imports — `import`, `goimport`, `fun`, `method`, `struct`, `const`.
-  Side-effecting forms are rejected before they run. This makes `.phl`
-  files cheap to import: loading one can't, by construction, perform
-  I/O or mutate global state.
+  or imports — `import`, `goimport`, `fun`, `method`, `struct`, `const`,
+  `var`. Side-effecting forms (bare calls, I/O) are rejected before they
+  run, so loading a library can't, by construction, perform I/O. A
+  top-level `var` is module-level state: mutable from within the module
+  but read-only from outside it.
 
 A package can contain a mix of both extensions; they share one
 namespace.
@@ -72,10 +73,19 @@ A Pho file is a sequence of expressions. An expression is one of:
       `%`, write `\%`.
 - A **character** — `` `c` ``. Three characters: backtick, char,
   backtick.
+- An **atom** — `:fast`, `:01213`. A colon glued (no space) to an
+  identifier or a run of digits. Atoms are interned, immutable symbolic
+  values: two atoms with the same name are the *same* object, so they're
+  trivial and cheap to compare. They're handy as configuration tags and
+  dict keys. Digits keep leading zeros, so `:01` and `:1` are distinct.
+  Note: because the colon must be glued, an array's range/slice separator
+  must be spaced — write `xs.[1 : 2]`, not `xs.[1:2]` (which reads as the
+  array `[1, :2]`).
 - A **boolean** — `True` or `False`.
 - **Nil** — `Nil`.
 - An **identifier** — `myVar`, `Point`. Capitalized identifiers are the
-  ones a package exports.
+  ones a package exports. An identifier may end in a single `?` (the
+  predicate convention), e.g. `atom?`, `empty?`.
 - A **list** (a call) — `(f a b c)`. Calls `f` with arguments `a`, `b`,
   `c`.
 
@@ -107,48 +117,104 @@ exist so real code looks like real code.
 {}
 ```
 
-### Dot access — `a.b`
+### Dot access — `a.b` and `a.[b]`
 
-The accessor. Behavior depends on what `a` is:
+The accessor splits by the shape of the right-hand side:
 
-| LHS | `a.b` means |
-|---|---|
-| dict | look up key `b` |
-| array | index, or slice (with `[i : j]` on the RHS) |
-| string | the rune at index `b` |
-| struct instance | field `b`, or method `b` |
-| package | the export named `b` |
-| Go-package | the Go method named `b`, wrapped as a callable |
-| number | reassemble as a decimal (`12.34`) |
+- **`a.name`** — *field access*. `name` is a literal identifier, never
+  evaluated. Use it to reach a struct field/method, a package export, or a
+  Go-package method.
+- **`a.[expr]`** — *dynamic indexing*. `expr` is evaluated and used as an
+  index or key. Use it to index a dict, array, or string. Slices are the
+  colon forms inside the brackets: `a.[i : j]`, `a.[: j]`, `a.[i :]`,
+  `a.[:]`.
+- **`T.{ field value ... }`** — *struct construction*. A dot followed by a
+  brace group builds a `T`, reading the brace as alternating bare field names
+  and their values: `Point.{ X 10 y 20 }` makes a `Point` with `X` = 10 and
+  `y` = 20. The field names are bare identifiers (not quoted, not strings) —
+  they name fields, they aren't evaluated. There is no other construction
+  form; the old `(T { ... })` call form has been removed.
 
-Chains naturally: `pkg.Struct.method`. The `.` is its own token, so
-`12.34` and `obj.field` go through the same machinery — that's why
-`1.5` parses as "number, dot, number" and arrives as `1.5`.
+| LHS | valid form | meaning |
+|---|---|---|
+| dict | `d.[key]` | look up the evaluated `key` |
+| array | `a.[i]` / `a.[i : j]` | index, or slice |
+| string | `s.[i]` / `s.[i : j]` | the rune at `i`, or a rune slice |
+| struct instance | `inst.field` | field, or method |
+| struct (constructor) | `T.{ field v ... }` | construct a `T` from bare field names |
+| package | `pkg.Export` | the export named `Export` |
+| Go-package | `pkg.Method` | the Go method, wrapped as a callable |
+| number | `12.34` | reassemble as a decimal |
+
+Mixing them up is an error: `arr.i` (bare index) and `inst.["field"]`
+(bracketed field) both fail, with a message pointing at the right form.
+
+Chains naturally: `pkg.Struct.method`, `grid.[row].[col]`. The `.` is its
+own token, so the number-decimal case `1.5` still parses as "number, dot,
+number" and arrives as `1.5` — only collections require the brackets.
 
 ### Quote — `'expr`
 
-Treats `expr` as data instead of evaluating it. Function definitions
-use this:
+Treats `expr` as data instead of evaluating it. This is the tool for
+*macros* and code-as-data — building a form to hand to `resume`, or
+carrying a symbol as a value:
 
 ```pho
-(fun 'add '(x y) '(+ x y))
+(pause '(+ 1 2))      -- the list (+ 1 2) as data, not the number 3
+(map 'role "admin")   -- 'role is the symbol "role", used here as a key
 ```
 
-Three quoted forms — name, parameter list, body — handed to `fun` as
-data, evaluated only when `fun` decides to.
+Declarations and control forms do **not** use it — they're written bare
+(`(fun add (x y) (+ x y))`, see *Main builtins*). A quote in a name,
+parameter-list, or assignment-target slot is a static error.
 
 ### Block — `&expr`
 
-Defers evaluation. Used for `if` and `while` branches:
+Defers evaluation: `&expr` becomes a no-arg function (a thunk) that runs
+`expr` only when it's called. Use it to hand deferred code to a function
+that decides when — or whether — to run it:
 
 ```pho
-(if (< x 10)
-    &(io.PrintLine "small")
-    &(io.PrintLine "big"))
+(retry 3 &(fetch url))   -- retry calls the thunk up to 3 times
 ```
 
-`&body` desugars to `(block 'body)` — a no-arg function the surrounding
-form invokes when it's time.
+`&body` desugars to `(block 'body)`. The control forms (`if`, `foreach`,
+`while`, `until`) do **not** need it — their arms and bodies are plain
+expressions (`(if c then x else y)`); the form controls when each runs.
+
+### Do notation — `do`
+
+`do` is not a function — it's a keyword. A `do` inside a form captures
+every sibling *after* it and sequences them: each is evaluated in order,
+and the form yields the last one's value.
+
+At the *head* of a form, `do` sequences in place — `(do x y z)` evaluates
+`x`, `y`, `z` and yields `z`:
+
+```pho
+(do
+    (io.PrintLine "step one")
+    (io.PrintLine "step two")
+    42)
+-- prints both lines, yields 42
+```
+
+After a form's fixed arguments, `do` reads as a block separator — the tail
+becomes the sequenced block. This is how multi-statement bodies are written
+without an extra wrapping quote:
+
+```pho
+(fun add (a b) do
+    (io.PrintLine "adding %a and %b")
+    (+ a b))
+-- desugars to: (fun add (a b) (do … (io.PrintLine …) (+ a b)))
+```
+
+(`do …` is an internal mangled name, hidden from user code like the dot
+accessor — a leading `do` is rewritten to it in place, so `(do x y)`
+becomes `(do … x y)`, not a call on the block's result.) The **`identity`**
+builtin just echoes its single argument; it's no longer needed to host a
+do block, but remains available for forcing any value through a call slot.
 
 ### Macros — `(name! arg1 arg2)`
 
@@ -164,18 +230,40 @@ trick.
 
 ### Spread — `(spread items)`
 
-Splats an array into argument positions:
+Splices an array's elements into a call's argument list — in *any* call
+(a user fun, a builtin, or an array literal), at any position:
 
 ```pho
-(io.PrintLine (spread items))   -- like JS's PrintLine(...items)
+(myFun (spread args))      -- pass each element of `args` as a separate arg
+[0 (spread items) 9]       -- splice into an array literal
+(+ 1 (spread nums) 2)      -- mix spread with fixed arguments
 ```
 
-In a parameter list, `(spread name)` collects trailing args into
-`name`:
+Only an array can be spread; spreading any other value is an error.
+
+In a parameter list, `(spread name)` is the mirror image — it collects
+the caller's trailing args into the array `name`:
 
 ```pho
-(fun 'PrintAll '((spread args))
-    '(io.PrintLine (spread args)))
+(fun PrintAll ((spread args))
+    (io.PrintLine (spread args)))
+```
+
+### Optional — `(optional name)`
+
+In a parameter list, `(optional name)` marks a parameter the caller may
+omit; when it's left off, `name` binds to `Nil` instead of raising an
+arity error. Optionals come after all required parameters and before
+any trailing `(spread rest)`; a required parameter after an optional one
+is rejected.
+
+```pho
+(fun greet (name (optional greeting)) do
+    (if (== greeting Nil) then (= greeting "Hello"))
+    (+ greeting (+ ", " name)))
+
+(greet "Sam")        -- "Hello, Sam"  (greeting defaulted to Nil)
+(greet "Sam" "Hi")   -- "Hi, Sam"
 ```
 
 ## Main builtins
@@ -185,51 +273,90 @@ The forms you'll touch in nearly every Pho program.
 ### `var` / `const` — bindings
 
 ```pho
-(var 'x 5)                 -- inside fun/method bodies, or at the top of a .pho script
-(const 'PI 3)              -- anywhere, including top level
-(var 'a 1 'b 2)            -- multiple at once
+(var x 5)                  -- function/method bodies, .pho scripts, or .phl top level
+(const PI 3)               -- anywhere, including top level
+(var a 1 b 2)              -- multiple at once
 ```
 
-`var` is mutable, `const` isn't. Constants refuse mutation and report
-an error if you try. **`var` at the top level is rejected in `.phl`
-library files** — package-visible bindings have to be immutable so the
-linter can do cross-file reasoning without tracking mutation. Scripts
-(`.pho`) and function bodies have no such constraint: `var` is fine
-wherever side effects are.
+`var` is mutable, `const` isn't. Constants refuse mutation and report an
+error if you try. Both may appear anywhere — function/method bodies,
+`.pho` scripts, and the top level of a `.phl` library.
+
+A **capitalized** top-level `var`/`const` is *exported*: an importer can
+read it as `pkg.Name` (the value is read live, so an exported `var`
+reflects the module's own updates). Exported bindings are **read-only
+from outside** — only the declaring module can mutate its own `var`
+(with a bare `(= Name v)` inside that module); `(= pkg.Name v)` from an
+importer is an error.
 
 ### `=` — assignment
 
 ```pho
-(= 'x 10)        -- assign to a var
+(= x 10)         -- assign to a var
 (= p.X 100)      -- assign to a struct field
+(= d.[k] v)      -- assign to a dict key / array index
 ```
+
+You can assign to a local var, a struct field, or a dict/array slot — but
+not to a member of an imported module (`(= pkg.Name v)` is rejected: a
+module's bindings are read-only from outside it), nor to a `const`.
 
 ### `fun` — function definition
 
 ```pho
-(fun 'double '(n) '(* n 2))
+(fun double (n) (* n 2))
 ```
 
-Three quoted args: name, parameter list, body. The 2-arg form (no
+Three args — name, parameter list, body — all bare. The 2-arg form (no
 name) returns the function as a value:
 
 ```pho
-(var 'double (fun '(n) '(* n 2)))
+(var double (fun (n) (* n 2)))
 ```
+
+A multi-statement body sequences with `do` notation — `(fun f (x) do …)`
+(see *Do notation*).
 
 A function captures the file and package it was defined in, so its body
 sees the right imports even when called from another package.
 
-### `if` / `while` / `do`
+### `if` / `unless` / `foreach` / `while` / `until` / `do`
 
 ```pho
-(if cond &thenBranch &elseBranch)         -- elseBranch optional
-(while &cond &body)
-(do expr1 expr2 expr3)                    -- evaluates each, returns last
+(if cond then expr                        -- yields the first matching branch's
+ elif cond then expr                      --   expr; `elif`/`else` are optional.
+ else expr)                               --   No match and no else → Nil.
+(unless cond then expr else expr)         -- opposite of `if`: runs the `then`
+                                          --   branch when cond is FALSE. No
+                                          --   `elif`; `else` is optional.
+(foreach x in xs body)                    -- iterate x over an array/string/dict
+(while cond then body)                    -- loop while cond is true
+(until cond then body)                    -- loop until cond becomes true
+(do e1 e2 e3)                             -- run each in sequence, yield the last
 ```
 
-The `&` on branches is mandatory — they need to be deferred so they
-don't evaluate before `if`/`while` decides what to do.
+`if` uses the bare keyword markers `then`, `elif`, and `else`: branches are
+tried top to bottom, and the first whose condition is true yields its `then`
+expression. A single-line `(if c then x else y)` reads naturally; a
+multi-statement arm wraps in `(do …)` — `(if c then (do a b) else (do x y))`
+— since a bare `do` would otherwise capture the `else` marker.
+
+`unless` is the mirror image: `(unless c then x else y)` runs `x` when `c` is
+false and `y` when it's true. It takes a single condition (no `elif`) plus an
+optional `else`, so it reads as "do this unless the condition holds".
+
+The loops also use bare keyword markers. `foreach` iterates — `(foreach x in
+xs …)` binds `x` to each element of an array, rune of a string, or key of a
+dict (the loop variable is a per-iteration constant); `in` is required.
+`while`/`until` are the conditional loops — `(while c then …)` runs while `c`
+is true, `(until c then …)` until `c` becomes true; `then` is required.
+`foreach` is iteration only — use `while`/`until` for a conditional loop.
+`break` and `continue` work inside any of them.
+
+Arms and bodies are plain expressions — no sigils. The form itself controls
+when each runs (only the taken `if` branch evaluates; a loop body runs each
+iteration), so they don't need deferring. A leading `do` sequences in place —
+`(do …)` works in expression position with no wrapper (see *Do notation*).
 
 ### `and` / `or` / `~`
 
@@ -242,12 +369,13 @@ Boolean operators. `and` and `or` short-circuit; `~` is logical not.
 
 ### Arithmetic and comparison
 
-`+ - * /` for numbers. `+` also concatenates strings if all args are
-strings. `==`, `~=`, `<`, `<=`, `>`, `>=` for comparison; `==` and `~=`
-do *deep* equality on arrays and dicts.
+`+ - * /` for numbers, and `mod` for modulo. `+` also concatenates
+strings if all args are strings. `==`, `~=`, `<`, `<=`, `>`, `>=` for
+comparison; `==` and `~=` do *deep* equality on arrays and dicts.
 
 ```pho
 (+ 1 2 3)                          -- 6
+(mod 10 3)                         -- 1
 (+ "hello " "world")               -- "hello world"
 (== [1 2 3] [1 2 3])               -- True
 ```
@@ -258,9 +386,9 @@ Bring a package into the *current file*:
 
 ```pho
 (import "std/io")              -- aliased as `io`
-(import ["std/io" 'myio])      -- explicit alias
+(import ("std/io" myio))       -- explicit alias (a bare name)
 
-(goimport ["stdDependencies" 'dep])
+(goimport ("stdDependencies" dep))
 ```
 
 `import` loads a Pho package (a directory of `.pho` files); `goimport`
@@ -274,12 +402,12 @@ The rest, grouped by what they're for.
 ### Structs and methods
 
 ```pho
-(struct 'Point '(X y))
+(struct Point X y)
 
-(method Point 'Shift '(self d) '(+ self.X d))
-(method Point 'tweak '(self d) '(+ self.y d))
+(method Point.Shift (self d) (+ self.X d))
+(method Point.tweak (self d) (+ self.y d))
 
-(var 'p (Point { 'X 10 'y 20 }))
+(var p Point.{ X 10 y 20 })   -- bare field names, no quotes
 (p.Shift 5)        -- 15
 ```
 
@@ -296,9 +424,18 @@ same struct.
 | `(slice a b c)` | Same as `[a b c]`. The bracket form is preferred. |
 | `(map k v k v)` | Same as `{k v k v}`. The brace form is preferred. |
 | `(has col k)` | True if `col` contains key/index `k`. |
+| `(keyof col)` | Array of all indices of an array, or keys of a map. |
 | `(len arr)` | Array length. |
 | `(append arr x y z)` | New array with extra tail elements. |
 | `(drop arr n)` | New array minus the first `n` elements. |
+
+### Atoms
+
+| Form | Meaning |
+|---|---|
+| `(atom? x)` | True if `x` is an atom. |
+| `(atom "foo")` | The atom `:foo`. Errors if the string isn't a legal atom form (an identifier or digits). |
+| `(atomName :foo)` | The atom's name as a string — `"foo"`. |
 
 ### Code as data
 

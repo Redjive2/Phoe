@@ -21,6 +21,7 @@ func NewEnv() core.Env {
 
 	for _, m := range []map[string]core.StackEntry{
 		arithBuiltins(),
+		atomBuiltins(),
 		collBuiltins(),
 		ctrlBuiltins(),
 		declBuiltins(),
@@ -28,6 +29,7 @@ func NewEnv() core.Env {
 		metaBuiltins(),
 		modimportBuiltins(),
 		strinterpBuiltins(),
+		typeBuiltins(),
 	} {
 		for k, v := range m {
 			builtins[k] = v

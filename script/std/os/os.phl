@@ -1,0 +1,60 @@
+(import "std/core")
+(goimport ("stdDependencies" dep))
+
+(struct File
+    id
+    path
+    perm
+    mode
+)
+
+(fun Cwd ()
+    (dep.OsGetCwd)
+)
+
+(fun Chdir (path)
+    (dep.OsChdir path)
+)
+
+-- Open opens a file at path, accepting a permission string (which can contain `r` and `w` for read and write access), and an optional mode
+-- the mode is either left unfilled (Nil - means standard, overwrite the file content) or set to 'append to add onto the file. Only matters with `w` perm.
+(fun Open (path perm (optional mode)) do
+    (const explicitMode (if (== mode Nil) then :overwrite else mode))
+    (const id (dep.OsOpen path perm explicitMode))
+    
+    File.{
+        id id
+        path path
+        perm perm
+        mode explicitMode
+    }
+)
+
+(method File.Close (self)
+    (dep.OsClose self.id)
+)
+
+(method File.ReadLine (self prompt)
+    (dep.IoReadLine self.id prompt)
+)
+
+(method File.Read (self n) 
+    (dep.IoRead self.id n)
+)
+
+(method File.ReadUntil (self stop)
+    (dep.IoReadUntil self.id stop)
+)
+
+(method File.Write (self content)
+    (dep.IoWrite self.id content)
+)
+
+(method File.CanRead? (self) 
+    (core.HasElement? self.perm `r`)
+)
+
+(method File.CanWrite? (self)
+    (core.HasElement? self.perm `w`)
+)
+

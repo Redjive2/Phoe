@@ -1,20 +1,20 @@
-(goimport ["stdDependencies" 'dep])
+(goimport ("stdDependencies" dep))
 (import "std/core")
 
-(fun 'Range '(min max)
-    '(dep.RandomInt min max)
+(fun Range (min max)
+    (dep.RandomInt min max)
 )
 
-(fun 'Float '()
-    '(dep.RandomFloat)
+(fun Float ()
+    (dep.RandomFloat)
 )
 
-(fun 'Shuffle '(list) '(do
-    (var 'shuffled [])
-    (for &(> (len list) 0) &(do
-        (var 'position (Range 0 (len list)))
-        (= 'shuffled (append shuffled list.position))
-        (= 'list (core.Concat list.[: position] list.[(+ position 1) :]))
-    ))
+(fun Shuffle (list) do
+    (var shuffled [])
+    (while (> (len list) 0) then do
+        (var position (Range 0 (len list)))
+        (= shuffled (append shuffled list.[position]))
+        (= list (core.Concat list.[: position] list.[(+ position 1) :]))
+    )
     shuffled
-))
+)

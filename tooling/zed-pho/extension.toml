@@ -4,7 +4,7 @@ description = "Pho language support for Zed: syntax highlighting, brackets, outl
 version = "0.0.1"
 schema_version = 1
 authors = ["Pho Authors"]
-repository = "https://github.com/REPLACE_ME/pho"
+repository = "https://github.com/Redjive2/Phoe"
 
 # Grammar source.
 #
@@ -27,7 +27,7 @@ repository = "https://github.com/REPLACE_ME/pho"
 #
 [grammars.pho]
 repository = "file:///Users/redjive2/Dev/Pho/tooling/tree-sitter-pho"
-commit = "6bc6ae67f12ac9324fdae165e1ec7531208cd675"
+commit = "1e72a48eebe49235638e947788bdb84a5e7deb16"
 
 # Language server. The implementation lives in cmd/pho-lsp/ (Go); this
 # block tells Zed it exists and which language(s) to attach it to. The

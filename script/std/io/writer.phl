@@ -1,0 +1,11 @@
+(goimport ("stdDependencies" dep))
+
+-- Just a thin box for an id; all functionality routed through stdDependencies 
+-- Passes strings from writers to readers sharing an id
+(struct Writer
+    id
+)
+
+(method Writer.Write (self content)
+    (dep.IoWrite self.id content)
+)

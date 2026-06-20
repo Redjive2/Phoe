@@ -3,12 +3,25 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
 	"sync"
 )
+
+// errMalformedBody marks a correctly framed message whose JSON body didn't
+// parse. The Content-Length framing already consumed the exact body, so the
+// stream is still aligned on the next header — callers should report the
+// bad message and keep reading rather than tear the session down.
+var errMalformedBody = errors.New("malformed message body")
+
+// maxMessageBytes caps the body size readMessage will allocate for. The
+// largest real payload is a didOpen carrying a whole file; 64 MiB is far
+// above any source file while still rejecting an absurd/garbled
+// Content-Length before it can panic the allocator.
+const maxMessageBytes = 64 << 20
 
 // LSP wire format is JSON-RPC 2.0 framed by Content-Length headers, sent
 // over stdin/stdout. Each message is:
@@ -64,9 +77,11 @@ func (t *transport) readMessage() (*rawMessage, error) {
 		if line == "" {
 			break // header/body separator
 		}
-		const cl = "Content-Length:"
-		if strings.HasPrefix(line, cl) {
-			n, err := strconv.Atoi(strings.TrimSpace(line[len(cl):]))
+		// Header names are case-insensitive per the spec.
+		if name, value, found := strings.Cut(line, ":"); found &&
+			strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
+
+			n, err := strconv.Atoi(strings.TrimSpace(value))
 			if err != nil {
 				return nil, fmt.Errorf("malformed Content-Length: %q", line)
 			}
@@ -77,6 +92,19 @@ func (t *transport) readMessage() (*rawMessage, error) {
 	if contentLength < 0 {
 		return nil, fmt.Errorf("missing Content-Length header")
 	}
+	// Bound the allocation: a garbled or hostile header (e.g.
+	// "Content-Length: 99999999999") must not make us `make([]byte, huge)`,
+	// which panics ("makeslice: len out of range") or OOMs. Unlike a body
+	// that frames correctly but fails to parse, an oversized length is NOT
+	// recoverable as errMalformedBody: we never read its declared body, so the
+	// stream can't be realigned on the next header — and draining the declared
+	// count could block forever on a bogus length or over-read into the
+	// following messages. Return a FATAL transport error so the session tears
+	// down cleanly (the editor restarts the server) instead of silently
+	// desyncing every subsequent message. No real LSP message approaches this.
+	if contentLength > maxMessageBytes {
+		return nil, fmt.Errorf("Content-Length %d exceeds limit %d", contentLength, maxMessageBytes)
+	}
 
 	buf := make([]byte, contentLength)
 	if _, err := io.ReadFull(t.in, buf); err != nil {
@@ -85,7 +113,7 @@ func (t *transport) readMessage() (*rawMessage, error) {
 
 	var msg rawMessage
 	if err := json.Unmarshal(buf, &msg); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w (body: %q)", err, buf)
+		return nil, fmt.Errorf("%w: %v (body: %q)", errMalformedBody, err, buf)
 	}
 	return &msg, nil
 }
@@ -140,23 +168,24 @@ func (t *transport) reply(id json.RawMessage, result any) error {
 	})
 }
 
-// replyError sends an error response to a request. Used when a handler
-// panics so the client gets an answer instead of waiting forever.
-// The error code -32603 is the JSON-RPC "internal error" sentinel.
-func (t *transport) replyError(id json.RawMessage, message string) error {
+// JSON-RPC 2.0 error codes used by this server.
+const (
+	codeParseError     = -32700
+	codeInvalidRequest = -32600
+	codeMethodNotFound = -32601
+	codeInternalError  = -32603
+)
+
+// replyError sends an error response to a request, e.g. when a handler
+// panics, so the client gets an answer instead of waiting forever.
+func (t *transport) replyError(id json.RawMessage, code int, message string) error {
 	return t.writeMessage(struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
-		Error   struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
+		Error   rpcError        `json:"error"`
 	}{
 		JSONRPC: "2.0",
 		ID:      id,
-		Error: struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		}{Code: -32603, Message: message},
+		Error:   rpcError{Code: code, Message: message},
 	})
 }

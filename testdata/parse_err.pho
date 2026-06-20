@@ -1,0 +1,2 @@
+-- exercises a parse diagnostic: stray closing paren
+(const 'best 3))

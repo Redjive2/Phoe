@@ -22,6 +22,7 @@
 (number)    @number
 (string)    @string
 (character) @character
+(atom)      @string.special.symbol
 (bool)      @constant.builtin.boolean
 (nil)       @constant.builtin
 
@@ -73,12 +74,32 @@
 
 ((list . (identifier) @keyword)
  (#any-of? @keyword
-   "fun" "method" "struct"
+   "fun" "method" "struct" "property"
    "var" "const"
-   "if" "for" "do" "block"
+   "if" "unless" "foreach" "while" "until" "do" "block"
    "return" "break" "continue"
    "import" "goimport"
    "="))
+
+
+; ----- control-form keyword markers -----
+; then/elif/else (if/unless), in (foreach), and then (while/until) are bare
+; identifiers that mark the operands of a control form. They aren't list
+; heads, so the special-forms rule above doesn't catch them; tag them
+; wherever they appear (like and/or).
+
+((identifier) @keyword
+ (#any-of? @keyword "then" "in" "elif" "else"))
+
+; ----- property accessor keywords -----
+; `get` / `set` mark the accessors of `(property Recv.Name get … set …)`.
+; `get` is ALSO the collection builtin `(get coll key)` — but this rule comes
+; BEFORE the builtin-functions rule below, so a head-position `get` is
+; re-tagged @function.builtin there while a non-head `get`/`set` marker keeps
+; this @keyword tag.
+
+((identifier) @keyword
+ (#any-of? @keyword "get" "set"))
 
 
 ; ----- Boolean operators that look like identifiers -----
@@ -91,14 +112,24 @@
 
 ((list . (identifier) @function.builtin)
  (#any-of? @function.builtin
-   "get" "has" "slice" "map" "len" "append" "drop" "range"
-   "pause" "resume" "inspect" "spread"))
+   "get" "has" "slice" "map" "len" "append" "drop" "range" "keyof" "mod"
+   "pause" "resume" "inspect" "identity" "spread" "optional"))
 
 
 ; ----- Macro calls -----
 ; The first identifier inside a macro_call is the macro name.
 
 (macro_call . (identifier) @function.macro)
+
+
+; ----- Macro definitions -----
+; (macro name! (params) body) — the `macro` head reads like the other
+; binding special forms (fun/struct/…); the declared name is painted like
+; the macro it introduces, matching the call-site color above.
+
+(macro_definition "macro" @keyword)
+
+(macro_definition name: (identifier) @function.macro)
 
 
 ; ----- User-defined function calls (deliberately not tagged) -----
@@ -137,14 +168,25 @@
   .
   (identifier) @variable)
 
+; `Struct.{ field value … }` is construction sugar (a capitalized receiver
+; before a brace builds that struct; the brace's bare keys are field names).
+; Paint the receiver as the constructor it is, overriding the generic
+; dot-chain receiver @variable just above.
+((dot_chain
+  .
+  (identifier) @type
+  (dict))
+ (#match? @type "^[A-Z]"))
+
 
 ; ----- Decimal literals -----
 ; In `1.5`, paint the dot the same color as the numbers so the literal
 ; reads as one value instead of three tokens. The grammar sees a
 ; dot_chain of two numbers; the runtime reassembles it through the
 ; `Dot` operator's number-RHS hack. We only retag the dot when both
-; sides are bare numbers — `xs.5` (array index) keeps the regular dot
-; color, since it really *is* a member access.
+; sides are bare numbers, which is exclusively the decimal case — a
+; dynamic index is bracketed (`xs.[5]`), so the inner number lives in an
+; array node and never matches this two-number dot_chain pattern.
 
 (dot_chain
   (number)
@@ -166,3 +208,12 @@
 
 ((identifier) @function.builtin
  (#eq? @function.builtin "self"))
+
+
+; ----- `do` keyword everywhere -----
+; do-notation makes a bare `do` capture the trailing siblings of its enclosing
+; form, so it reads as a keyword in every position, not just at a list head.
+; Last (like `self`) so it beats the dot_chain @variable fallback.
+
+((identifier) @keyword
+ (#eq? @keyword "do"))

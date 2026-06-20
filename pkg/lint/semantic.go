@@ -3,7 +3,8 @@ package lint
 import (
 	"sort"
 
-	"pho/pkg/core"
+	"pho/pkg/ast"
+	"pho/pkg/span"
 	"pho/pkg/syntax"
 )
 
@@ -36,7 +37,7 @@ var SemanticTokenTypeNames = []string{
 
 // SemanticToken is one classified source token.
 type SemanticToken struct {
-	Span core.Span
+	Span span.Span
 	Type SemanticTokenType
 }
 
@@ -44,9 +45,16 @@ type SemanticToken struct {
 // against the same scope chain the diagnostic walker builds. Returned
 // tokens are sorted by source position. Quoted forms are skipped
 // (they're data, not code).
-func SemanticTokens(path string, src []byte) []SemanticToken {
+func SemanticTokens(path string, src []byte) (toks []SemanticToken) {
+	defer func() {
+		if r := recover(); r != nil {
+			recoverEntry("SemanticTokens", r)
+			toks = nil
+		}
+	}()
 	tokens, _ := syntax.LexPos(string(src))
 	tree, _ := syntax.ParsePos(tokens)
+	tree = syntax.NormalizeDo(tree)
 
 	c := &semCollector{}
 	scope := newScope(PackageScope(path))
@@ -69,7 +77,7 @@ func SemanticTokens(path string, src []byte) []SemanticToken {
 // collectFileScope is a slimmed-down version of walker.collect that
 // just populates declarations into the file scope. Reuses the same
 // dispatch table so semantic tokens see the same definitions.
-func collectFileScope(scope *Scope, tree []core.PNode) {
+func collectFileScope(scope *Scope, tree []ast.PNode) {
 	w := &walker{} // discard diagnostics
 	w.collect(scope, tree)
 }
@@ -78,7 +86,7 @@ type semCollector struct {
 	tokens []SemanticToken
 }
 
-func (c *semCollector) emit(s core.Span, t SemanticTokenType) {
+func (c *semCollector) emit(s span.Span, t SemanticTokenType) {
 	c.tokens = append(c.tokens, SemanticToken{Span: s, Type: t})
 }
 
@@ -86,52 +94,97 @@ func (c *semCollector) emit(s core.Span, t SemanticTokenType) {
 // inCode mirrors the diagnostic walker — quoted forms (other than
 // fun/method bodies) are data and don't get their identifiers
 // classified.
-func (c *semCollector) walk(scope *Scope, n core.PNode, inCode bool) {
+func (c *semCollector) walk(scope *Scope, n ast.PNode, inCode bool) {
 	if n == nil {
 		return
 	}
 	switch node := n.(type) {
-	case *core.PLeaf:
+	case *ast.PLeaf:
+		// Interpolated strings embed real expressions: `"hi %who"`,
+		// `"%a.b.c"`, `"%(len xs)"`. Highlight the identifiers inside
+		// each `%...` chunk so they get the same colors they would as
+		// ordinary code — handled before the inCode gate, mirroring the
+		// diagnostic walker's checkInterpChunks (the `%...` parts are
+		// always evaluated when the string is, regardless of the
+		// surrounding quote).
+		if len(node.Value) >= 2 && node.Value[0] == '"' && node.Value[len(node.Value)-1] == '"' {
+			body := node.Value[1 : len(node.Value)-1]
+			if syntax.HasInterpolation(body) {
+				c.interpChunks(scope, node, body)
+			}
+			return
+		}
 		if !inCode {
 			return
 		}
 		c.classifyLeaf(scope, node)
 
-	case *core.PSigil:
+	case *ast.PSigil:
 		// `'expr` quotes content — data, no semantic refs.
-		// `&expr` runs in the caller's scope — recurse.
 		if node.Sigil == "'" {
 			return
 		}
-		c.walk(scope, node.Inner, inCode)
+		// `&expr` is a one-argument block whose implicit parameter is `it`, so
+		// classify the body in a child scope binding `it` — that paints it
+		// @parameter, matching the reference walker.
+		blockScope := newScope(scope)
+		blockScope.Defs["it"] = Definition{Name: "it", Kind: DefParam, Span: node.Span}
+		c.walk(blockScope, node.Inner, inCode)
 
-	case *core.PDot:
+	case *ast.PDot:
 		// LHS is a real reference; classify it. RHS is a property
 		// name — emit as @property regardless of scope.
 		c.walk(scope, node.LHS, inCode)
-		if leaf, ok := node.RHS.(*core.PLeaf); ok {
+		if leaf, ok := node.RHS.(*ast.PLeaf); ok {
 			c.emit(leaf.Span, SemTokProperty)
 		} else {
 			c.walk(scope, node.RHS, inCode)
 		}
 
-	case *core.PMacroCall:
+	case *ast.PMacroCall:
 		// (name! args). Tag name as @macro; args are data.
-		if leaf, ok := node.Head.(*core.PLeaf); ok {
+		if leaf, ok := node.Head.(*ast.PLeaf); ok {
 			c.emit(leaf.Span, SemTokMacro)
 		} else {
 			c.walk(scope, node.Head, true)
 		}
 
-	case *core.PBranch:
+	case *ast.PBranch:
 		c.walkBranch(scope, node)
+	}
+}
+
+// interpChunks emits semantic tokens for the identifiers embedded in an
+// interpolated string's `%...` chunks. It mirrors the diagnostic
+// walker's checkInterpChunks: each expression chunk is re-lexed,
+// re-parsed, span-shifted back into the source file's coordinates, and
+// run through the normal classifier so `%name` / `%a.b.c` /
+// `%(call args)` get the same colors they would as ordinary code. Lex/
+// parse/split errors are ignored here — the diagnostic walker already
+// reports them; tokens are emitted only for what parses cleanly.
+func (c *semCollector) interpChunks(scope *Scope, leaf *ast.PLeaf, body string) {
+	chunks, _ := syntax.SplitInterp(body)
+	for _, ch := range chunks {
+		if !ch.IsExpr {
+			continue
+		}
+		chunkLine, chunkCol := syntax.BodyByteToPos(body, ch.BodyOffset, leaf.Span.StartLine, leaf.Span.StartCol)
+		tokens, _ := syntax.LexPos(ch.Text)
+		tree, _ := syntax.ParsePos(tokens)
+		tree = syntax.NormalizeDo(tree)
+		lineDelta := chunkLine - 1
+		firstColDelta := chunkCol - 1
+		for _, form := range tree {
+			syntax.OffsetSpans(form, lineDelta, firstColDelta)
+			c.walk(scope, form, true)
+		}
 	}
 }
 
 // walkBranch handles list/array/dict children, plus the special-form
 // dispatch (so e.g. fun/method names get tagged as functions, not
 // generic refs).
-func (c *semCollector) walkBranch(scope *Scope, br *core.PBranch) {
+func (c *semCollector) walkBranch(scope *Scope, br *ast.PBranch) {
 	if br.Open != "(" {
 		// Array or dict — every child is an expression.
 		for _, ch := range br.Children {
@@ -144,14 +197,22 @@ func (c *semCollector) walkBranch(scope *Scope, br *core.PBranch) {
 	switch head {
 	case "fun":
 		c.semFun(scope, br)
+	case "macro":
+		c.semMacro(scope, br)
 	case "method":
 		c.semMethod(scope, br)
+	case "property":
+		c.semProperty(scope, br)
 	case "struct":
 		c.semStruct(scope, br)
 	case "var", "const":
 		c.semVarConst(scope, br)
-	case "for":
-		c.semFor(scope, br)
+	case "foreach":
+		c.semForeach(scope, br)
+	case "while", "until":
+		c.semCondLoop(scope, br)
+	case "if", "unless":
+		c.semIf(scope, br)
 	case "import", "goimport":
 		c.semImport(scope, br)
 	case "=":
@@ -176,7 +237,7 @@ func (c *semCollector) walkBranch(scope *Scope, br *core.PBranch) {
 
 // classifyLeaf emits a SemanticToken for an identifier-shaped leaf
 // based on what it resolves to in scope.
-func (c *semCollector) classifyLeaf(scope *Scope, leaf *core.PLeaf) {
+func (c *semCollector) classifyLeaf(scope *Scope, leaf *ast.PLeaf) {
 	if !looksLikeIdentifier(leaf.Value) {
 		return
 	}
@@ -218,6 +279,8 @@ func kindToToken(kind DefKind, name string) SemanticTokenType {
 		return SemTokVariable
 	case DefFun:
 		return SemTokFunction
+	case DefMacro:
+		return SemTokMacro
 	case DefMethod:
 		return SemTokMethod
 	case DefStruct:
@@ -232,9 +295,9 @@ func kindToToken(kind DefKind, name string) SemanticTokenType {
 // keywords in user code: control flow, declaration forms, and module
 // imports.
 var keywordBuiltins = map[string]bool{
-	"fun": true, "method": true, "struct": true,
+	"fun": true, "macro": true, "method": true, "struct": true, "property": true,
 	"var": true, "const": true, "block": true,
-	"if": true, "for": true, "do": true,
+	"if": true, "unless": true, "foreach": true, "while": true, "until": true, "do": true,
 	"return": true, "break": true, "continue": true,
 	"and": true, "or": true,
 	"import": true, "goimport": true,
@@ -257,94 +320,162 @@ func isOperatorBuiltin(name string) bool { return operatorBuiltins[name] }
 
 // semFun classifies (fun 'name '(args) '(body)) — name as @function,
 // each param as @parameter, body walked in a body scope.
-func (c *semCollector) semFun(scope *Scope, br *core.PBranch) {
+func (c *semCollector) semFun(scope *Scope, br *ast.PBranch) {
 	c.classifyHead(scope, br) // the `fun` keyword
 
-	var argList, body core.PNode
-	switch len(br.Children) {
-	case 3:
-		argList, body = br.Children[1], br.Children[2]
-	case 4:
-		// Named: emit name as @function.
-		if name, span, ok := quotedIdent(br.Children[1]); ok {
-			_ = name
-			c.emit(span, SemTokFunction)
-		}
-		argList, body = br.Children[2], br.Children[3]
-	default:
+	d, _ := declOf(br)
+	if d.ArgList == nil || d.Body == nil {
 		return
 	}
-	c.walkFunctionLike(scope, argList, body, false)
+	if d.Name != "" { // named form: tag the name as @function
+		c.emit(d.NameSpan, SemTokFunction)
+	}
+	c.walkFunctionLike(scope, d.ArgList, d.Body, false)
+}
+
+// semMacro classifies (macro name! (params) body) — the `macro` keyword,
+// name as @macro, each param as @parameter, body walked in a body scope.
+// declOf locates the param list and body (skipping the `!` leaf at index 2),
+// so this mirrors semFun apart from the name's token type.
+func (c *semCollector) semMacro(scope *Scope, br *ast.PBranch) {
+	c.classifyHead(scope, br) // the `macro` keyword
+	d, _ := declOf(br)
+	if d.ArgList == nil || d.Body == nil {
+		return
+	}
+	if d.Name != "" {
+		c.emit(d.NameSpan, SemTokMacro)
+	}
+	c.walkFunctionLike(scope, d.ArgList, d.Body, false)
 }
 
 // semMethod classifies (method Owner 'name '(self args) '(body)).
-func (c *semCollector) semMethod(scope *Scope, br *core.PBranch) {
+func (c *semCollector) semMethod(scope *Scope, br *ast.PBranch) {
 	c.classifyHead(scope, br) // `method` keyword
-	if len(br.Children) < 5 {
+
+	d, _ := declOf(br)
+	if d.ArgList == nil || d.Body == nil {
 		return
 	}
-	// Owner is a real ref (struct constructor).
-	c.walk(scope, br.Children[1], true)
-	if name, span, ok := quotedIdent(br.Children[2]); ok {
-		_ = name
-		c.emit(span, SemTokMethod)
+	// The receiver is a real struct ref: the dot's LHS for a named method, or
+	// the bare first child for an anonymous one. A named method's name (the
+	// dot's RHS) is the declaration, tagged @method below.
+	if dot, ok := br.Children[1].(*ast.PDot); ok {
+		c.walk(scope, dot.LHS, true)
+	} else if len(br.Children) >= 2 {
+		c.walk(scope, br.Children[1], true)
 	}
-	c.walkFunctionLike(scope, br.Children[3], br.Children[4], true)
+	if d.Name != "" {
+		c.emit(d.NameSpan, SemTokMethod)
+	}
+	c.walkFunctionLike(scope, d.ArgList, d.Body, true)
 }
 
-// semStruct classifies (struct 'Name '(fields)).
-func (c *semCollector) semStruct(scope *Scope, br *core.PBranch) {
+// semProperty classifies (property <Receiver.>Name get getter [set setter]):
+// the receiver is a struct ref, the name @property, get/set @keyword, and the
+// getter/setter (anonymous fun/method forms) are walked.
+func (c *semCollector) semProperty(scope *Scope, br *ast.PBranch) {
+	c.classifyHead(scope, br) // `property` keyword
+
+	d, _ := declOf(br)
+	if len(br.Children) >= 2 {
+		if dot, ok := br.Children[1].(*ast.PDot); ok {
+			// Attached `(property Recv.Name …)`: the receiver is a real
+			// reference; the member name reads as a property.
+			c.walk(scope, dot.LHS, true)
+			if d.Name != "" {
+				c.emit(d.NameSpan, SemTokProperty)
+			}
+		} else if d.Name != "" {
+			// Free-standing `(property Name …)` is a faux variable — paint
+			// it (and its references, via DefVar) as a variable, not a
+			// property.
+			c.emit(d.NameSpan, SemTokVariable)
+		}
+	}
+	// `get`/`set` are keywords at children 2/4; getter/setter at 3/5.
+	for i := 2; i+1 < len(br.Children); i += 2 {
+		if leaf, ok := br.Children[i].(*ast.PLeaf); ok {
+			c.emit(leaf.Span, SemTokKeyword)
+		}
+		c.walk(scope, br.Children[i+1], true)
+	}
+}
+
+// semStruct classifies (struct Name f0 f1 …).
+func (c *semCollector) semStruct(scope *Scope, br *ast.PBranch) {
 	c.classifyHead(scope, br)
-	if len(br.Children) < 3 {
+	if len(br.Children) < 2 {
 		return
 	}
-	if _, span, ok := quotedIdent(br.Children[1]); ok {
+	if _, span, ok := declIdent(br.Children[1]); ok {
 		c.emit(span, SemTokType)
 	}
 	// Fields stay un-tagged — they're declaration-only and only show up
 	// at the dict-init site as keys (where they're properties).
 }
 
-// semFor classifies the two `for` shapes:
-//
-//	(for &cond &body)             -- while-style; both expressions
-//	(for 'name collection &body)  -- iterator-style; name is a per-
-//	                                 iteration constant binding visible
-//	                                 inside the body
-//
-// The iterator form opens a body scope so highlighting in the body
-// resolves the loop variable to its DefConst entry rather than tagging
-// it as an unresolved variable.
-func (c *semCollector) semFor(scope *Scope, br *core.PBranch) {
-	c.classifyHead(scope, br) // `for` keyword
-
-	switch len(br.Children) {
-	case 3:
-		// (for &cond &body) — both children are blocks; walk normally.
-		c.walk(scope, br.Children[1], true)
-		c.walk(scope, br.Children[2], true)
-	case 4:
-		// Loop variable: emit as @variable at the binding site.
-		if _, span, ok := quotedIdent(br.Children[1]); ok {
-			c.emit(span, SemTokVariable)
+// semIf classifies an `if`/`unless` form: the head and the then/elif/else
+// keyword markers as keywords, and every condition and arm as an ordinary
+// expression.
+func (c *semCollector) semIf(scope *Scope, br *ast.PBranch) {
+	head := headIdent(br)
+	c.classifyHead(scope, br) // the `if` / `unless` keyword
+	f := parseIfForm(br, head, head == "if")
+	for _, kw := range f.Keywords {
+		c.emit(kw.Span, SemTokKeyword)
+	}
+	for _, b := range f.Branches {
+		if b.Cond != nil {
+			c.walk(scope, b.Cond, true)
 		}
-		// Collection runs in the caller's scope.
-		c.walk(scope, br.Children[2], true)
-
-		// Body runs in a fresh scope with the loop var defined.
-		bodyScope := newScope(scope)
-		if name, span, ok := quotedIdent(br.Children[1]); ok {
-			bodyScope.Defs[name] = Definition{Name: name, Kind: DefConst, Span: span}
+		if b.Expr != nil {
+			c.walk(scope, b.Expr, true)
 		}
-		c.walk(bodyScope, br.Children[3], true)
+	}
+	if f.Else != nil {
+		c.walk(scope, f.Else, true)
 	}
 }
 
+// semForeach classifies `(foreach name in collection body)`. It opens a
+// body scope so highlighting in the body resolves the loop variable to its
+// DefConst entry rather than tagging it as an unresolved variable.
+func (c *semCollector) semForeach(scope *Scope, br *ast.PBranch) {
+	c.classifyHead(scope, br) // `foreach` keyword
+	if len(br.Children) != 5 {
+		return
+	}
+	if _, span, ok := declIdent(br.Children[1]); ok {
+		c.emit(span, SemTokVariable)
+	}
+	c.emit(br.Children[2].GetSpan(), SemTokKeyword) // `in`
+	c.walk(scope, br.Children[3], true)             // collection
+
+	bodyScope := newScope(scope)
+	if name, span, ok := declIdent(br.Children[1]); ok {
+		bodyScope.Defs[name] = Definition{Name: name, Kind: DefConst, Span: span}
+	}
+	c.walk(bodyScope, br.Children[4], true) // body
+}
+
+// semCondLoop classifies `(while cond then body)` / `(until cond then body)`:
+// the condition, the `then` keyword marker, and the body.
+func (c *semCollector) semCondLoop(scope *Scope, br *ast.PBranch) {
+	c.classifyHead(scope, br) // `while` / `until` keyword
+	if len(br.Children) != 4 {
+		return
+	}
+	c.walk(scope, br.Children[1], true)             // condition
+	c.emit(br.Children[2].GetSpan(), SemTokKeyword) // `then`
+	c.walk(scope, br.Children[3], true)             // body
+}
+
 // semVarConst classifies (var 'a 1 'b 2 ...) and (const ...).
-func (c *semCollector) semVarConst(scope *Scope, br *core.PBranch) {
+func (c *semCollector) semVarConst(scope *Scope, br *ast.PBranch) {
 	c.classifyHead(scope, br)
 	for i := 1; i+1 < len(br.Children); i += 2 {
-		if _, span, ok := quotedIdent(br.Children[i]); ok {
+		if _, span, ok := declIdent(br.Children[i]); ok {
 			c.emit(span, SemTokVariable)
 		}
 		c.walk(scope, br.Children[i+1], true)
@@ -352,16 +483,17 @@ func (c *semCollector) semVarConst(scope *Scope, br *core.PBranch) {
 }
 
 // semImport classifies the bound alias (single or aliased-tuple form).
-func (c *semCollector) semImport(scope *Scope, br *core.PBranch) {
+func (c *semCollector) semImport(scope *Scope, br *ast.PBranch) {
 	c.classifyHead(scope, br)
 	for _, arg := range br.Children[1:] {
-		if leaf, ok := arg.(*core.PLeaf); ok && len(leaf.Value) >= 2 && leaf.Value[0] == '"' {
+		if leaf, ok := arg.(*ast.PLeaf); ok && len(leaf.Value) >= 2 && leaf.Value[0] == '"' {
 			// Bare string — alias is implicit. Nothing to highlight beyond
 			// the string itself, which tree-sitter handles.
 			continue
 		}
-		if abr, ok := arg.(*core.PBranch); ok && abr.Open == "[" && len(abr.Children) == 2 {
-			if _, span, ok := quotedIdent(abr.Children[1]); ok {
+		if abr, ok := arg.(*ast.PBranch); ok && abr.Open == "(" && len(abr.Children) == 2 {
+			// Import alias is a bare name (the second element of the pair).
+			if _, span, ok := declIdent(abr.Children[1]); ok {
 				c.emit(span, SemTokNamespace)
 			}
 		}
@@ -370,13 +502,13 @@ func (c *semCollector) semImport(scope *Scope, br *core.PBranch) {
 
 // semAssign classifies (= LHS RHS). Quoted-identifier LHS gets the
 // variable's classification; dot-chain LHS gets walked normally.
-func (c *semCollector) semAssign(scope *Scope, br *core.PBranch) {
+func (c *semCollector) semAssign(scope *Scope, br *ast.PBranch) {
 	c.classifyHead(scope, br)
 	if len(br.Children) != 3 {
 		return
 	}
 	lhs, rhs := br.Children[1], br.Children[2]
-	if name, span, ok := quotedIdent(lhs); ok {
+	if name, span, ok := declIdent(lhs); ok {
 		def, _, found := scope.Lookup(name)
 		if found {
 			c.emit(span, kindToToken(def.Kind, name))
@@ -391,11 +523,11 @@ func (c *semCollector) semAssign(scope *Scope, br *core.PBranch) {
 
 // classifyHead emits a token for the first child of a list when it's a
 // bare identifier (the special-form keyword like `fun`, `var`, etc.).
-func (c *semCollector) classifyHead(scope *Scope, br *core.PBranch) {
+func (c *semCollector) classifyHead(scope *Scope, br *ast.PBranch) {
 	if len(br.Children) == 0 {
 		return
 	}
-	leaf, ok := br.Children[0].(*core.PLeaf)
+	leaf, ok := br.Children[0].(*ast.PLeaf)
 	if !ok {
 		return
 	}
@@ -407,28 +539,27 @@ func (c *semCollector) classifyHead(scope *Scope, br *core.PBranch) {
 // tokens. For methods the first param is the receiver (conventionally
 // `self`) — it's bound implicitly at call time but is always written
 // explicitly in source, so we just walk the param list normally.
-func (c *semCollector) walkFunctionLike(parent *Scope, argList, body core.PNode, isMethod bool) {
+func (c *semCollector) walkFunctionLike(parent *Scope, argList, body ast.PNode, isMethod bool) {
 	_ = isMethod
 	bodyScope := newScope(parent)
 
-	if items, ok := quotedList(argList); ok {
+	if items, ok := declList(argList); ok {
 		for _, item := range items {
 			c.collectAndEmitParam(bodyScope, item)
 		}
 	}
 
-	if items, ok := quotedList(body); ok {
-		// Forward references inside body resolve via a collect pass.
+	if body != nil {
+		// Body is a single bare form. Collect its decls (for forward
+		// references) and classify it.
 		w := &walker{}
-		w.collect(bodyScope, items)
-		for _, c2 := range items {
-			c.walk(bodyScope, c2, true)
-		}
+		w.collect(bodyScope, []ast.PNode{body})
+		c.walk(bodyScope, body, true)
 	}
 }
 
-func (c *semCollector) collectAndEmitParam(scope *Scope, item core.PNode) {
-	if leaf, ok := item.(*core.PLeaf); ok && looksLikeIdentifier(leaf.Value) {
+func (c *semCollector) collectAndEmitParam(scope *Scope, item ast.PNode) {
+	if leaf, ok := item.(*ast.PLeaf); ok && looksLikeIdentifier(leaf.Value) {
 		scope.Defs[leaf.Value] = Definition{Name: leaf.Value, Kind: DefParam, Span: leaf.Span}
 		// `self` is the soft-keyword receiver convention; paint it as
 		// @function.builtin everywhere (matching len/drop/etc.) so the
@@ -441,11 +572,11 @@ func (c *semCollector) collectAndEmitParam(scope *Scope, item core.PNode) {
 		}
 		return
 	}
-	if br, ok := item.(*core.PBranch); ok && br.Open == "(" && len(br.Children) == 2 {
-		if h, ok := br.Children[0].(*core.PLeaf); ok && h.Value == "spread" {
-			if name, ok := br.Children[1].(*core.PLeaf); ok && looksLikeIdentifier(name.Value) {
+	if br, ok := item.(*ast.PBranch); ok && br.Open == "(" && len(br.Children) == 2 {
+		if h, ok := br.Children[0].(*ast.PLeaf); ok && (h.Value == "spread" || h.Value == "optional") {
+			if name, ok := br.Children[1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) {
 				scope.Defs[name.Value] = Definition{Name: name.Value, Kind: DefParam, Span: name.Span}
-				c.emit(h.Span, SemTokKeyword) // `spread` itself
+				c.emit(h.Span, SemTokKeyword) // `spread` / `optional` marker
 				c.emit(name.Span, SemTokParameter)
 			}
 		}

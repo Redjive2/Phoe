@@ -1,0 +1,11 @@
+bindings:hello5
+square 6 =36
+inc 9 =10
+bump:1316
+if-value:defaultcustom
+sign:negzeropos
+for-sum:10
+for-while:***
+map:pho1
+arr:109930
+select:[10 20 30]

@@ -1,0 +1,10 @@
+-- an (optional name) parameter may be omitted at the call site: the
+-- missing arg binds to Nil and the body runs, instead of raising an
+-- arity error. Calling with the arg present still works. This script
+-- must run clean (exit 0, silent stderr).
+(fun greet (name (optional greeting)) (identity do
+    (if (== greeting Nil) then (= greeting "Hello"))
+    (+ greeting (+ ", " name))))
+
+(greet "Sam")
+(greet "Sam" "Hi")

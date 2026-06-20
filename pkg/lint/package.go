@@ -30,7 +30,7 @@ import (
 // own lint pass, not this one.
 func PackageScope(path string) *Scope {
 	builtin := newBuiltinScope()
-	if fileMode(filepath.Base(path)) != "library" {
+	if !isLibrary(filepath.Base(path)) {
 		// Programs (and anything else) don't have a package scope.
 		return builtin
 	}
@@ -56,20 +56,21 @@ func PackageScope(path string) *Scope {
 		if name == self {
 			continue
 		}
-		if fileMode(name) != "library" {
+		if !isLibrary(name) {
 			// Skip .pho programs — they aren't package members, so
 			// their decls aren't visible to .phl siblings.
 			continue
 		}
 
 		full := filepath.Join(dir, name)
-		src, err := os.ReadFile(full)
+		src, err := readSource(full)
 		if err != nil {
 			continue
 		}
 
 		tokens, _ := syntax.LexPos(string(src))
 		tree, _ := syntax.ParsePos(tokens)
+		tree = syntax.NormalizeDo(tree)
 
 		// Collect top-level decls from the sibling. We use a discarding
 		// walker so any redeclaration / unresolved-identifier issues in

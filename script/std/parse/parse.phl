@@ -1,5 +1,5 @@
-(goimport ["stdDependencies" 'dep])
+(goimport ("stdDependencies" dep))
 
-(fun 'Number '(str) 
-    '(dep.ParseAtoi str)
+(fun Num (str)
+    (dep.ParseAtoi str)
 )

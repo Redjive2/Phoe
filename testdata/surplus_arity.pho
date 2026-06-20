@@ -1,0 +1,3 @@
+-- pins the deliberate ParseArgs tightening: surplus arguments to a
+-- non-variadic builtin are an arity error, not silently ignored
+(= x 1 2)

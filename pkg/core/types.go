@@ -31,9 +31,15 @@ type ttbranch []ttnode
 
 type ttleaf string
 
+// tcontext marks a function-call boundary on the scope stack. See the
+// package comment in scope.go for the full model.
 type tcontext struct {
-	Captures      map[string]func(Tval, bool) Tval
-	MaxStackDepth int
+	// DefFrames are the frames lexically visible where the function was
+	// defined, innermost first, shared by reference.
+	DefFrames []map[string]tStackEntry
+	// Hidden is how many frames at the bottom of env.Stack belong to the
+	// caller and are invisible from inside the body.
+	Hidden int
 }
 
 type tenv struct {
@@ -54,10 +60,19 @@ type tpackage struct {
 
 type tfile struct {
 	FileName string
+	Path     string // display path relative to the run root ("std/io/io.phl")
+	Src      string // full source text, retained for diagnostic excerpts
 	Pkg      *tpackage
 	Imports  map[string]Tval // alias -> KindPackage / KindGoPackage value
 	Tree     ttnode
 	Mode     string // ModeProgram (.pho) or ModeLibrary (.phl)
+
+	// Annotations holds the evaluated parse-time annotation results for
+	// this file, set by the loader through modload.AnnotationStasher (which
+	// pkg/annot installs). Typed `any` to keep core free of an annot import;
+	// the concrete value is a span-keyed table consumers type-assert. Nil
+	// when the file has no annotations.
+	Annotations any
 }
 
 // File modes. ModeProgram (.pho) files allow arbitrary top-level
@@ -71,7 +86,21 @@ const (
 type tstruct struct {
 	Fields  []string
 	Methods map[string]tfun
-	Origin  *tenv
+	// Properties are computed fields delegated to a getter and optional
+	// setter (anonymous methods), registered by the `property` builtin. The
+	// Dot accessor and `=` consult this when a plain field lookup misses.
+	Properties map[string]tproperty
+	Origin     *tenv
+}
+
+// tproperty is a computed field/variable: reads call Getter, writes call
+// Setter. Both are funs (free-standing property) or anonymous methods
+// (struct-field property, self bound from the instance). HasSetter is false
+// for a read-only property — writing one is an error.
+type tproperty struct {
+	Getter    Tval
+	Setter    Tval
+	HasSetter bool
 }
 
 type tinstance struct {
@@ -85,26 +114,23 @@ type tmethod struct {
 	Fun    tfun
 }
 
-type tconstructor struct {
-	StructName  string
-	StructData  *tstruct
-	Constructor tfun
-}
-
 const (
-	KindNum         = "num"
-	KindArray       = "array"
-	KindDict        = "dict"
-	KindStr         = "str"
-	KindChr         = "chr"
-	KindBool        = "bool"
-	KindNil         = "nil"
-	KindFun         = "fun"
-	KindInstance    = "instance"
-	KindMethod      = "method"
-	KindPackage     = "package"
-	KindGoPackage   = "gopackage"
-	KindConstructor = "constructor"
+	KindNum       = "num"
+	KindArray     = "array"
+	KindDict      = "dict"
+	KindStr       = "str"
+	KindChr       = "chr"
+	KindAtom      = "atom"
+	KindBool      = "bool"
+	KindNil       = "nil"
+	KindFun       = "fun"
+	KindMacro     = "macro"
+	KindInstance  = "instance"
+	KindMethod    = "method"
+	KindPackage   = "package"
+	KindGoPackage = "gopackage"
+	KindProperty  = "property"
+	KindType      = "type"
 )
 
 var (
@@ -115,18 +141,18 @@ var (
 // types. Aliases (= rather than =:) so the underlying types are identical;
 // type assertions and conversions work freely between the two names.
 type (
-	Node        = ttnode
-	Branch      = ttbranch
-	Leaf        = ttleaf
-	Value       = Tval
-	StackEntry  = tStackEntry
-	Fun         = tfun
-	ScopeCtx    = tcontext
-	Env         = tenv
-	Package     = tpackage
-	File        = tfile
-	Struct      = tstruct
-	Instance    = tinstance
-	Method      = tmethod
-	Constructor = tconstructor
+	Node       = ttnode
+	Branch     = ttbranch
+	Leaf       = ttleaf
+	Value      = Tval
+	StackEntry = tStackEntry
+	Fun        = tfun
+	ScopeCtx   = tcontext
+	Env        = tenv
+	Package    = tpackage
+	File       = tfile
+	Struct     = tstruct
+	Instance   = tinstance
+	Method     = tmethod
+	Property   = tproperty
 )

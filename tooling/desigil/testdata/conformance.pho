@@ -1,0 +1,66 @@
+-- Behavioral conformance corpus for the de-sigiling cutover.
+--
+-- This file is written in the OLD syntax and its stdout under the current
+-- runtime is captured as the golden (desigil_conformance.golden). After the
+-- builtins + linter are migrated, running `desigil` on this file and
+-- executing the result under the new runtime must reproduce that golden
+-- byte-for-byte — the end-to-end proof that the cutover preserved behavior.
+--
+-- It deliberately mixes structural sigils (which the cutover removes) with
+-- value-position quotes (which it must keep): map keys, 'symbol values, and
+-- the &'symbol if-arm pattern from std/os.
+
+(import "std/core")
+
+-- var / const / assignment
+(const greeting "hello")
+(var counter 0)
+(= counter (+ counter 5))
+(core.PrintLine "bindings:" greeting counter)
+
+-- named function
+(fun square (n) (* n n))
+(core.PrintLine "square 6 =" (square 6))
+
+-- anonymous function bound to a var
+(var inc (fun (n) (+ n 1)))
+(core.PrintLine "inc 9 =" (inc 9))
+
+-- struct + method (public + private field)
+(struct Counter (Value step))
+(method Counter Bump (self) (identity do
+    (= self.Value (+ self.Value self.step))
+    self.Value))
+(var c (Counter { 'Value 10 'step 3 }))
+(core.PrintLine "bump:" (c.Bump) (c.Bump))
+
+-- value-returning if with a quoted-symbol arm (the &'symbol pattern)
+(fun mode (x) (if (== x Nil) 'default x))
+(core.PrintLine "if-value:" (mode Nil) (mode "custom"))
+
+-- nested 3-arm if
+(fun sign (n) (if (< n 0) "neg" (if (> n 0) "pos" "zero")))
+(core.PrintLine "sign:" (sign -4) (sign 0) (sign 7))
+
+-- for, iterator form
+(var total 0)
+(for x [1 2 3 4] (= total (+ total x)))
+(core.PrintLine "for-sum:" total)
+
+-- for, while form
+(var i 0)
+(var stars "")
+(for (< i 3) (identity do (= stars (+ stars "*")) (= i (+ i 1))))
+(core.PrintLine "for-while:" stars)
+
+-- maps with mixed key kinds; the 'name quote is a value and must survive
+(var m { 'name "pho" "version" 1 })
+(core.PrintLine "map:" m.["name"] m.["version"])
+
+-- assignment into an array index
+(var arr [10 20 30])
+(= arr.[1] 99)
+(core.PrintLine "arr:" arr.[0] arr.[1] arr.[2])
+
+-- higher-order call into the stdlib (exercises spread/optional internally)
+(core.PrintLine "select:" (core.Select [1 2 3] (fun (n) (* n 10))))

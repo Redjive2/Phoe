@@ -1,0 +1,24 @@
+-- module pho/builtins (the auto-loaded built-in object model).
+--
+-- Thin bindings over the Go `stdDependencies` module (pkg/goop/primdeps.go)
+-- that attach the core collection methods to the primitive types. This module
+-- is loaded by the runtime at startup; its members are always in scope, so no
+-- import is required to use them. See Doc/PlanV1/ObjectModel.md §4.5.
+
+(goimport ("stdDependencies" prim))
+
+-- Element/rune count — replaces the removed `len` builtin.
+(method List.Size   (self) (prim.Size self))
+(method String.Size (self) (prim.Size self))
+(method Dict.Size   (self) (prim.Size self))
+
+-- The keys of a collection — replaces the removed `keyof` builtin. A list
+-- yields its indices (0 … Size-1); a dict yields its keys.
+(method List.Keys (self) (prim.Keys self))
+(method Dict.Keys (self) (prim.Keys self))
+
+-- Emptiness — used across the stdlib and the docs' reader example
+-- (self.buffer.Empty?).
+(method List.Empty?   (self) (== (self.Size) 0))
+(method String.Empty? (self) (== (self.Size) 0))
+(method Dict.Empty?   (self) (== (self.Size) 0))

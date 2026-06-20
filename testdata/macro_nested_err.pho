@@ -1,0 +1,6 @@
+-- a macro generating code with the error in a nested form: the expansion
+-- caret must narrow to (undefinedThing), not the whole generated form. The
+-- generated tree is data, so it names a real head (identity) directly
+-- rather than the parse-time `do` keyword.
+(macro wrap! () ["identity" ["undefinedThing"]])
+(wrap!)

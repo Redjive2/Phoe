@@ -1,48 +1,28 @@
 package lint
 
-import "pho/pkg/core"
+import "pho/pkg/ast"
 
 // libraryForms is the allow-list of head identifiers permitted at the
 // top level of a .phl file. Mirrors modload's runtime check exactly.
+// `var` is permitted: a top-level var is module-level state, mutable
+// within the module but read-only from outside it.
 var libraryForms = map[string]bool{
 	"import":   true,
 	"goimport": true,
 	"fun":      true,
+	"macro":    true,
 	"method":   true,
 	"struct":   true,
 	"const":    true,
-}
-
-// checkNoTopLevelVar walks the top-level forms and flags any (var ...)
-// — in .phl library files only. Programs (.pho) allow top-level `var`;
-// the caller in lint.go is what gates this check on file mode.
-//
-// This is a syntactic check (we only look at the head of each top-level
-// list); it doesn't follow the form into bodies.
-func checkNoTopLevelVar(file string, tree []core.PNode) []Diagnostic {
-	var diags []Diagnostic
-	for _, form := range tree {
-		br, ok := asList(form)
-		if !ok {
-			continue
-		}
-		if headIdent(br) != "var" {
-			continue
-		}
-		diags = append(diags, Diagnostic{
-			File:     file,
-			Span:     br.Children[0].GetSpan(),
-			Severity: SeverityError,
-			Code:     "no-top-level-var",
-			Message:  "'var' is not allowed at the top level of a library file (.phl) — use 'const' instead, or move the binding into a function body",
-		})
-	}
-	return diags
+	"var":      true,
+	// A top-level `property` declares a faux variable (free-standing) or a
+	// computed struct member (attached) — both declarations, not side effects.
+	"property": true,
 }
 
 // checkPhlSideEffects flags any top-level form in a .phl file that
 // isn't a declaration or import. Mirrors modload's library-form rule.
-func checkPhlSideEffects(file string, tree []core.PNode) []Diagnostic {
+func checkPhlSideEffects(file string, tree []ast.PNode) []Diagnostic {
 	var diags []Diagnostic
 	for _, form := range tree {
 		br, ok := asList(form)

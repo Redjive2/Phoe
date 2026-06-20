@@ -6,9 +6,19 @@ package main
 // Field tags use omitempty so we don't emit JSON keys for unset
 // fields; the LSP client tolerates absent optional fields.
 
-// initializeParams: the first request the client sends. We ignore
-// most of it (capabilities, workspace folders, etc.) — we only care
-// about the ID for responding.
+// initializeParams: the first request the client sends. We read just
+// enough to learn the workspace root (for cross-file reference
+// search); capabilities are ignored.
+type initializeParams struct {
+	RootURI          string            `json:"rootUri"`
+	RootPath         string            `json:"rootPath"`
+	WorkspaceFolders []workspaceFolder `json:"workspaceFolders"`
+}
+
+type workspaceFolder struct {
+	URI  string `json:"uri"`
+	Name string `json:"name"`
+}
 
 type initializeResult struct {
 	Capabilities serverCapabilities `json:"capabilities"`
@@ -21,9 +31,19 @@ type serverInfo struct {
 }
 
 type serverCapabilities struct {
-	TextDocumentSync       textDocumentSyncOptions `json:"textDocumentSync"`
-	SemanticTokensProvider semanticTokensOptions   `json:"semanticTokensProvider"`
-	CompletionProvider     completionOptions       `json:"completionProvider"`
+	TextDocumentSync                 textDocumentSyncOptions          `json:"textDocumentSync"`
+	SemanticTokensProvider           semanticTokensOptions            `json:"semanticTokensProvider"`
+	CompletionProvider               completionOptions                `json:"completionProvider"`
+	DocumentOnTypeFormattingProvider *documentOnTypeFormattingOptions `json:"documentOnTypeFormattingProvider,omitempty"`
+	HoverProvider                    bool                             `json:"hoverProvider,omitempty"`
+	DefinitionProvider               bool                             `json:"definitionProvider,omitempty"`
+	DocumentSymbolProvider           bool                             `json:"documentSymbolProvider,omitempty"`
+	ReferencesProvider               bool                             `json:"referencesProvider,omitempty"`
+}
+
+type documentOnTypeFormattingOptions struct {
+	FirstTriggerCharacter string   `json:"firstTriggerCharacter"`
+	MoreTriggerCharacter  []string `json:"moreTriggerCharacter,omitempty"`
 }
 
 type semanticTokensOptions struct {
@@ -42,10 +62,20 @@ type completionOptions struct {
 }
 
 // textDocumentSyncOptions: incremental sync (Change = 2) plus
-// open/close notifications.
+// open/close notifications. Save is advertised so the client sends
+// didSave — the server uses it to notice edits to the annotation-macro
+// library on disk and reload it (the loader reads from disk, so an
+// in-memory didChange wouldn't reflect the new macros).
 type textDocumentSyncOptions struct {
-	OpenClose bool `json:"openClose"`
-	Change    int  `json:"change"` // 0 None, 1 Full, 2 Incremental
+	OpenClose bool         `json:"openClose"`
+	Change    int          `json:"change"` // 0 None, 1 Full, 2 Incremental
+	Save      *saveOptions `json:"save,omitempty"`
+}
+
+// saveOptions: we don't need the saved text (the loader re-reads the
+// file from disk), so includeText stays false.
+type saveOptions struct {
+	IncludeText bool `json:"includeText"`
 }
 
 // ----- textDocument/did{Open,Change,Close} -----
@@ -81,6 +111,13 @@ type textDocumentContentChange struct {
 
 type didCloseParams struct {
 	TextDocument textDocumentIdentifier `json:"textDocument"`
+}
+
+// didSaveParams: Text is present only if the server asked for it via
+// saveOptions.includeText (we don't), so it's normally empty.
+type didSaveParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+	Text         string                 `json:"text,omitempty"`
 }
 
 type textDocumentIdentifier struct {
@@ -122,6 +159,55 @@ type semanticTokensParams struct {
 
 type semanticTokensResult struct {
 	Data []uint32 `json:"data"`
+}
+
+// ----- textDocument/onTypeFormatting -----
+
+type documentOnTypeFormattingParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+	Position     lspPosition            `json:"position"`
+	Ch           string                 `json:"ch"`
+}
+
+type textEdit struct {
+	Range   lspRange `json:"range"`
+	NewText string   `json:"newText"`
+}
+
+// ----- textDocument/{hover,definition,references,documentSymbol} -----
+
+// textDocumentPositionParams is the shared request shape for hover,
+// definition, and references.
+type textDocumentPositionParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+	Position     lspPosition            `json:"position"`
+}
+
+type hoverResult struct {
+	Contents markupContent `json:"contents"`
+	Range    *lspRange     `json:"range,omitempty"`
+}
+
+type markupContent struct {
+	Kind  string `json:"kind"` // "markdown" | "plaintext"
+	Value string `json:"value"`
+}
+
+type lspLocation struct {
+	URI   string   `json:"uri"`
+	Range lspRange `json:"range"`
+}
+
+type documentSymbolParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+}
+
+type documentSymbol struct {
+	Name           string           `json:"name"`
+	Kind           int              `json:"kind"`
+	Range          lspRange         `json:"range"`
+	SelectionRange lspRange         `json:"selectionRange"`
+	Children       []documentSymbol `json:"children,omitempty"`
 }
 
 // ----- textDocument/completion -----

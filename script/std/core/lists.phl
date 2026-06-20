@@ -3,87 +3,123 @@
 
 -- Concatenates any given lists (or strings) into a new list (or string).
 -- Called as follows: `(core.Concat [1 2] [3 4] [5 6])` becoming `[1 2 3 4 5 6]`
-(fun 'Concat '((spread lists)) '(do
-    (var 'joined [])
+(fun Concat ((spread lists)) do
+    (var joined [])
     
-    (for 'item (Flatten lists) &(do
-        (= 'joined (append joined item))
-    ))
+    (foreach item in (Flatten lists) do
+        (= joined (append joined item))
+    )
     
     joined
-))
+)
 
 -- Puts the contents of each immediately nested list into the top list, respecting position, and returning the result in a new list.
 -- Called as follows: `(core.Flatten [1 [2] [3 [4] 5] 6])` becoming `[1 2 3 [4] 5 6]`
-(fun 'Flatten '(list) '(do
-    (var 'flat [])
+(fun Flatten (list) do
+    (var flat [])
     
-    (for 'subList list 
-        -- TODO: add list type check here
-        &(for 'item subList 
-            &(= 'flat (append flat item))
+    (foreach subList in list
+        -- Splice a nested list's elements one level; keep a scalar as-is.
+        (if (list? subList)
+            then (foreach item in subList
+                (= flat (append flat item))
+            )
+            else (= flat (append flat subList))
         )
     )
-    
-    flat
-))
 
--- Replaces all `list.i` with `(transform list.i)`, returning the result in a new list.
--- Called as follows: `(core.Select [1 2 3] (function '(it) '(+ it 1)))`
-(fun 'Select '(list transform) '(do
-    (var 'newList [])
+    flat
+)
+
+-- Replaces all `list.[i]` with `(transform list.[i])`, returning the result in a new list.
+-- Called as follows: `(core.Select [1 2 3] (fun '(it) '(+ it 1)))`
+(fun Select (list transform) do
+    (var newList [])
     
-    (for 'item list 
-        &(= newList (append newList (transform item)))
+    (foreach item in list 
+        (= newList (append newList (transform item)))
     )
     
     newList
-))
+)
 
 -- Removes all elements that fail the predicate from the list, returning the result.
--- Uses `(~= input Nil)` as the default predicate.
+-- Pass `Nil` as the predicate to use the default `(~= it Nil)` (keep non-Nil elements).
 -- Called as follows: `(core.Where [1 2 3] (fun '(it) '(> it 1)))`
-(fun 'Where '(list predicate) '(do
-    (var 'newList [])
+(fun Where (list predicate) do
+    (var newList [])
     
-    (var 'pred (if (== predicate Nil)
-        &(fun '(value) '(~= value Nil))
-        &predicate))
+    (var pred (if (== predicate Nil)
+        then (fun (value) (~= value Nil))
+        else predicate
+    ))
 
-    (for 'item list
-        &(if (pred item) 
-            &(= newList (append newList item))
+    (foreach item in list
+        (if (pred item) 
+            then (= newList (append newList item))
         )
     )
     
     newList
-))
+)
 
 
 -- Folds a list into a single value. Called as follows: `(core.Fold 0 [1 2 3] +)`
-(fun 'Fold '(initial list function) '(do
-    (var 'acc initial)
+(fun Fold (initial list function) do
+    (var acc initial)
 
-    (for 'item list
-        &(= 'acc (function acc item))
+    (foreach item in list
+        (= acc (function acc item))
     )
     
     acc
-))
+)
+
+-- Checks if a list (or string) includes an element (or character).
+-- Called as follows: `(core.HasElement "abcdef" `c`)`
+(fun HasElement? (list target) 
+    (foreach elem in list 
+        (if (== elem target)
+            then (return True)
+        )
+    )
+)
+
+-- Splits a list (or string) into pieces of size `size`. If mode is provided, it must either be :strict (no piece less than `size` at the end) or, when not provided, :loose (remainder passed back)
+-- Called as follows: (core.Split "abcdefghijk" 3 :strict)
+--@ (flag! mode (default :loose) :strict)
+(fun Split (list size (optional mode)) do
+    (const isStrict (== mode :strict))
+
+    -- One piece per whole `size` window; (range ...) truncates the float
+    -- count to the number of COMPLETE pieces.
+    (var pieces (Select (range (/ (len list) size)) (fun (n)
+        list.[(* n size) : (* (+ n 1) size)]
+    )))
+
+    -- Loose mode passes back the leftover (the bytes after the last whole
+    -- piece), when there is one; strict mode drops it.
+    (const rest list.[(- (len list) (mod (len list) size)) :])
+    (if (and (~ isStrict) (> (len rest) 0))
+        then (= pieces (append pieces rest))
+    )
+
+    pieces
+)
 
 -- Checks if a list (or string) includes a sublist (or substring).
--- Called as follows: `(core.Includes "abcdef" "cde")`
-(fun 'Includes '(list sublist) '(do
-    (var 'maxI (- (len list) (len sublist))) -- highest index to iterate to; must satisfy: len(list) > maxI + len(sublist)
+-- Called as follows: `(core.HasWindow "abcdef" "cde")`
+(fun HasWindow? (list sublist) do
+    (var maxI (- (len list) (len sublist))) -- highest window start; the window list.[maxI : maxI + len(sublist)] ends exactly at len(list)
 
-    (if (<= maxI 0)
-        &(return Nil)
+    (if (< maxI 0)
+        then (return False)
     )
-        
-    (for 'i (range maxI) &(do
+
+    (foreach i in (range (+ maxI 1)) do
         (if (== list.[i : (+ i (len sublist))] sublist)
-            &(return True))
-    ))
+            then (return True))
+    )
 
     False
-))
+)

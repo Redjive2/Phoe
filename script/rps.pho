@@ -1,6 +1,32 @@
-(import "std/io"
-        "std/pctl"
-        "std/debug")
+(import "std/core")
 
-(debug.Log (pctl.ThisProcess) "rps.pho" (pctl.Stdout))
-(pctl.Wire (pctl.Stdout) (pctl.Stdin))
+(macro pipe! (initial (spread parts)) do
+    (const pieces (core.Split parts 3 'strict))
+    
+    (var result ["do"
+        ["var" "it" initial]
+    ])
+
+    (foreach i in (keyof pieces) do
+        (const piece pieces.[i])
+        
+        (if (~= piece.[0 : 2] ["-" ">"]) then 
+            (return Nil)
+        )
+        
+        (const expr piece.[2])
+
+        (= result (append result ["=" "it" expr]))
+    )
+
+    (append result "it")
+)
+
+(fun add (a b) do
+    (core.PrintLine "adding %a and %b...")
+    (+ a b)
+)
+
+(add 1 2)
+
+(core.PrintLine (core.Split "abcdefghijk" 20 'loose))

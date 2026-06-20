@@ -1,0 +1,3 @@
+-- a well-formed script that runs without diagnostics
+(const x 1)
+(+ x 1)

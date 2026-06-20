@@ -24,6 +24,15 @@ type BreakSignal struct{}
 // `for` loop.
 type ContinueSignal struct{}
 
+// RecursionSignal is raised by BindFun / BindMethod when the Pho call
+// depth exceeds maxCallDepth. The evaluator recurses on the Go stack, so
+// runaway recursion would otherwise hit Go's fatal (unrecoverable) stack
+// overflow; this guard unwinds it to modload.evalTopLevel, which turns
+// it into an ordinary recursion-limit diagnostic. Like the other
+// signals, it rides through RecoverReturn / the `for` recover (which
+// re-panic anything they don't own) untouched.
+type RecursionSignal struct{}
+
 // RecoverReturn inspects a recover()'d value. If it's a ReturnSignal
 // it returns the carried value and true; if it's any other non-nil
 // value it re-panics (so real bugs surface); if it's nil it returns

@@ -1,0 +1,6 @@
+-- a runtime error two calls deep: the trace names both functions and
+-- their call sites (the type error inside double, double's call inside
+-- tally, tally's call at the top level)
+(fun double (n) (* n 2))
+(fun tally (label count) (+ label (double count)))
+(tally "score: " "7")

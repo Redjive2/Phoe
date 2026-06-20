@@ -8,8 +8,10 @@ import (
 )
 
 // dump renders a tree as a flat string. Used for shape checks where
-// the exact ttbranch nesting would be tedious to spell out.
+// the exact ttbranch nesting would be tedious to spell out. Span
+// wrappers are invisible here — shapes are what's under test.
 func dumpTree(n core.Node) string {
+	n = core.Strip(n)
 	if lf, ok := n.(core.Leaf); ok {
 		return string(lf)
 	}
@@ -56,11 +58,62 @@ func TestLowerDotChain(t *testing.T) {
 	}
 }
 
-// Macro call — `(name! a b)` lowers to (resume (name 'a 'b)).
+// Dot-brace construction — `LHS.{ field value … }` lowers to a plain call of
+// LHS with each bare key rewritten to a string-literal field name:
+// `Point.{ X 10 y 20 }` becomes `(Point "X" 10 "y" 20)`. It is NOT a (Dot …)
+// member access, and NOT a call with a single (map …) argument — that was the
+// retired `(LHS { … })` construction form.
+func TestLowerDotBraceConstruction(t *testing.T) {
+	got := dumpTree(lower(`Point.{ X 10 y 20 }`))
+	want := dumpTree(lower(`(Point "X" 10 "y" 20)`))
+	if got != want {
+		t.Fatalf("Point.{...} should lower to (Point \"X\" 10 \"y\" 20)\n  got:  %s\n  want: %s", got, want)
+	}
+	if strings.Contains(got, core.Dot) {
+		t.Errorf("dot-brace construction must not lower to a Dot access, got: %s", got)
+	}
+	if strings.Contains(got, "map") {
+		t.Errorf("dot-brace construction must not lower to a (map …) argument, got: %s", got)
+	}
+}
+
+// A quoted key is still accepted in a construction brace — it lowers to the
+// same field-name string as the bare key — so migrating `.{ 'X v }` to
+// `.{ X v }` is behaviour-preserving.
+func TestLowerDotBraceQuotedKeyMatchesBare(t *testing.T) {
+	bare := dumpTree(lower(`Point.{ X 10 }`))
+	quoted := dumpTree(lower(`Point.{ 'X 10 }`))
+	if bare != quoted {
+		t.Fatalf("bare and quoted construction keys should lower alike\n  bare:   %s\n  quoted: %s", bare, quoted)
+	}
+}
+
+// The construction sugar composes with dot chains on either side: an imported
+// struct (`pkg.Struct.{…}`) builds through the resolved constructor, and field
+// access on the freshly built instance (`Struct.{…}.Field`) reads it back.
+func TestLowerDotBraceChains(t *testing.T) {
+	got := dumpTree(lower(`io.Writer.{ id 3 }`))
+	want := dumpTree(lower(`(io.Writer "id" 3)`))
+	if got != want {
+		t.Fatalf("pkg.Struct.{...} mismatch\n  got:  %s\n  want: %s", got, want)
+	}
+
+	got = dumpTree(lower(`Point.{ X 1 }.X`))
+	want = dumpTree(lower(`(Point "X" 1).X`))
+	if got != want {
+		t.Fatalf("Struct.{...}.Field mismatch\n  got:  %s\n  want: %s", got, want)
+	}
+}
+
+// Macro call — `(name! a b)` lowers to (Macrocall name 'a 'b), the mangled
+// builtin that resolves name to a macro, invokes it, and resumes the result.
 func TestLowerMacroCall(t *testing.T) {
 	got := dumpTree(lower("(my! a b)"))
-	if !strings.Contains(got, "resume") {
-		t.Fatalf("expected lowered macro call to contain 'resume', got: %s", got)
+	if !strings.Contains(got, core.Macrocall) {
+		t.Fatalf("expected lowered macro call to contain the Macrocall head, got: %s", got)
+	}
+	if strings.Contains(got, "resume") {
+		t.Fatalf("macro call should no longer lower via resume, got: %s", got)
 	}
 }
 

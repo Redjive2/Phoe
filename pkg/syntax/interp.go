@@ -2,8 +2,11 @@ package syntax
 
 import (
 	"fmt"
+	"os"
 
+	"pho/pkg/ast"
 	"pho/pkg/core"
+	"pho/pkg/span"
 )
 
 // String interpolation lowering. The user writes:
@@ -169,6 +172,11 @@ func readAtom(body string, pos int) (int, error) {
 		for end < len(body) && isIdentCont(body[end]) {
 			end++
 		}
+		// A single optional trailing '?' (the predicate convention), so
+		// `%done?` interpolates the `done?` variable.
+		if end < len(body) && body[end] == '?' {
+			end++
+		}
 		return end, nil
 	case isDigit(c):
 		end := pos + 1
@@ -255,15 +263,25 @@ func readBalanced(body string, pos int) (int, error) {
 // chunks are emitted as plain string leaves the runtime will pass
 // through unwrapped.
 //
+// strSpan is the source span of the enclosing string literal. Each
+// chunk's inner tree parses in chunk-local coordinates; OffsetSpans
+// remaps them into file coordinates (via BodyByteToPos, the same
+// machinery the linter uses), so a runtime error inside `%(...)` carets
+// the right columns inside the string literal.
+//
 // If a chunk's inner parse fails (which shouldn't happen for chunks
 // that splitInterp accepted, but the inner LexPos/ParsePos can still
 // emit recoverable trees with errors), the chunk is emitted as a
 // literal `"%..."` placeholder so the build at least produces a
 // well-formed AST.
-func loweredInterp(body string) core.Node {
+func loweredInterp(body string, strSpan span.Span) core.Node {
 	chunks, errs := SplitInterp(body)
 	for _, err := range errs {
-		fmt.Println("(ERR) " + err.Error() + " @ 'syntax.loweredInterp'.")
+		// Lowering runs before evaluation and has no diagnostic session
+		// to thread through; the linter reports bad interpolation with a
+		// real span (and lint-on-run blocks the program before this).
+		// This stderr line is a defensive backstop for unlinted paths.
+		fmt.Fprintf(os.Stderr, "pho: %v\n", err)
 	}
 	out := make(core.Branch, 0, len(chunks)+1)
 	out = append(out, core.Leaf(core.Strinterp))
@@ -275,12 +293,16 @@ func loweredInterp(body string) core.Node {
 		tokens, lexErrs := LexPos(ch.Text)
 		tree, parseErrs := ParsePos(tokens)
 		if len(lexErrs)+len(parseErrs) > 0 || len(tree) != 1 {
-			fmt.Println("(ERR) failed to parse interpolation expression '" + ch.Text + "' @ 'syntax.loweredInterp'.")
+			fmt.Fprintf(os.Stderr, "pho: failed to parse interpolation expression '%s'\n", ch.Text)
 			out = append(out, core.Leaf("\"%"+ch.Text+"\""))
 			continue
 		}
+		if strSpan != (span.Span{}) {
+			line, col := BodyByteToPos(body, ch.BodyOffset, strSpan.StartLine, strSpan.StartCol)
+			OffsetSpans(tree[0], line-1, col-1)
+		}
 		expr := lowerNode(tree[0])
-		out = append(out, core.Branch{core.Leaf(core.Strcoerce), expr})
+		out = append(out, spanned(core.Branch{core.Leaf(core.Strcoerce), expr}, tree[0].GetSpan()))
 	}
 	return out
 }
@@ -314,11 +336,11 @@ func BodyByteToPos(body string, byteOffset, sLine, sCol int) (line, col int) {
 // every line; `firstColDelta` is added to columns ONLY on the first
 // line of the inner tree, since columns reset to 1 on subsequent
 // lines. Mutates the tree in place.
-func OffsetSpans(n core.PNode, lineDelta, firstColDelta int) {
+func OffsetSpans(n ast.PNode, lineDelta, firstColDelta int) {
 	if n == nil {
 		return
 	}
-	shift := func(s *core.Span) {
+	shift := func(s *span.Span) {
 		if s.StartLine == 1 {
 			s.StartCol += firstColDelta
 		}
@@ -329,21 +351,21 @@ func OffsetSpans(n core.PNode, lineDelta, firstColDelta int) {
 		s.EndLine += lineDelta
 	}
 	switch t := n.(type) {
-	case *core.PLeaf:
+	case *ast.PLeaf:
 		shift(&t.Span)
-	case *core.PBranch:
+	case *ast.PBranch:
 		shift(&t.Span)
 		for _, c := range t.Children {
 			OffsetSpans(c, lineDelta, firstColDelta)
 		}
-	case *core.PSigil:
+	case *ast.PSigil:
 		shift(&t.Span)
 		OffsetSpans(t.Inner, lineDelta, firstColDelta)
-	case *core.PDot:
+	case *ast.PDot:
 		shift(&t.Span)
 		OffsetSpans(t.LHS, lineDelta, firstColDelta)
 		OffsetSpans(t.RHS, lineDelta, firstColDelta)
-	case *core.PMacroCall:
+	case *ast.PMacroCall:
 		shift(&t.Span)
 		shift(&t.BangSpan)
 		OffsetSpans(t.Head, lineDelta, firstColDelta)

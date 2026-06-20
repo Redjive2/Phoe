@@ -1,44 +1,62 @@
 ; Outline view items.
 ;
-; Recognizes the three top-level definition forms:
-;   (fun 'Name ...)          function
-;   (struct 'Name '(fields)) struct
-;   (method Owner 'Name ...) method on a struct
-;
-; In the tree-sitter grammar, `'Name` parses as a `quote` containing an
-; `identifier`. (The runtime's CompressCodeLiterals pass turns it into a
-; string at evaluation time, but tree-sitter sees the source form.)
+; Recognizes the top-level definition forms in the post-cutover bare syntax
+; (names are plain identifiers, not `'quoted` symbols; a method/property name
+; is a `Owner.Name` dot_chain):
+;   (fun Name (args) body)         function
+;   (struct Name field ...)        struct
+;   (method Owner.Name (args) …)   method on a struct
+;   (property Owner.Name get …)    computed property
+;   (macro Name! (params) body)    macro
 ;
 ; Capture groups:
 ;   @item     — the entire define form
-;   @context  — the head keyword (fun / struct / method)
+;   @context  — dimmed prefix: the head keyword (fun/struct), or the owner
+;               struct name for a method/property
 ;   @name     — the symbol that identifies the definition
 
-; (fun 'Name ...)
+; (fun Name (args) body) — named only; an anonymous (fun (args) body) has a
+; parameter list, not an identifier, in the name slot, so it is not an item.
 (list
   .
   (identifier) @context
   .
-  (quote (identifier) @name)
+  (identifier) @name
   (#eq? @context "fun")
 ) @item
 
-; (struct 'Name ...)
+; (struct Name field ...)
 (list
   .
   (identifier) @context
   .
-  (quote (identifier) @name)
+  (identifier) @name
   (#eq? @context "struct")
 ) @item
 
-; (method Owner 'Name ...)
+; (method Owner.Name (args) body) — named only (an anonymous (method Owner …)
+; delegate has a bare receiver, not a dot_chain). The owner shows as context.
 (list
   .
-  (identifier) @context
+  (identifier) @_kw
   .
-  (identifier) @item.context
+  (dot_chain (identifier) @context (identifier) @name)
+  (#eq? @_kw "method")
+) @item
+
+; (property Owner.Name get getter [set setter]) — the owner shows as context.
+(list
   .
-  (quote (identifier) @name)
-  (#eq? @context "method")
+  (identifier) @_kw
+  .
+  (dot_chain (identifier) @context (identifier) @name)
+  (#eq? @_kw "property")
+) @item
+
+; (macro Name! (params) body)
+; A macro_definition is its own grammar node, not a list; the name is a bare
+; identifier (no quote), and the `macro` keyword is the @context head.
+(macro_definition
+  "macro" @context
+  name: (identifier) @name
 ) @item

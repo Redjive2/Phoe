@@ -3,7 +3,8 @@ package lint
 import (
 	"fmt"
 
-	"pho/pkg/core"
+	"pho/pkg/ast"
+	"pho/pkg/span"
 )
 
 // checkSpecialFormShape validates the structural shape of a single
@@ -17,7 +18,7 @@ import (
 // Diagnostics are emitted but do not halt the walk; the regular
 // case-handlers in checkBranch still run on the best-effort tree so
 // downstream reference-checking keeps firing.
-func (w *walker) checkSpecialFormShape(br *core.PBranch) {
+func (w *walker) checkSpecialFormShape(br *ast.PBranch) {
 	head := headIdent(br)
 	nargs := len(br.Children) - 1
 
@@ -43,25 +44,38 @@ func (w *walker) checkSpecialFormShape(br *core.PBranch) {
 		}
 
 	case "method":
-		// (method Owner 'name '(args) '(body))
-		// Body is any quoted form — same rule as fun.
-		if nargs != 4 {
-			w.emitArity(br, head, "4", nargs)
+		// (method Receiver.Name (args) body) — Receiver.Name is a dot PATTERN
+		// (not code): the receiver names the owning struct, the name the method.
+		if nargs != 3 {
+			w.emitArity(br, head, "3 (Receiver.Name args body)", nargs)
 			return
 		}
-		// Owner (Children[1]) is a runtime expression — no shape check.
-		w.expectQuotedIdent(br.Children[2], "method: name")
-		w.expectQuotedList(br.Children[3], "method: argument list")
-		w.expectQuoted(br.Children[4], "method: body")
+		w.expectMethodPattern(br.Children[1])
+		w.expectQuotedList(br.Children[2], "method: argument list")
+		// Body (Children[3]) is any expression — no shape check.
 
 	case "struct":
-		// (struct 'name '(fields))
-		if nargs != 2 {
-			w.emitArity(br, head, "2", nargs)
+		// (struct Name f0 f1 …) — a bare name then bare field identifiers.
+		if nargs < 1 {
+			w.emitArity(br, head, "at least 1 (a name)", nargs)
 			return
 		}
 		w.expectQuotedIdent(br.Children[1], "struct: name")
-		w.expectQuotedList(br.Children[2], "struct: fields")
+		for _, c := range br.Children[2:] {
+			w.expectQuotedIdent(c, "struct: field")
+		}
+
+	case "property":
+		// (property Recv.Name get getter)             — read-only
+		// (property Recv.Name get getter set setter)  — read-write
+		if nargs != 3 && nargs != 5 {
+			w.emitArity(br, head, "3 (Name get getter) or 5 (… set setter)", nargs)
+			return
+		}
+		w.expectKeyword(br.Children[2], "get", "property")
+		if nargs == 5 {
+			w.expectKeyword(br.Children[4], "set", "property")
+		}
 
 	case "var", "const":
 		// (var 'a v1 'b v2 ...) — pairs of (name, value).
@@ -77,38 +91,40 @@ func (w *walker) checkSpecialFormShape(br *core.PBranch) {
 			})
 			return
 		}
-		for i := 1; i+1 < len(br.Children); i += 2 {
-			w.expectQuotedIdent(br.Children[i], head+": binding name")
+		// Binding names are evaluated at runtime: a quoted symbol ('x) is a
+		// literal name, a bare identifier (x) a dynamic one — so the name may
+		// be any expression. The check pass (checkDeclName) flags an unquoted
+		// bare identifier, which is almost always a forgotten quote.
+
+	case "if", "unless":
+		// (if cond then expr [elif cond then expr]* [else expr]) and the
+		// elif-less (unless cond then expr [else expr]). parseIfForm validates
+		// the then/elif/else keyword layout and reports the first problem.
+		if f := parseIfForm(br, head, head == "if"); f.Bad != "" {
+			w.emit(Diagnostic{
+				File:     w.file,
+				Span:     f.BadSpan,
+				Severity: SeverityError,
+				Code:     "bad-form-shape",
+				Message:  f.Bad,
+			})
 		}
 
-	case "if":
-		// (if cond &then) or (if cond &then &else). Cond is an
-		// expression; the arms must be blocks, since `if` calls
-		// BindCallback on them at runtime.
-		switch nargs {
-		case 2:
-			w.expectBlockSigil(br.Children[2], "if: then-arm")
-		case 3:
-			w.expectBlockSigil(br.Children[2], "if: then-arm")
-			w.expectBlockSigil(br.Children[3], "if: else-arm")
-		default:
-			w.emitArity(br, head, "2 or 3", nargs)
+	case "foreach":
+		// (foreach name in collection body)
+		if nargs != 4 {
+			w.emitArity(br, head, "4 (name in collection body)", nargs)
+			return
 		}
+		w.expectKeyword(br.Children[2], "in", "foreach")
 
-	case "for":
-		// (for &cond &body)             — while-style
-		// (for 'name collection &body)  — iterator-style
-		switch nargs {
-		case 2:
-			w.expectBlockSigil(br.Children[1], "for: condition")
-			w.expectBlockSigil(br.Children[2], "for: body")
-		case 3:
-			w.expectQuotedIdent(br.Children[1], "for: loop variable")
-			// Collection is a runtime expression — no shape check.
-			w.expectBlockSigil(br.Children[3], "for: body")
-		default:
-			w.emitArity(br, head, "2 or 3", nargs)
+	case "while", "until":
+		// (while cond then body) / (until cond then body)
+		if nargs != 3 {
+			w.emitArity(br, head, "3 (cond then body)", nargs)
+			return
 		}
+		w.expectKeyword(br.Children[2], "then", head)
 
 	case "=":
 		// LHS forms accepted by the runtime's `=`:
@@ -123,29 +139,18 @@ func (w *walker) checkSpecialFormShape(br *core.PBranch) {
 			return
 		}
 		lhs := br.Children[1]
-		switch n := lhs.(type) {
-		case *core.PLeaf:
-			// Any leaf — bare ident, quoted-ident-after-listify, or
-			// string literal — is acceptable.
-		case *core.PDot:
-			_ = n
-		case *core.PSigil:
-			if n.Sigil != "'" {
-				w.emit(Diagnostic{
-					File:     w.file,
-					Span:     lhs.GetSpan(),
-					Severity: SeverityError,
-					Code:     "bad-form-shape",
-					Message:  "=: LHS must be a name or a dot accessor, not a block",
-				})
-			}
+		switch lhs.(type) {
+		case *ast.PLeaf:
+			// Bare name target — (= sum 5).
+		case *ast.PDot:
+			// Dot / index accessor — (= obj.field 5), (= arr.[i] 5).
 		default:
 			w.emit(Diagnostic{
 				File:     w.file,
 				Span:     lhs.GetSpan(),
 				Severity: SeverityError,
 				Code:     "bad-form-shape",
-				Message:  "=: LHS must be a name (sum, 'sum) or a dot accessor (a.b)",
+				Message:  "=: target must be a bare name (sum) or a dot accessor (a.b)" + sigilHint(lhs),
 			})
 		}
 
@@ -182,14 +187,14 @@ func (w *walker) checkSpecialFormShape(br *core.PBranch) {
 // when there is one, falling back to the whole-form span. Used so
 // arity diagnostics point at the form name rather than the entire
 // (possibly very long) form.
-func headSpan(br *core.PBranch) core.Span {
+func headSpan(br *ast.PBranch) span.Span {
 	if len(br.Children) > 0 {
 		return br.Children[0].GetSpan()
 	}
 	return br.Span
 }
 
-func (w *walker) emitArity(br *core.PBranch, head, expected string, got int) {
+func (w *walker) emitArity(br *ast.PBranch, head, expected string, got int) {
 	w.emit(Diagnostic{
 		File:     w.file,
 		Span:     headSpan(br),
@@ -200,11 +205,17 @@ func (w *walker) emitArity(br *core.PBranch, head, expected string, got int) {
 	})
 }
 
-// expectQuotedIdent flags `n` if it isn't `'name` (a tick followed by
-// a bare identifier). `ctx` describes the position in the form so the
-// diagnostic message can pinpoint which slot is malformed.
-func (w *walker) expectQuotedIdent(n core.PNode, ctx string) {
-	if _, _, ok := quotedIdent(n); ok {
+// Post-cutover the declaration/control forms take BARE arguments — the
+// '/& sigils are gone. The helpers below enforce the slots that still have
+// a fixed shape: names must be bare identifiers, parameter and field lists
+// must be parenthesized. Body and arm slots accept any expression (a quoted
+// VALUE like 'overwrite is legitimate there), so their former checks are
+// now no-ops, kept to preserve the call sites during the cutover.
+
+// expectQuotedIdent flags `n` unless it's a bare identifier. A leftover
+// `'name` is a PSigil, not an identifier, so it's reported with a hint.
+func (w *walker) expectQuotedIdent(n ast.PNode, ctx string) {
+	if _, _, ok := declIdent(n); ok {
 		return
 	}
 	w.emit(Diagnostic{
@@ -212,17 +223,18 @@ func (w *walker) expectQuotedIdent(n core.PNode, ctx string) {
 		Span:     n.GetSpan(),
 		Severity: SeverityError,
 		Code:     "bad-form-shape",
-		Message:  ctx + ": expected a quoted identifier (e.g. 'name)",
+		Message:  ctx + ": expected a bare identifier (e.g. name)" + sigilHint(n),
 	})
 }
 
-// expectQuoted flags `n` if it isn't `'expr` — any quoted form. The
-// inner expression can be a leaf, a parenthesized list, or anything
-// else the parser produced; only the leading tick is required. Used
-// for function/method bodies and the `block` builtin's argument,
-// where the runtime evaluates whatever node Derepr hands back.
-func (w *walker) expectQuoted(n core.PNode, ctx string) {
-	if sig, ok := n.(*core.PSigil); ok && sig.Sigil == "'" {
+// expectQuoted is a no-op: function/method bodies and the block argument
+// are ordinary expressions post-cutover, with no required shape.
+func (w *walker) expectQuoted(n ast.PNode, ctx string) {}
+
+// expectQuotedList flags `n` unless it's a bare parenthesized list `(a b …)`.
+// Used for parameter lists and struct fields.
+func (w *walker) expectQuotedList(n ast.PNode, ctx string) {
+	if _, ok := declList(n); ok {
 		return
 	}
 	w.emit(Diagnostic{
@@ -230,49 +242,60 @@ func (w *walker) expectQuoted(n core.PNode, ctx string) {
 		Span:     n.GetSpan(),
 		Severity: SeverityError,
 		Code:     "bad-form-shape",
-		Message:  ctx + ": expected a quoted form (e.g. 'name or '(...))",
+		Message:  ctx + ": expected a parenthesized list (e.g. (a b))" + sigilHint(n),
 	})
 }
 
-// expectQuotedList flags `n` if it isn't `'(...)` — a tick wrapping
-// a parenthesized form. Used for argument lists and struct fields,
-// where the inner has to enumerate names.
-func (w *walker) expectQuotedList(n core.PNode, ctx string) {
-	sig, ok := n.(*core.PSigil)
-	if !ok || sig.Sigil != "'" {
-		w.emit(Diagnostic{
-			File:     w.file,
-			Span:     n.GetSpan(),
-			Severity: SeverityError,
-			Code:     "bad-form-shape",
-			Message:  ctx + ": expected a quoted form (e.g. '(...))",
-		})
+// expectBlockSigil is a no-op: if/for arms are ordinary expressions
+// post-cutover (the deferring `&` is gone), with no required shape.
+func (w *walker) expectBlockSigil(n ast.PNode, ctx string) {}
+
+// expectMethodPattern flags `n` unless it's a `Receiver.Name` dot pattern —
+// two bare identifiers joined by a dot. It's the structural shape of a method
+// declaration's first argument (the receiver and method name), not code.
+func (w *walker) expectMethodPattern(n ast.PNode) {
+	if dot, ok := n.(*ast.PDot); ok {
+		_, lok := dot.LHS.(*ast.PLeaf)
+		_, rok := dot.RHS.(*ast.PLeaf)
+		if lok && rok {
+			return
+		}
+	}
+	// A bare receiver leaf is the ANONYMOUS method form `(method Receiver
+	// (args) body)` — valid (used as a property get/set delegate).
+	if leaf, ok := n.(*ast.PLeaf); ok && looksLikeIdentifier(leaf.Value) {
 		return
 	}
-	if br, ok := sig.Inner.(*core.PBranch); !ok || br.Open != "(" {
-		w.emit(Diagnostic{
-			File:     w.file,
-			Span:     n.GetSpan(),
-			Severity: SeverityError,
-			Code:     "bad-form-shape",
-			Message:  ctx + ": expected a quoted parenthesized form (e.g. '(...))",
-		})
-	}
+	w.emit(Diagnostic{
+		File:     w.file,
+		Span:     n.GetSpan(),
+		Severity: SeverityError,
+		Code:     "bad-form-shape",
+		Message:  "method: expected a 'Receiver.Name' pattern (e.g. Point.Shift) or a bare 'Receiver' for an anonymous method",
+	})
 }
 
-// expectBlockSigil flags `n` if it isn't `&expr` — a `&` sigil wrapping
-// any expression. The runtime expects blocks (lowered to (block ...))
-// for if/for arms, and treating a bare expression as one would crash
-// at the .(core.Branch) type assertion in the if/for builtins.
-func (w *walker) expectBlockSigil(n core.PNode, ctx string) {
-	sig, ok := n.(*core.PSigil)
-	if !ok || sig.Sigil != "&" {
-		w.emit(Diagnostic{
-			File:     w.file,
-			Span:     n.GetSpan(),
-			Severity: SeverityError,
-			Code:     "bad-form-shape",
-			Message:  ctx + ": expected a block (e.g. &expr or &(do ...))",
-		})
+// expectKeyword flags a bad-form-shape when n isn't the bare keyword `kw` —
+// the noop markers `in` (foreach) and `then` (while/until) that must sit
+// between the form's operands.
+func (w *walker) expectKeyword(n ast.PNode, kw, form string) {
+	if leaf, ok := n.(*ast.PLeaf); ok && leaf.Value == kw {
+		return
 	}
+	w.emit(Diagnostic{
+		File:     w.file,
+		Span:     n.GetSpan(),
+		Severity: SeverityError,
+		Code:     "bad-form-shape",
+		Message:  fmt.Sprintf("'%s': expected the keyword '%s' here", form, kw),
+	})
+}
+
+// sigilHint returns a pointed suffix when n is a leftover '/& sigil — the
+// usual cause of a shape error while migrating to the bare syntax.
+func sigilHint(n ast.PNode) string {
+	if sig, ok := n.(*ast.PSigil); ok {
+		return "; remove the leading '" + sig.Sigil + "' — sigils are no longer used here"
+	}
+	return ""
 }

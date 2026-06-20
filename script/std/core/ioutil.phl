@@ -1,14 +1,15 @@
 (import "std/fmt"
         "std/pctl")
 
-(fun 'PrintLine '((spread args)) 
-    '((pctl.Stdout).Write (fmt.Format (spread args) "\n"))
+(fun PrintLine ((spread args))
+    ((pctl.Stdout).Write (fmt.Format (spread args) "\n"))
 )
 
-(fun 'Print '((spread args)) 
-    '((pctl.Stdout).Write (fmt.Format (spread args) "\n"))
+(fun Print ((spread args))
+    ((pctl.Stdout).Write (fmt.Format (spread args)))
 )
 
-(fun 'ReadLine '(prompt) 
-    '((pctl.Stdin).ReadUntil "\n")
+(fun ReadLine (prompt)
+    ((pctl.Stdin).ReadLine prompt)
 )
+

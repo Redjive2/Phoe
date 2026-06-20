@@ -1,34 +1,142 @@
 package core
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 )
 
+// Leaf-classification regexes, compiled once. ttleaf.Evaluate runs on every
+// leaf of every expression, so compiling these per call was a real cost.
+var (
+	numberPattern = regexp.MustCompile("^-?[0-9]+$")
+	charPattern   = regexp.MustCompile("^`.`$")
+	// A leading letter, no trailing underscore, and an optional single
+	// trailing '?' (the Lisp/Ruby predicate convention, e.g. `atom?`).
+	identPattern = regexp.MustCompile("^[a-zA-Z](([a-zA-Z0-9]*)|([a-zA-Z0-9_]*[a-zA-Z0-9]))\\??$")
+	// An atom body is a valid identifier or an all-digit run (digits keep
+	// leading zeros, so `:01` and `:1` are distinct atoms).
+	atomDigitsPattern = regexp.MustCompile("^[0-9]+$")
+)
+
+// IsIdent reports whether s is a valid Pho identifier. Shared with the
+// builtins package (the Dot accessor validates instance keys with it).
+func IsIdent(s string) bool {
+	return identPattern.MatchString(s)
+}
+
+// IsAtomName reports whether s is a legal atom body — a valid identifier or
+// an all-digit run (the text after the leading ':'). Shared by the leaf
+// evaluator and the str->atom builtin so both agree on what an atom is.
+func IsAtomName(s string) bool {
+	return identPattern.MatchString(s) || atomDigitsPattern.MatchString(s)
+}
+
+// spreadArg returns the inner expression of a `(spread expr)` argument and
+// true; (nil, false) for anything else. A `(spread …)` that isn't a direct
+// 2-element form (e.g. the `(spread rest)` marker nested inside a parameter
+// list) is intentionally NOT matched here.
+func spreadArg(node ttnode) (ttnode, bool) {
+	if br, ok := AsBranch(node); ok && len(br) == 2 && br[0] == ttleaf("spread") {
+		return br[1], true
+	}
+	return nil, false
+}
+
 // DistributeSpreadExpressions evaluates each argv node and flattens any
 // (spread expr) wrapper, splicing the resulting array's elements in place.
-func DistributeSpreadExpressions(ctx Context, branch ttbranch) []Tval {
+// Spreading a non-array reports a diagnostic and returns ok=false; the
+// caller must then skip the call entirely rather than invoke it with the
+// spread argument silently dropped.
+func DistributeSpreadExpressions(ctx Context, branch ttbranch) ([]Tval, bool) {
 	var result []Tval
 
 	for _, node := range branch {
-		if br, ok := node.(ttbranch); ok &&
-			len(br) == 2 &&
-			br[0] == ttleaf("spread") {
-
-			list := *br[1].Evaluate(ctx).Val.(*[]Tval)
-
-			for _, val := range list {
-				result = append(result, val)
+		if expr, ok := spreadArg(node); ok {
+			val := expr.Evaluate(ctx)
+			listPtr, ok := val.Val.(*[]Tval)
+			if !ok {
+				ctx.Errorf(ErrBadSpread, "cannot spread a value of kind '%s' — only arrays can be spread", val.Kind)
+				return nil, false
 			}
 
+			result = append(result, *listPtr...)
 			continue
 		}
 
 		result = append(result, node.Evaluate(ctx))
 	}
 
-	return result
+	return result, true
+}
+
+// ttvalue is a node that evaluates to a fixed, already-computed value. It
+// has no surface syntax; expandSpread creates them to splice an array's
+// elements back into a call's argument list as ordinary nodes, so any
+// callee that evaluates its arguments sees the spliced values.
+type ttvalue struct{ v Tval }
+
+func (n ttvalue) Evaluate(Context) Tval { return n.v }
+
+// Lit wraps an already-evaluated value as a Node that evaluates to itself.
+// Used to feed pre-computed values into a fun call (e.g. handing a setter its
+// new value), where the call interface expects unevaluated arg nodes.
+func Lit(v Tval) Node { return ttvalue{v} }
+
+// readProperty evaluates a free-standing property by calling its getter (a
+// zero-arg fun). Struct-field properties go through the Dot accessor instead,
+// which supplies the receiver instance as self. The getter is guaranteed
+// KindFun at property-creation time.
+func readProperty(ctx Context, prop tproperty) Tval {
+	return prop.Getter.Val.(tfun)(ctx, nil)
+}
+
+// ReadProperty invokes a free-standing property's getter and returns the
+// computed value. It lets code outside this package (the package-member
+// accessor in builtins/dot.go, reading an exported `pkg.Prop`) delegate to
+// the getter the same way the in-module leaf reader does. The value's Kind
+// must be KindProperty.
+func ReadProperty(ctx Context, v Tval) Tval {
+	return readProperty(ctx, v.Val.(tproperty))
+}
+
+// expandSpread rewrites a call's argument list, replacing each direct
+// `(spread arr)` argument with one node per element of the array `arr`
+// evaluates to. Non-spread arguments are passed through untouched and
+// UNEVALUATED — only the spread expressions themselves are evaluated here,
+// so the fexpr model (builtins receive unevaluated nodes) is preserved for
+// every other argument. The common no-spread case returns the input slice
+// unchanged, with no allocation. ok=false means a spread target wasn't an
+// array; the diagnostic is already reported and the caller must abort.
+func expandSpread(ctx Context, argv ttbranch) (ttbranch, bool) {
+	hasSpread := false
+	for _, node := range argv {
+		if _, ok := spreadArg(node); ok {
+			hasSpread = true
+			break
+		}
+	}
+	if !hasSpread {
+		return argv, true
+	}
+
+	out := make(ttbranch, 0, len(argv)+2)
+	for _, node := range argv {
+		expr, ok := spreadArg(node)
+		if !ok {
+			out = append(out, node)
+			continue
+		}
+		val := expr.Evaluate(ctx)
+		listPtr, ok := val.Val.(*[]Tval)
+		if !ok {
+			ctx.Errorf(ErrBadSpread, "cannot spread a value of kind '%s' — only arrays can be spread", val.Kind)
+			return nil, false
+		}
+		for _, e := range *listPtr {
+			out = append(out, ttvalue{e})
+		}
+	}
+	return out, true
 }
 
 func (br ttbranch) Evaluate(ctx Context) Tval {
@@ -36,36 +144,50 @@ func (br ttbranch) Evaluate(ctx Context) Tval {
 		return TvNil
 	}
 
+	// Splice any `(spread arr)` arguments into the call's argument list
+	// before dispatch, so spread works uniformly in every call — builtin,
+	// user fun, or constructor — not just in user-fun parameter binding.
+	// A call with no spread argument is returned unchanged.
+	args, ok := expandSpread(ctx, br[1:])
+	if !ok {
+		return TvNil
+	}
+
 	if fname, ok := br[0].(ttleaf); ok {
 		fn, found := ctx.Resolve(string(fname))
 
 		if !found {
-			fmt.Println("(ERR): Operation '" + fname + "' not found @ 'core.ttbranch.Evaluate'.")
-			return TvNil
+			return ctx.Errorf(ErrUnresolved, "operation '%s' is not defined", string(fname))
 		}
 
 		switch fn.Kind {
 		case KindFun:
-			return fn.Val.(tfun)(ctx, br[1:])
-		case KindConstructor:
-			return fn.Val.(tconstructor).Constructor(ctx, br[1:])
+			return fn.Val.(tfun)(ctx, args)
+		case KindType:
+			if ctor, ok := ConstructorOf(fn.Val.(*PhoType)); ok {
+				return ctor(ctx, args)
+			}
+			return ctx.Errorf(ErrNotCallable, "type '%s' is not constructible (only struct types can be called)", fn.Val.(*PhoType).Name())
 		default:
-			fmt.Println("(ERR): '" + string(fname) + "' is not callable (kind '" + fn.Kind + "') @ 'core.ttbranch.Evaluate'.")
-			return TvNil
+			return ctx.Errorf(ErrNotCallable, "'%s' is not callable (kind '%s')", string(fname), fn.Kind)
 		}
 	}
 
-	funBranch := br[0].(ttbranch)
-	fn := funBranch.Evaluate(ctx)
+	// The head is an expression (a nested call, possibly span-wrapped).
+	// Evaluate it generically: this also removes the unchecked ttbranch
+	// assertion that could panic the host on exotic heads.
+	fn := br[0].Evaluate(ctx)
 
 	switch fn.Kind {
 	case KindFun:
-		return fn.Val.(tfun)(ctx, br[1:])
-	case KindConstructor:
-		return fn.Val.(tconstructor).Constructor(ctx, br[1:])
+		return fn.Val.(tfun)(ctx, args)
+	case KindType:
+		if ctor, ok := ConstructorOf(fn.Val.(*PhoType)); ok {
+			return ctor(ctx, args)
+		}
+		return ctx.Errorf(ErrNotCallable, "type '%s' is not constructible (only struct types can be called)", fn.Val.(*PhoType).Name())
 	default:
-		fmt.Println("(ERR): '" + Inspect(funBranch) + "' is not callable (kind '" + fn.Kind + "') @ 'core.ttbranch.Evaluate'.")
-		return TvNil
+		return ctx.Errorf(ErrNotCallable, "'%s' is not callable (kind '%s')", Inspect(br[0]), fn.Kind)
 	}
 }
 
@@ -74,19 +196,18 @@ func (lf ttleaf) Evaluate(ctx Context) Tval {
 
 	// match numbers (the lexer splits '.' into its own token, so decimal
 	// fractions are reassembled by the Dot operator, not by this regex)
-	if regexp.MustCompile("^-?[0-9]+$").MatchString(s) {
+	if numberPattern.MatchString(s) {
 		num, err := strconv.ParseFloat(s, 64)
 		if err == nil {
 			return TvNum(num)
 		}
 
-		fmt.Println("(ERR): Value '" + s + "' could not be parsed as a number @ 'core.ttleaf.Evaluate'.")
-		return TvNil
+		return ctx.Errorf(ErrBadLiteral, "value '%s' could not be parsed as a number", s)
 		// match strings
 	} else if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
 		return TvStr(unescapeStringLit(s[1 : len(s)-1]))
 		// match chars
-	} else if regexp.MustCompile("^`.`$").MatchString(s) {
+	} else if charPattern.MatchString(s) {
 		return TvChr(rune(s[1]))
 		// match nil
 	} else if s == "Nil" {
@@ -94,14 +215,25 @@ func (lf ttleaf) Evaluate(ctx Context) Tval {
 		// match bools
 	} else if s == "True" || s == "False" {
 		return TvBool(s == "True")
+		// match atoms (`:name` / `:123`); the lexer already glued the colon
+		// to an identifier/digit run, so validate the body and intern it.
+	} else if len(s) >= 2 && s[0] == ':' {
+		body := s[1:]
+		if IsAtomName(body) {
+			return TvAtom(body)
+		}
+		return ctx.Errorf(ErrBadLiteral, "invalid atom '%s' — atoms must be an identifier or digits", s)
 		// match identifiers
-	} else if regexp.MustCompile("^[a-zA-Z](([a-zA-Z0-9]*)|([a-zA-Z0-9_]*[a-zA-Z0-9]))$").MatchString(s) {
+	} else if identPattern.MatchString(s) {
 		data, found := ctx.Resolve(s)
 		if !found {
-			fmt.Println("(WARN): Identifier '" + s + "' not found @ 'core.ttleaf.Evaluate'.")
-			return TvNil
+			return ctx.Warnf(ErrUnresolved, "identifier '%s' is not defined", s)
 		}
-
+		// A free-standing property reads through its getter — the name holds a
+		// KindProperty value, not the computed value itself.
+		if data.Kind == KindProperty {
+			return readProperty(ctx, data.Val.(tproperty))
+		}
 		return data
 	}
 
@@ -111,13 +243,12 @@ func (lf ttleaf) Evaluate(ctx Context) Tval {
 		return data
 	}
 
-	fmt.Println("(ERR): Value '" + s + "' could not be parsed @ 'core.ttleaf.Evaluate'.")
-	return TvNil
+	return ctx.Errorf(ErrBadLiteral, "value '%s' could not be parsed", s)
 }
 
 // unescapeStringLit translates conventional C-style backslash escapes
 // inside a string literal's body (the content between the quotes).
-// The legacy backtick passthrough (`` `X ``) is left untouched: the
+// The legacy backtick passthrough (“ `X “) is left untouched: the
 // lexer already accepted the pair, and the backtick stays in the
 // resulting string by design.
 //

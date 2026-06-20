@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"pho/pkg/core"
+	"pho/pkg/ast"
+	"pho/pkg/span"
 )
 
 // Position-tracking lexer + parser, used by the linter (pkg/lint) and
@@ -17,31 +18,50 @@ import (
 // syntax, not the desugared form — `&body` should look like `&body`, not
 // `(block 'body)` — so the resulting tree mirrors the source.
 //
-// The PNode tree types live in pkg/core so the runtime can later hang
-// Evaluate methods off them and walk this tree directly. Token and
-// ParseError stay here — they're parser-internal artifacts.
+// The PNode tree types live in pkg/ast; the runtime walks a separate
+// desugared tree (pkg/core's ttnode), which pkg/syntax/lower.go produces
+// from these PNodes. Token and ParseError stay here — they're
+// parser-internal artifacts.
 
 // Token is one lexer-produced unit with its source position.
+//
+// Annot marks the token as a parse-time annotation marker (`--@ ...`)
+// rather than a real syntactic token: its Value is the verbatim body
+// text after the `--@ ` prefix and its Span covers that body. The parser
+// consumes annotation tokens out of band (buffering them onto the form
+// that follows); they never reach expression parsing.
 type Token struct {
 	Value string
-	Span  core.Span
+	Span  span.Span
+	Annot bool
 }
 
-// mkSpan is a positional constructor for core.Span. The lexer below
+// mkSpan is a positional constructor for span.Span. The lexer below
 // builds spans dozens of times in identical (sl, sc, el, ec) order;
 // using this keeps the call sites tight without the unkeyed-literal
 // vet warning that fires for cross-package composite literals.
-func mkSpan(sl, sc, el, ec int) core.Span {
-	return core.Span{StartLine: sl, StartCol: sc, EndLine: el, EndCol: ec}
+func mkSpan(sl, sc, el, ec int) span.Span {
+	return span.Span{StartLine: sl, StartCol: sc, EndLine: el, EndCol: ec}
 }
 
 // ParseError records a malformed-input issue picked up by either the
 // lexer or the parser. The lexer flags unrecognized characters; the
 // parser flags unclosed groupings, dangling sigils, and stray closers.
 // Lint surfaces these as "parse-error" diagnostics.
+//
+// OpenSpan and Close are set only for missing-closer errors: OpenSpan
+// points at the opener whose closer is missing, Span points at the
+// inferred close site (where the closer should be inserted), and Close
+// is the closer text itself. Stray marks an unexpected closer at the
+// top level (Span covers the stray token). The balancer
+// (BalanceClosers) and LSP quick fixes are driven by these fields;
+// lint only reads Span and Message.
 type ParseError struct {
-	Span    core.Span
-	Message string
+	Span     span.Span
+	OpenSpan span.Span
+	Close    string
+	Stray    bool
+	Message  string
 }
 
 // ----------------------------------------------------------------------
@@ -76,8 +96,35 @@ func LexPos(src string) ([]Token, []ParseError) {
 			continue
 		}
 
-		// Line comment: `--` to end of line.
+		// Line comment `--` to end of line — normally skipped. The one
+		// exception is the annotation marker `--@ `: its body (the rest of
+		// the line) is captured as an Annot token for pkg/annot rather than
+		// discarded. The trailing space is required, so ordinary comments
+		// (`-- note`, `--------`, even `--@@@`) stay plain comments.
 		if ch == '-' && i+1 < len(src) && src[i+1] == '-' {
+			isAnnot := i+3 < len(src) && src[i+2] == '@' &&
+				(src[i+3] == ' ' || src[i+3] == '\t')
+			if isAnnot {
+				i += 3 // past `--@`
+				col += 3
+				// Skip the whitespace run between `--@` and the body so the
+				// captured span starts at the body's first real character.
+				for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+					i++
+					col++
+				}
+				bodyLine, bodyCol, bodyStart := line, col, i
+				for i < len(src) && src[i] != '\n' {
+					i++
+					col++
+				}
+				tokens = append(tokens, Token{
+					Value: src[bodyStart:i],
+					Span:  mkSpan(bodyLine, bodyCol, line, col),
+					Annot: true,
+				})
+				continue
+			}
 			for i < len(src) && src[i] != '\n' {
 				i++
 				col++
@@ -121,7 +168,7 @@ func LexPos(src string) ([]Token, []ParseError) {
 		if ch == '`' && i+2 < len(src) && src[i+2] == '`' {
 			tokens = append(tokens, Token{
 				Value: src[i : i+3],
-				Span:  mkSpan(startLine, startCol, line, col + 3),
+				Span:  mkSpan(startLine, startCol, line, col+3),
 			})
 			i += 3
 			col += 3
@@ -133,7 +180,7 @@ func LexPos(src string) ([]Token, []ParseError) {
 		// character" message that would otherwise fire below.
 		if ch == '`' {
 			errs = append(errs, ParseError{
-				Span:    mkSpan(startLine, startCol, line, col + 1),
+				Span:    mkSpan(startLine, startCol, line, col+1),
 				Message: "stray '`' — char literals must be `X`",
 			})
 			i++
@@ -141,11 +188,34 @@ func LexPos(src string) ([]Token, []ParseError) {
 			continue
 		}
 
+		// Atom literal: ':' GLUED (no space) to an identifier or digit run,
+		// e.g. `:fast` or `:01213`. A free-standing ':' (followed by space,
+		// ']', ')', etc.) is left for the structural branch below, where it
+		// stays the slice/range separator — so slices must space their colon
+		// (`xs.[1 : 2]`). The atom body mirrors identifier lexing, including
+		// an optional trailing '?'; the leaf evaluator validates the form.
+		if ch == ':' && i+1 < len(src) && (isIdentStart(src[i+1]) || isDigit(src[i+1])) {
+			j := i + 1
+			for j < len(src) && isIdentCont(src[j]) {
+				j++
+			}
+			if j < len(src) && src[j] == '?' {
+				j++
+			}
+			tokens = append(tokens, Token{
+				Value: src[i:j],
+				Span:  mkSpan(startLine, startCol, line, col+(j-i)),
+			})
+			col += j - i
+			i = j
+			continue
+		}
+
 		// Single-character punctuation that always tokenizes alone.
 		if isStructural(ch) {
 			tokens = append(tokens, Token{
 				Value: string(ch),
-				Span:  mkSpan(startLine, startCol, line, col + 1),
+				Span:  mkSpan(startLine, startCol, line, col+1),
 			})
 			i++
 			col++
@@ -160,7 +230,7 @@ func LexPos(src string) ([]Token, []ParseError) {
 			}
 			tokens = append(tokens, Token{
 				Value: src[i:j],
-				Span:  mkSpan(startLine, startCol, line, col + (j - i)),
+				Span:  mkSpan(startLine, startCol, line, col+(j-i)),
 			})
 			col += j - i
 			i = j
@@ -175,22 +245,26 @@ func LexPos(src string) ([]Token, []ParseError) {
 			}
 			tokens = append(tokens, Token{
 				Value: src[i:j],
-				Span:  mkSpan(startLine, startCol, line, col + (j - i)),
+				Span:  mkSpan(startLine, startCol, line, col+(j-i)),
 			})
 			col += j - i
 			i = j
 			continue
 		}
 
-		// Identifier or word-like operator.
+		// Identifier or word-like operator. A single optional trailing '?'
+		// is part of the identifier (the predicate convention, e.g. `atom?`).
 		if isIdentStart(ch) {
 			j := i + 1
 			for j < len(src) && isIdentCont(src[j]) {
 				j++
 			}
+			if j < len(src) && src[j] == '?' {
+				j++
+			}
 			tokens = append(tokens, Token{
 				Value: src[i:j],
-				Span:  mkSpan(startLine, startCol, line, col + (j - i)),
+				Span:  mkSpan(startLine, startCol, line, col+(j-i)),
 			})
 			col += j - i
 			i = j
@@ -203,7 +277,7 @@ func LexPos(src string) ([]Token, []ParseError) {
 			if two == "==" || two == "~=" || two == "<=" || two == ">=" {
 				tokens = append(tokens, Token{
 					Value: two,
-					Span:  mkSpan(startLine, startCol, line, col + 2),
+					Span:  mkSpan(startLine, startCol, line, col+2),
 				})
 				i += 2
 				col += 2
@@ -216,7 +290,7 @@ func LexPos(src string) ([]Token, []ParseError) {
 		if strings.ContainsRune("+-*/<>~=", rune(ch)) {
 			tokens = append(tokens, Token{
 				Value: string(ch),
-				Span:  mkSpan(startLine, startCol, line, col + 1),
+				Span:  mkSpan(startLine, startCol, line, col+1),
 			})
 			i++
 			col++
@@ -226,7 +300,7 @@ func LexPos(src string) ([]Token, []ParseError) {
 		// Unrecognized character: don't emit a token — the parser
 		// shouldn't have to deal with garbage. Record as a lex error.
 		errs = append(errs, ParseError{
-			Span:    mkSpan(startLine, startCol, line, col + 1),
+			Span:    mkSpan(startLine, startCol, line, col+1),
 			Message: fmt.Sprintf("unrecognized character %q", ch),
 		})
 		i++
@@ -251,6 +325,23 @@ func isIdentCont(ch byte) bool {
 	return isIdentStart(ch) || isDigit(ch) || ch == '_'
 }
 
+// isBareWord reports whether s is a plain identifier token — the shape a
+// struct-construction field name takes in `T.{ field value }`. It decides
+// which brace keys get quoted into field-name string literals during
+// construction parsing; non-identifier keys (already a string, a quoted
+// symbol, or a computed form) pass through untouched.
+func isBareWord(s string) bool {
+	if s == "" || !isIdentStart(s[0]) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if !isIdentCont(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // ----------------------------------------------------------------------
 // Parser
 // ----------------------------------------------------------------------
@@ -261,32 +352,191 @@ func isIdentCont(ch byte) bool {
 // result is the best tree we could build; the errors describe the
 // rough patches.
 //
+// Recovery from a missing closer is indentation-guided: an unclosed
+// form is cut off at the first line-leading token at or left of the
+// opener's line indent (see parseGrouping). Balanced input is never
+// affected — the rule only fires when the form's closer genuinely
+// does not appear later in the stream.
+//
 // Sugar passes (CompressBlock/Dot/Macro/Code) are NOT run. The linter
 // wants to see source-shaped trees.
-func ParsePos(tokens []Token) ([]core.PNode, []ParseError) {
-	p := &posParser{tokens: tokens}
-	var out []core.PNode
+func ParsePos(tokens []Token) ([]ast.PNode, []ParseError) {
+	p := newPosParser(tokens)
+	var out []ast.PNode
+	var pending []ast.PAnnotation
 	for !p.atEnd() {
+		t := p.peek()
+
+		// Annotation marker (`--@ (form)`): buffer it and attach to the
+		// next top-level form. Stacked annotations accumulate in order.
+		if t.Annot {
+			p.advance()
+			pending = append(pending, p.parseAnnotation(t))
+			continue
+		}
+
 		// Defensive: a stray closer at top level is an error and would
 		// otherwise spin in parseExpr → parsePrimary → consume nothing.
-		t := p.peek()
 		if t.Value == ")" || t.Value == "]" || t.Value == "}" {
 			p.errs = append(p.errs, ParseError{
 				Span:    t.Span,
+				Stray:   true,
 				Message: fmt.Sprintf("unexpected %q at top level", t.Value),
 			})
 			p.advance()
 			continue
 		}
-		out = append(out, p.parseExpr())
+
+		form := p.parseExpr()
+		if len(pending) > 0 {
+			p.attachAnnotations(form, pending)
+			pending = nil
+		}
+		out = append(out, form)
+	}
+
+	// Annotations with no following form (e.g. a trailing `--@` at EOF).
+	for _, a := range pending {
+		p.errs = append(p.errs, ParseError{
+			Span:    a.Span,
+			Message: "annotation '--@' has no form to annotate",
+		})
 	}
 	return out, p.errs
 }
+
+// attachAnnotations records the buffered annotations on the form they
+// precede. Annotations may only decorate a parenthesized form (the
+// declaration shapes `(fun ...)`, `(const ...)`, `(struct ...)`, ...);
+// a bare atom, an array/dict literal, or a macro call is reported and the
+// annotations are dropped.
+func (p *posParser) attachAnnotations(form ast.PNode, anns []ast.PAnnotation) {
+	if br, ok := form.(*ast.PBranch); ok && br.Open == "(" {
+		br.Annotations = append(br.Annotations, anns...)
+		return
+	}
+	for _, a := range anns {
+		p.errs = append(p.errs, ParseError{
+			Span:    a.Span,
+			Message: "annotation '--@' may only precede a '(...)' form",
+		})
+	}
+}
+
+// parseAnnotation turns an annotation marker into a PAnnotation by
+// re-lexing and re-parsing its body as a standalone form. The sub-parse
+// runs in the body's own coordinate space; every position it produces is
+// shifted back onto the original source (offsetSpan) so diagnostics and
+// the parsed Form point at the real columns. Lex/parse problems inside the
+// body surface as errors against the enclosing file.
+func (p *posParser) parseAnnotation(marker Token) ast.PAnnotation {
+	ann := ast.PAnnotation{Raw: marker.Value, Span: marker.Span}
+
+	bodyToks, lexErrs := LexPos(marker.Value)
+	for k := range bodyToks {
+		bodyToks[k].Span = offsetSpan(bodyToks[k].Span, marker.Span.StartLine, marker.Span.StartCol)
+	}
+	// Lex errors carry body-relative spans; relocate them. Parse errors
+	// are derived from the already-shifted tokens, so they are absolute.
+	for k := range lexErrs {
+		lexErrs[k].Span = offsetSpan(lexErrs[k].Span, marker.Span.StartLine, marker.Span.StartCol)
+	}
+	forms, parseErrs := ParsePos(bodyToks)
+	p.errs = append(p.errs, lexErrs...)
+	p.errs = append(p.errs, parseErrs...)
+
+	switch len(forms) {
+	case 0:
+		p.errs = append(p.errs, ParseError{
+			Span:    marker.Span,
+			Message: "empty annotation '--@'",
+		})
+	case 1:
+		ann.Form = forms[0]
+	default:
+		ann.Form = forms[0]
+		p.errs = append(p.errs, ParseError{
+			Span:    forms[1].GetSpan(),
+			Message: "annotation '--@' must contain exactly one form",
+		})
+	}
+	return ann
+}
+
+// offsetSpan relocates a body-relative span onto the original source. An
+// annotation body is always a single line (the lexer captures it up to the
+// newline), so every body position sits on relative line 1: line 1 maps to
+// the body's origin line with columns shifted by the origin column. A
+// deeper relative line (defensive — should not occur) shifts by line only.
+func offsetSpan(s span.Span, baseLine, baseCol int) span.Span {
+	shift := func(l, c int) (int, int) {
+		if l == 1 {
+			return baseLine, baseCol + (c - 1)
+		}
+		return baseLine + (l - 1), c
+	}
+	out := s
+	out.StartLine, out.StartCol = shift(s.StartLine, s.StartCol)
+	out.EndLine, out.EndCol = shift(s.EndLine, s.EndCol)
+	return out
+}
+
+// maxParseDepth bounds how deeply the recursive-descent parser will
+// nest grouped forms and sigils. Real code nests a handful deep; this
+// limit only ever trips on pathological input (a runaway paste, a
+// generated blob, a mid-edit avalanche of `(`). Without it, deeply
+// nested input recurses the parser — and then every downstream walker
+// (lint, semantic tokens, navigation) — until the Go stack overflows,
+// which is a FATAL crash that recover() cannot catch and that would
+// take the whole language server down. Capping the tree depth here
+// bounds the recursion everywhere downstream at once.
+const maxParseDepth = 1000
 
 type posParser struct {
 	tokens []Token
 	i      int
 	errs   []ParseError
+
+	// depth is the current grouped-form / sigil nesting depth, bounded
+	// by maxParseDepth. depthCapped records that the cap was hit so the
+	// "nested too deeply" error is reported once, not once per token.
+	depth       int
+	depthCapped bool
+
+	// leading[k] is true when token k is the first token on its line —
+	// no earlier token occupies any part of its start line. indent[k]
+	// is the column of the line-leading token of token k's start line
+	// (tokens after a multi-line string inherit the string's start-line
+	// indent). Both drive the indentation-guided recovery in
+	// parseGrouping. The lexer counts a tab as one column, so files
+	// that mix tabs and spaces compare indents tab-as-one-column; a
+	// consistently-indented file is always self-consistent.
+	leading []bool
+	indent  []int
+}
+
+func newPosParser(tokens []Token) *posParser {
+	leading, indent := lineInfo(tokens)
+	return &posParser{tokens: tokens, leading: leading, indent: indent}
+}
+
+// lineInfo computes, for every token, whether it is the first token on
+// its line and the indent of that line (the line-leading token's start
+// column). Tokens after a multi-line string on the string's end line
+// inherit the string's start-line indent. Shared by the parser's
+// recovery rule and the closer balancer.
+func lineInfo(tokens []Token) (leading []bool, indent []int) {
+	leading = make([]bool, len(tokens))
+	indent = make([]int, len(tokens))
+	cur := 1
+	for k, t := range tokens {
+		if k == 0 || tokens[k-1].Span.EndLine < t.Span.StartLine {
+			leading[k] = true
+			cur = t.Span.StartCol
+		}
+		indent[k] = cur
+	}
+	return leading, indent
 }
 
 func (p *posParser) atEnd() bool { return p.i >= len(p.tokens) }
@@ -304,7 +554,7 @@ func (p *posParser) advance() Token {
 	return t
 }
 
-func (p *posParser) parseExpr() core.PNode {
+func (p *posParser) parseExpr() ast.PNode {
 	expr := p.parsePrimary()
 	// Build a left-associative dot chain: while the next token is `.`,
 	// consume it and pair with the next primary. `a.b.c` becomes
@@ -322,7 +572,7 @@ func (p *posParser) parseExpr() core.PNode {
 		// and `!` can't, and consuming them here would steal them from
 		// the surrounding form (e.g. `args.)` would eat the `)` that
 		// belongs to the enclosing parenthesized form).
-		var rhs core.PNode
+		var rhs ast.PNode
 		switch p.peek().Value {
 		case ")", "]", "}", "!":
 			p.errs = append(p.errs, ParseError{
@@ -335,14 +585,45 @@ func (p *posParser) parseExpr() core.PNode {
 			// becomes a literal leaf in the chain so the legacy variadic
 			// syntax keeps producing the expected tree shape.
 			tok := p.advance()
-			rhs = &core.PLeaf{Value: tok.Value, Span: tok.Span}
+			rhs = &ast.PLeaf{Value: tok.Value, Span: tok.Span}
 		default:
 			rhs = p.parsePrimary()
 		}
 		span := expr.GetSpan()
 		span.EndLine = rhs.GetSpan().EndLine
 		span.EndCol = rhs.GetSpan().EndCol
-		expr = &core.PDot{LHS: expr, RHS: rhs, Span: span}
+		// `LHS.{ field value … }` is struct-construction sugar. The brace's
+		// keys are BARE field names, not values: rewrite each even-position
+		// key from a bare identifier into a string literal, then splice the
+		// pairs straight into a call of the LHS — `Point.{ X 10 }` becomes
+		// `(Point "X" 10)`. The constructor reads alternating name/value
+		// arguments (see builtins/decl.go). This is deliberately a different
+		// shape from a call with a single brace argument, so the retired
+		// `(LHS { … })` form is no longer a way to construct a struct.
+		if br, ok := rhs.(*ast.PBranch); ok && br.Open == "{" {
+			children := make([]ast.PNode, 0, len(br.Children)+1)
+			children = append(children, expr)
+			for i, c := range br.Children {
+				if i%2 == 0 {
+					if lf, ok := c.(*ast.PLeaf); ok && isBareWord(lf.Value) {
+						children = append(children, &ast.PLeaf{
+							Value: `"` + lf.Value + `"`,
+							Span:  lf.Span,
+						})
+						continue
+					}
+				}
+				children = append(children, c)
+			}
+			expr = &ast.PBranch{
+				Open:     "(",
+				Close:    ")",
+				Children: children,
+				Span:     span,
+			}
+			continue
+		}
+		expr = &ast.PDot{LHS: expr, RHS: rhs, Span: span}
 	}
 	return expr
 }
@@ -351,7 +632,27 @@ func (p *posParser) parseExpr() core.PNode {
 // sigil-prefixed expression, or an atom. Callers (top-level loop,
 // parseGrouping, parseSigil, parseExpr's dot loop) all filter closers
 // before recursing, so a closer cannot reach here in practice.
-func (p *posParser) parsePrimary() core.PNode {
+func (p *posParser) parsePrimary() ast.PNode {
+	// Depth guard: every nesting level (grouped form or sigil) reaches
+	// here, so capping depth here bounds the whole recursive descent —
+	// and, because the tree it builds is no deeper than this, every
+	// downstream walker too. Past the cap we stop descending and consume
+	// the token as a flat leaf, which still makes forward progress (the
+	// caller's loop keeps draining tokens) without growing the stack.
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.depth > maxParseDepth {
+		if !p.depthCapped {
+			p.depthCapped = true
+			p.errs = append(p.errs, ParseError{
+				Span:    p.peek().Span,
+				Message: fmt.Sprintf("expression nested too deeply (limit %d) — flattening the remainder", maxParseDepth),
+			})
+		}
+		tok := p.advance()
+		return &ast.PLeaf{Value: tok.Value, Span: tok.Span}
+	}
+
 	t := p.peek()
 	switch t.Value {
 	case "(":
@@ -370,17 +671,17 @@ func (p *posParser) parsePrimary() core.PNode {
 			Span:    tok.Span,
 			Message: "unexpected '.' — '.' must follow an expression",
 		})
-		return &core.PLeaf{Value: tok.Value, Span: tok.Span}
+		return &ast.PLeaf{Value: tok.Value, Span: tok.Span}
 	}
 	tok := p.advance()
-	return &core.PLeaf{Value: tok.Value, Span: tok.Span}
+	return &ast.PLeaf{Value: tok.Value, Span: tok.Span}
 }
 
 // parseSigil consumes the sigil and recursively parses the next
 // expression. The Sigil's span runs from the sigil character through
 // the inner expression's end. A sigil with no following expression is
 // recovered as a bare leaf and reported as a parse error.
-func (p *posParser) parseSigil(sigil string) core.PNode {
+func (p *posParser) parseSigil(sigil string) ast.PNode {
 	sigilTok := p.advance()
 	// Recover cleanly when the sigil hits a boundary that can't start an
 	// expression: EOF, any closer, or the macro-stop `!`. Without this,
@@ -391,7 +692,7 @@ func (p *posParser) parseSigil(sigil string) core.PNode {
 			Span:    sigilTok.Span,
 			Message: fmt.Sprintf("missing expression after %q sigil", sigil),
 		})
-		return &core.PLeaf{Value: sigil, Span: sigilTok.Span}
+		return &ast.PLeaf{Value: sigil, Span: sigilTok.Span}
 	}
 	switch p.peek().Value {
 	case ")", "]", "}", "!":
@@ -399,13 +700,13 @@ func (p *posParser) parseSigil(sigil string) core.PNode {
 			Span:    sigilTok.Span,
 			Message: fmt.Sprintf("missing expression after %q sigil", sigil),
 		})
-		return &core.PLeaf{Value: sigil, Span: sigilTok.Span}
+		return &ast.PLeaf{Value: sigil, Span: sigilTok.Span}
 	}
 	inner := p.parseExpr()
 	span := sigilTok.Span
 	span.EndLine = inner.GetSpan().EndLine
 	span.EndCol = inner.GetSpan().EndCol
-	return &core.PSigil{Sigil: sigil, Inner: inner, Span: span}
+	return &ast.PSigil{Sigil: sigil, Inner: inner, Span: span}
 }
 
 // foldMacroCall recognizes the `(name! arg1 arg2 ...)` shape coming
@@ -413,17 +714,17 @@ func (p *posParser) parseSigil(sigil string) core.PNode {
 // `!` token is dropped from the args list — its position is kept on
 // PMacroCall.BangSpan. Only `(`-form branches with `!` in second
 // position fold; anything else passes through unchanged.
-func foldMacroCall(br *core.PBranch) core.PNode {
+func foldMacroCall(br *ast.PBranch) ast.PNode {
 	if br.Open != "(" || len(br.Children) < 2 {
 		return br
 	}
-	bang, ok := br.Children[1].(*core.PLeaf)
+	bang, ok := br.Children[1].(*ast.PLeaf)
 	if !ok || bang.Value != "!" {
 		return br
 	}
-	args := make([]core.PNode, 0, len(br.Children)-2)
+	args := make([]ast.PNode, 0, len(br.Children)-2)
 	args = append(args, br.Children[2:]...)
-	return &core.PMacroCall{
+	return &ast.PMacroCall{
 		Head:     br.Children[0],
 		Args:     args,
 		BangSpan: bang.Span,
@@ -433,15 +734,32 @@ func foldMacroCall(br *core.PBranch) core.PNode {
 
 // parseGrouping reads a `(`-style form ending in the given closer. The
 // opener has not been consumed yet when this is called. Records a
-// parse error if EOF is hit before the closer or if a wrong closer is
-// found at the same depth.
-func (p *posParser) parseGrouping(open, close string) *core.PBranch {
+// parse error if the closer is missing; recovery is indentation-guided
+// so a missing closer cuts the form off at a sensible boundary instead
+// of swallowing the rest of the file:
+//
+//	(fun 'f '(x)        ← unclosed
+//	  '(do (print x)    ← unclosed
+//	(var 'y 5)          ← line-leading at col ≤ the openers' line
+//	                      indents: both forms are inferred to close
+//	                      just after (print x), and (var 'y 5) parses
+//	                      as its own top-level form.
+//
+// The rule only fires when the form's closer genuinely doesn't appear
+// later in the stream (closerExists lookahead), so balanced code —
+// however it's indented — parses exactly as it always did. Missing-
+// closer errors carry Span = the inferred close site (where a closer
+// should be inserted) and OpenSpan = the opener.
+func (p *posParser) parseGrouping(open, close string) *ast.PBranch {
+	openIdx := p.i
 	openTok := p.advance() // consume opener
-	br := &core.PBranch{
+	openIndent := p.indent[openIdx]
+	br := &ast.PBranch{
 		Open:  open,
 		Close: close,
 		Span:  openTok.Span,
 	}
+	reported := false
 	for !p.atEnd() {
 		t := p.peek()
 		if t.Value == close {
@@ -450,23 +768,32 @@ func (p *posParser) parseGrouping(open, close string) *core.PBranch {
 			br.Span.EndCol = closeTok.Span.EndCol
 			return br
 		}
+		// Indentation recovery: a line-leading token at or left of the
+		// opener's line indent means the user has moved on to a sibling
+		// or outer form — close here, before the dedented token, unless
+		// our closer really does appear downstream.
+		if p.leading[p.i] && t.Span.StartLine > openTok.Span.StartLine &&
+			t.Span.StartCol <= openIndent && !p.closerExists(open, close) {
+			p.errs = append(p.errs, missingCloser(open, close, openTok.Span, p.tokens[p.i-1].Span))
+			reported = true
+			break
+		}
 		// If we see a different closer, leave it for the outer caller —
 		// best-effort recovery on malformed input.
 		if t.Value == ")" || t.Value == "]" || t.Value == "}" {
-			p.errs = append(p.errs, ParseError{
-				Span:    openTok.Span,
-				Message: fmt.Sprintf("missing closing %q for %q opened here", close, open),
-			})
+			p.errs = append(p.errs, missingCloser(open, close, openTok.Span, p.tokens[p.i-1].Span))
+			reported = true
 			break
 		}
 		br.Children = append(br.Children, p.parseExpr())
 	}
 	// EOF without matching closer is an error too.
-	if p.atEnd() {
-		p.errs = append(p.errs, ParseError{
-			Span:    openTok.Span,
-			Message: fmt.Sprintf("missing closing %q for %q opened here", close, open),
-		})
+	if p.atEnd() && !reported {
+		last := openTok.Span
+		if p.i > 0 {
+			last = p.tokens[p.i-1].Span
+		}
+		p.errs = append(p.errs, missingCloser(open, close, openTok.Span, last))
 	}
 	// Span ends at the last child (or opener if none).
 	if n := len(br.Children); n > 0 {
@@ -477,12 +804,48 @@ func (p *posParser) parseGrouping(open, close string) *core.PBranch {
 	return br
 }
 
+// closerExists reports whether the current form's closer appears later
+// in the token stream, using same-type depth counting from the current
+// position (depth starts at 1 for the form being parsed). Mixed-type
+// bracket crossings can fool the count, but those inputs are already
+// malformed and get best-effort treatment anyway. O(n) per call; only
+// invoked on dedent candidates inside forms that may be unclosed, so
+// well-formed files never pay for it more than the dedents they have.
+func (p *posParser) closerExists(open, close string) bool {
+	depth := 1
+	for k := p.i; k < len(p.tokens); k++ {
+		switch p.tokens[k].Value {
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// missingCloser builds the ParseError for an unclosed form: a one-
+// column span at the inferred close site (right after the last token
+// of the form), with the opener recorded on OpenSpan.
+func missingCloser(open, close string, openSpan, lastSpan span.Span) ParseError {
+	return ParseError{
+		Span:     mkSpan(lastSpan.EndLine, lastSpan.EndCol, lastSpan.EndLine, lastSpan.EndCol+1),
+		OpenSpan: openSpan,
+		Close:    close,
+		Message: fmt.Sprintf("missing closing %q for %q opened at %d:%d",
+			close, open, openSpan.StartLine, openSpan.StartCol),
+	}
+}
+
 // scanString skips past a `"..."` string body starting at i (which
 // points at the opening quote), returning the byte position right
 // after the closing quote, the updated line/col, and whether the
 // closing quote was actually found. Honors the three skip rules
 // documented at the `if ch == '"'` site in LexPos:
-//   - `` `X `` backtick passthrough
+//   - “ `X “ backtick passthrough
 //   - `\X` backslash escape (eval translates it later)
 //   - `%(...)` interpolation expression (delegates to scanInterpExpr)
 //
@@ -536,7 +899,7 @@ func scanString(src string, i, line, col int) (end, endLine, endCol int, termina
 // fooled by mismatched parens elsewhere:
 //   - Inner strings `"..."` — delegated to scanString (which itself
 //     handles nested `%(...)`).
-//   - Char literals `` `X` `` (exactly 3 bytes).
+//   - Char literals “ `X` “ (exactly 3 bytes).
 //   - Line comments `-- ...` to end of line.
 //
 // If the source runs out before depth returns to zero, scanInterpExpr

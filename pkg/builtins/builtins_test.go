@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"pho/pkg/core"
+	"pho/pkg/diag"
 	"pho/pkg/syntax"
 )
 
@@ -49,22 +50,22 @@ func TestInterpolationEndToEnd(t *testing.T) {
 	}{
 		{
 			"bare name",
-			"(const 'who \"World\")\n\"hi %who\"",
+			"(const who \"World\")\n\"hi %who\"",
 			"hi World",
 		},
 		{
 			"number coercion",
-			"(const 'n 42)\n\"n=%n\"",
+			"(const n 42)\n\"n=%n\"",
 			"n=42",
 		},
 		{
 			"paren expression",
-			"(const 'xs [1 2 3])\n\"len=%(len xs)\"",
+			"(const xs [1 2 3])\n\"len=%(len xs)\"",
 			"len=3",
 		},
 		{
 			"two interpolations and a literal tail",
-			"(const 'a 1 'b 2)\n\"%a+%b=\"",
+			"(const a 1 b 2)\n\"%a+%b=\"",
 			"1+2=",
 		},
 		{
@@ -103,7 +104,7 @@ func TestBindMethodResetsPrivilegedOnReturn(t *testing.T) {
 		Methods: map[string]core.Fun{},
 		Origin:  &env,
 	}
-	instance := core.TvInstance(structPtr, map[string]core.Value{}, false, false)
+	instance := core.TvInstance(structPtr, map[string]core.Value{}, false)
 
 	// BindMethod reads InstStack[0] as the receiver; populate it.
 	env.InstStack = append([]core.Value{instance}, env.InstStack...)
@@ -112,7 +113,7 @@ func TestBindMethodResetsPrivilegedOnReturn(t *testing.T) {
 	// ReturnSignal{Value: TvNum(42)}, BindMethod catches it, returns 42.
 	body := core.Branch{core.Leaf("return"), core.Leaf("42")}
 
-	fn := core.BindMethod(body, []string{"self"}, ctx)
+	fn := core.BindMethod("T.m", body, []string{"self"}, ctx)
 	result := fn(ctx, nil)
 
 	if result.Kind != core.KindNum {
@@ -138,7 +139,7 @@ func TestBindFunRecoversReturn(t *testing.T) {
 	// (return "hi") with one arg.
 	body := core.Branch{core.Leaf("return"), core.Leaf(`"hi"`)}
 
-	fn := core.BindFun(body, []string{}, ctx)
+	fn := core.BindFun("f", body, []string{}, ctx)
 	result := fn(ctx, nil)
 
 	if result.Kind != core.KindStr {
@@ -171,9 +172,9 @@ func TestStringifyValue(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := stringifyValue(tc.in)
+			got := core.Stringify(tc.in)
 			if got != tc.want {
-				t.Errorf("stringifyValue(%v) = %q, want %q", tc.in, got, tc.want)
+				t.Errorf("Stringify(%v) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -186,7 +187,7 @@ func TestBindFunBareReturn(t *testing.T) {
 
 	body := core.Branch{core.Leaf("return")}
 
-	fn := core.BindFun(body, []string{}, ctx)
+	fn := core.BindFun("f", body, []string{}, ctx)
 	result := fn(ctx, nil)
 
 	if result.Kind != core.KindNil {
@@ -208,17 +209,17 @@ func TestInterpolationInFunBody(t *testing.T) {
 	}{
 		{
 			"quoted-string fun body",
-			"(fun 'greet '(who) '\"hi %who\")\n(greet \"World\")",
+			"(fun greet (who) \"hi %who\")\n(greet \"World\")",
 			"hi World",
 		},
 		{
 			"interp inside (do ...) body",
-			"(fun 'tag '(n) '(do (var 's \"n=%n\") s))\n(tag 7)",
+			"(fun tag (n) (identity do (var s \"n=%n\") s))\n(tag 7)",
 			"n=7",
 		},
 		{
 			"paren expr in fun body",
-			"(fun 'count '(xs) '\"len=%(len xs)\")\n(count [1 2 3 4])",
+			"(fun count (xs) \"len=%(len xs)\")\n(count [1 2 3 4])",
 			"len=4",
 		},
 		// NOTE: method-body interpolation uses the exact same quoted-body
@@ -238,5 +239,93 @@ func TestInterpolationInFunBody(t *testing.T) {
 				t.Errorf("eval(%q) = %q, want %q", tc.src, got, tc.want)
 			}
 		})
+	}
+}
+
+// evalProgramDiag runs src like evalProgram but attaches a diagnostic
+// session so a test can assert which runtime errors fired. Returns the
+// value of the last form plus every diagnostic code emitted.
+func evalProgramDiag(t *testing.T, src string) (core.Value, []string) {
+	t.Helper()
+	env := NewEnv()
+	s := diag.NewSession()
+	var codes []string
+	s.Report = func(e diag.RuntimeError) { codes = append(codes, e.Code) }
+	file := &core.File{Mode: core.ModeProgram, Imports: map[string]core.Value{}}
+	ctx := core.Context{Env: &env, File: file, Diag: s}
+	ctx.PushFrame()
+
+	tokens, _ := syntax.LexPos(src)
+	tree, _ := syntax.ParsePos(tokens)
+	lowered, _ := syntax.Lower(tree).(core.Branch)
+	var last core.Value
+	for _, form := range lowered {
+		last = form.Evaluate(ctx)
+	}
+	return last, codes
+}
+
+func hasCode(codes []string, want string) bool {
+	for _, c := range codes {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
+// An omitted (optional name) parameter binds to Nil; a supplied one
+// binds the argument. The body `'b` is the identity of the optional
+// parameter, so the returned value is exactly what got bound.
+func TestOptionalParamBinding(t *testing.T) {
+	if v := evalProgram(t, "(fun f (a (optional b)) b)\n(f 1)"); v.Kind != core.KindNil {
+		t.Errorf("omitted optional: got kind %q (%v), want Nil", v.Kind, v.Val)
+	}
+	if v := evalProgram(t, "(fun f (a (optional b)) b)\n(f 1 2)"); v.Kind != core.KindNum || v.Val.(float64) != 2 {
+		t.Errorf("supplied optional: got %v, want 2", v.Val)
+	}
+}
+
+// Optional and spread compose: the rest-arg collects only what's left
+// after every named parameter (required + optional) is filled.
+func TestOptionalWithSpread(t *testing.T) {
+	// Body returns the rest array.
+	restLen := func(src string) int {
+		t.Helper()
+		v := evalProgram(t, src)
+		if v.Kind != core.KindArray {
+			t.Fatalf("expected array rest, got kind %q (%v)", v.Kind, v.Val)
+		}
+		return len(*v.Val.(*[]core.Value))
+	}
+	prog := func(call string) string {
+		return "(fun g (a (optional b) (spread r)) r)\n" + call
+	}
+	if n := restLen(prog("(g 1)")); n != 0 {
+		t.Errorf("(g 1): rest len = %d, want 0", n)
+	}
+	if n := restLen(prog("(g 1 2)")); n != 0 {
+		t.Errorf("(g 1 2): rest len = %d, want 0 (b consumes the 2nd arg)", n)
+	}
+	if n := restLen(prog("(g 1 2 3 4)")); n != 2 {
+		t.Errorf("(g 1 2 3 4): rest len = %d, want 2", n)
+	}
+}
+
+// A required parameter omitted still errors, even when later params are
+// optional — the minimum-arity check counts only required params.
+func TestOptionalRequiredStillEnforced(t *testing.T) {
+	_, codes := evalProgramDiag(t, "(fun need (a (optional b)) a)\n(need)")
+	if !hasCode(codes, core.ErrArity) {
+		t.Errorf("omitting a required arg must raise ErrArity, got %v", codes)
+	}
+}
+
+// A required parameter after an optional one is a malformed declaration,
+// rejected by parseArgList when the `fun` form is evaluated.
+func TestOptionalOrderingRejected(t *testing.T) {
+	_, codes := evalProgramDiag(t, "(fun bad ((optional a) b) a)")
+	if !hasCode(codes, core.ErrBadForm) {
+		t.Errorf("required-after-optional must raise ErrBadForm, got %v", codes)
 	}
 }

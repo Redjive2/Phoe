@@ -1,30 +1,30 @@
 ; ============================================================
-;  Pho locals queries
+;  Pho locals queries  (post-cutover bare syntax)
 ;
-;  Tells tree-sitter-aware editors which identifiers are scopes,
-;  definitions (functions, params, vars, struct/method names),
-;  and references. With this in place, an editor can color
-;  parameter uses differently from package-level globals, jump
-;  from a use to its definition, and find all uses of a name —
-;  all without needing an LSP for purely-local cases.
+;  Tells tree-sitter-aware editors which identifiers open scopes,
+;  bind names, and reference them. Post-cutover the '/& sigils are
+;  gone: declaration names and parameter lists are bare, and a
+;  method/property name is an `Owner.Name` dot_chain.
 ;
-;  The standard captures are:
 ;     @local.scope                — node that opens a fresh scope
 ;     @local.definition.<kind>    — where a name is bound
 ;     @local.reference            — every other identifier use
+;
+;  Pho also ships a full LSP (cmd/pho-lsp), which is the authoritative
+;  source for go-to-definition / references; these queries are the
+;  best-effort fallback for tree-sitter-only scope coloring. Two cases
+;  the grammar can't express here and that the LSP covers instead:
+;  multi-binding `(var a 1 b 2)` (only the first name is anchorable,
+;  since a bare name is structurally identical to a value) and
+;  spread/optional parameters wrapped in `(spread name)` / `(optional name)`.
 ; ============================================================
 
 
 ; ----- Scopes -----
 ;
-; The whole file is the outermost scope. Function and method
-; bodies introduce inner scopes; everything inside (params, var
-; bindings, nested funs) is local to that scope.
-;
-; `block` (the &expr / (block 'expr) form) does NOT create a
-; scope — the runtime's BindCallback runs in the caller's env,
-; so the lexical model agrees: an `if` branch sees the same
-; bindings as the enclosing fun.
+; The whole file is the outermost scope. Function and method bodies
+; introduce inner scopes. `block` (&expr) does NOT — the runtime runs
+; it in the caller's env, so an `if`/loop arm sees the enclosing bindings.
 
 (source_file) @local.scope
 
@@ -32,90 +32,69 @@
  (#any-of? @_kw "fun" "method")) @local.scope
 
 
-; ----- Function and method definitions -----
+; ----- Function / method / struct names -----
 
-; (fun 'name '(args) '(body))
-((list . (identifier) @_kw
-       . (quote (identifier) @local.definition.function))
+; (fun Name (args) body) — named only; anonymous (fun (args) body) has a
+; parameter list, not an identifier, in the name slot.
+((list . (identifier) @_kw . (identifier) @local.definition.function)
  (#eq? @_kw "fun"))
 
-; (method Owner 'name '(args) '(body))
-((list . (identifier) @_kw
-       . (identifier)
-       . (quote (identifier) @local.definition.method))
+; (method Owner.Name (args) body) — named only (an anonymous delegate's
+; receiver is a bare identifier, not a dot_chain).
+((list . (identifier) @_kw . (dot_chain (identifier) (identifier) @local.definition.method))
  (#eq? @_kw "method"))
 
-
-; ----- Struct definitions -----
-
-; (struct 'name '(fields))
-((list . (identifier) @_kw
-       . (quote (identifier) @local.definition.constructor))
+; (struct Name field ...)
+((list . (identifier) @_kw . (identifier) @local.definition.constructor)
  (#eq? @_kw "struct"))
 
 
 ; ----- Bindings: var / const -----
 ;
-; Both bind the name on the surrounding scope. `(var 'a 1 'b 2)`
-; lists multiple at once — tree-sitter re-fires the pattern for
-; each `'name` it finds, so all of them get captured.
+; (var a 1 b 2) interleaves bare names and values. Only the first name is
+; positionally anchorable (a bare name looks just like a value), so a
+; multi-binding form captures only its first name here; the LSP resolves
+; the rest. The common single-binding (var x 5) works.
 
-((list . (identifier) @_kw
-       . (quote (identifier) @local.definition.var))
+((list . (identifier) @_kw . (identifier) @local.definition.var)
  (#any-of? @_kw "var" "const"))
 
 
-; ----- Function parameters -----
+; ----- Function / method parameters -----
 ;
-; Pho's parameter list is a quoted list of identifiers. tree-sitter
-; matches the inner pattern once per identifier child, capturing
-; each one as a parameter definition.
+; The parameter list is the bare (list ...) sitting just after the name;
+; each direct identifier child is a parameter.
 
-; (fun 'name '(arg1 arg2 ...) ...)
-((list . (identifier) @_kw
-       . (quote)
-       . (quote (list (identifier) @local.definition.parameter)))
+; (fun Name (params) body)
+((list . (identifier) @_kw . (identifier) . (list (identifier) @local.definition.parameter))
  (#eq? @_kw "fun"))
 
-; (method Owner 'name '(self arg ...) ...)
-((list . (identifier) @_kw
-       . (identifier)
-       . (quote)
-       . (quote (list (identifier) @local.definition.parameter)))
+; (fun (params) body) — anonymous
+((list . (identifier) @_kw . (list (identifier) @local.definition.parameter))
+ (#eq? @_kw "fun"))
+
+; (method Owner.Name (params) body)
+((list . (identifier) @_kw . (dot_chain) . (list (identifier) @local.definition.parameter))
  (#eq? @_kw "method"))
 
-; Spread params: `(spread name)` inside a parameter list. The
-; `name` identifier becomes the rest-arg binding.
-((list . (identifier) @_kw
-       . (quote)
-       . (quote (list (list . (identifier) @_spread . (identifier) @local.definition.parameter))))
- (#eq? @_kw "fun")
- (#eq? @_spread "spread"))
-
-((list . (identifier) @_kw
-       . (identifier)
-       . (quote)
-       . (quote (list (list . (identifier) @_spread . (identifier) @local.definition.parameter))))
- (#eq? @_kw "method")
- (#eq? @_spread "spread"))
+; (method Owner (params) body) — anonymous delegate
+((list . (identifier) @_kw . (identifier) . (list (identifier) @local.definition.parameter))
+ (#eq? @_kw "method"))
 
 
 ; ----- Imports -----
 ;
-; (import "path")              — alias is the basename of the path
-; (import ["path" 'alias])     — explicit alias
-; (goimport ...)               — same shape
+; (import "path")            — alias is the path basename (no binding node here)
+; (import ("path" alias))    — explicit bare alias
 
-; Explicit alias form via array.
-((list . (identifier) @_kw
-       . (array (string) (quote (identifier) @local.definition.namespace)))
+((list . (identifier) @_kw . (list (string) (identifier) @local.definition.namespace))
  (#any-of? @_kw "import" "goimport"))
 
 
 ; ----- References -----
 ;
-; Every identifier that isn't captured as a definition above. The
-; resolver picks the nearest enclosing definition — local params
-; first, then enclosing scope, then file scope.
+; Every identifier not captured as a definition above. The resolver picks
+; the nearest enclosing definition — local params first, then enclosing
+; scope, then file scope.
 
 (identifier) @local.reference

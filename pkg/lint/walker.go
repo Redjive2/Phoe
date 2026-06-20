@@ -4,21 +4,25 @@ import (
 	"fmt"
 	"strings"
 
+	"pho/pkg/annot"
+	"pho/pkg/ast"
 	"pho/pkg/core"
+	"pho/pkg/span"
 	"pho/pkg/syntax"
 )
 
 // walker is a stateful AST walker that builds scopes as it descends and
 // emits diagnostics for the three scope-aware checkers:
-//   set-on-constant, unresolved-identifier, redeclaration.
+//
+//	set-on-constant, unresolved-identifier, redeclaration.
 //
 // Walk strategy:
-//   1. Per scope, do a "collect" pass first that registers every
-//      declaration (fun / method / struct / const / var / param /
-//      import) in the scope. This lets forward references resolve —
-//      a function body can call functions defined later in the file.
-//   2. Then a "check" pass walks expressions, treating every
-//      identifier leaf as a reference and verifying it resolves.
+//  1. Per scope, do a "collect" pass first that registers every
+//     declaration (fun / method / struct / const / var / param /
+//     import) in the scope. This lets forward references resolve —
+//     a function body can call functions defined later in the file.
+//  2. Then a "check" pass walks expressions, treating every
+//     identifier leaf as a reference and verifying it resolves.
 //
 // `(=` `var`/`const`/`fun`/`method`/`struct`/`import`/`goimport` are
 // treated specially — their LHS or quoted-name positions are
@@ -53,10 +57,81 @@ type walker struct {
 	// least once during the check pass. Names with zero usages get
 	// an unused-import warning when the walk finishes.
 	usedImports map[string]bool
+
+	// inBranch is set while walking code that may or may not run (if
+	// arms, for bodies). Reassignments there can't retarget a
+	// binding's inferred shape — they invalidate it to Unknown so the
+	// member checks stay honest on both sides of the branch.
+	inBranch bool
+
+	// methodOwner is the struct name whose method body is being
+	// walked ("" outside methods). Lets `self` carry a privileged
+	// instance shape.
+	methodOwner string
+
+	// fileScope is the scope of the file being analyzed.
+	fileScope *Scope
+
+	// bodyScope is the innermost function/method body scope currently
+	// being walked (nil at the top level, meaning fileScope). Shape
+	// retargeting on reassignment (checkAssign) is sound only for a
+	// binding in this exact scope — the code that owns it runs linearly.
+	// A binding from an ENCLOSING function (captured by a nested closure)
+	// or from file/package level is reassigned at an unknowable moment, so
+	// its shape is invalidated instead.
+	bodyScope *Scope
+
+	// pkgExports / pkgStructs memoize per-package disk scans for the
+	// duration of one analysis pass. Without these, every pkg.Member
+	// dot re-reads the package directory. importResolutions memoizes
+	// the ancestor-walk stat probes of resolveImportPath the same way.
+	pkgExports        map[string]map[string]Definition
+	pkgStructs        map[string]map[string]*structInfo
+	importResolutions map[string]string
+
+	// Resolution hooks, all optional. Navigation (nav.go) runs the
+	// regular walk with these set and gets every resolved reference,
+	// member access, and declaration with the same scoping and shape
+	// inference the diagnostics use — one source of truth.
+	onLeafResolve   func(span span.Span, def Definition)
+	onExportResolve func(span span.Span, def Definition)
+	onMemberResolve func(span span.Span, si *structInfo, member string, kind DefKind)
+	onDefine        func(span span.Span, def Definition)
+
+	// onAnnotation, if set, is called once per annotated top-level form
+	// with the evaluated annotation results (one per `--@`, in source
+	// order). Lets navigation / hovers surface annotation metadata.
+	onAnnotation func(target *ast.PBranch, results []annot.Result)
 }
 
 func newWalker(file string) *walker {
 	return &walker{file: file, usedImports: map[string]bool{}}
+}
+
+// exportsFor is PackageExports with per-pass memoization.
+func (w *walker) exportsFor(path string) map[string]Definition {
+	if v, ok := w.pkgExports[path]; ok {
+		return v
+	}
+	if w.pkgExports == nil {
+		w.pkgExports = map[string]map[string]Definition{}
+	}
+	v := PackageExports(path)
+	w.pkgExports[path] = v
+	return v
+}
+
+// structsFor is PackageStructs with per-pass memoization.
+func (w *walker) structsFor(path string) map[string]*structInfo {
+	if v, ok := w.pkgStructs[path]; ok {
+		return v
+	}
+	if w.pkgStructs == nil {
+		w.pkgStructs = map[string]map[string]*structInfo{}
+	}
+	v := PackageStructs(path)
+	w.pkgStructs[path] = v
+	return v
 }
 
 func (w *walker) emit(d Diagnostic) {
@@ -70,12 +145,18 @@ func (w *walker) emit(d Diagnostic) {
 // walkFile lints `tree` against the given parent scope. The parent
 // is typically the package scope returned by PackageScope; for an
 // isolated file with no siblings, callers can pass newBuiltinScope().
-func (w *walker) walkFile(tree []core.PNode, parent *Scope) {
+func (w *walker) walkFile(tree []ast.PNode, parent *Scope) {
 	fileScope := newScope(parent)
+	w.fileScope = fileScope
 	w.collect(fileScope, tree)
+	// Record shapes for top-level var/const initializers before any
+	// checking, so function bodies walked earlier in the file see the
+	// shapes of bindings declared later.
+	w.assignDeclShapes(fileScope, tree)
 	for _, form := range tree {
 		w.checkExpr(fileScope, form, false /* not in body code */)
 	}
+	w.walkAnnotations(tree)
 	// Post-walk: every DefImport in the file scope that wasn't
 	// resolved at least once during checking gets flagged. Imports
 	// from sibling files (in the package scope) aren't considered —
@@ -97,6 +178,45 @@ func (w *walker) walkFile(tree []core.PNode, parent *Scope) {
 	}
 }
 
+// walkAnnotations evaluates the parse-time annotations attached to each
+// top-level form (`--@ (sig! ...)` and friends) through pkg/annot's
+// isolated, memoized evaluator, and surfaces any diagnostics the annotation
+// macros raise — an undefined macro, a bad argument, a macro-side error.
+// The process-wide evaluator (annot.Default) carries the macro library,
+// loaded once at startup; files without annotations cost nothing.
+func (w *walker) walkAnnotations(tree []ast.PNode) {
+	ensured := false
+	for _, form := range tree {
+		br, ok := form.(*ast.PBranch)
+		if !ok || len(br.Annotations) == 0 {
+			continue
+		}
+		// First annotation in the file: make sure the macro library is
+		// loaded, resolving std/annot relative to this file (so it works
+		// from any project layout, not just one guessed at startup).
+		if !ensured {
+			annot.EnsureDefault(resolveImportPath(w.file, "std/annot"))
+			ensured = true
+		}
+		results := annot.Default().EvaluateBranch(br)
+		for _, res := range results {
+			for _, d := range res.Diags {
+				dg := d.Diagnostic
+				// The annotation env has no File of its own; point a
+				// call-site diagnostic at the file being linted. An error
+				// raised inside a macro body keeps that macro's file.
+				if dg.File == "" {
+					dg.File = w.file
+				}
+				w.emit(dg)
+			}
+		}
+		if w.onAnnotation != nil {
+			w.onAnnotation(br, results)
+		}
+	}
+}
+
 // ----------------------------------------------------------------------
 // Collect pass — gather declarations into the given scope
 // ----------------------------------------------------------------------
@@ -104,31 +224,49 @@ func (w *walker) walkFile(tree []core.PNode, parent *Scope) {
 // collect registers every declaration found at the top level of `forms`
 // into `scope`. It does not descend into function bodies or other
 // forms — those open their own scope and run their own collect.
-func (w *walker) collect(scope *Scope, forms []core.PNode) {
+func (w *walker) collect(scope *Scope, forms []ast.PNode) {
 	for _, form := range forms {
 		w.collectOne(scope, form)
 	}
 }
 
-func (w *walker) collectOne(scope *Scope, form core.PNode) {
-	br, ok := asList(form)
+func (w *walker) collectOne(scope *Scope, form ast.PNode) {
+	d, ok := declOf(form)
 	if !ok {
+		// Non-declaration forms introduce no bindings — except `if`/`unless`,
+		// whose arms are bare expressions that run in THIS scope (no frame is
+		// pushed), so a var/const declared directly in an arm leaks to the
+		// enclosing scope and must be hoisted, just like `do`. Arms wrapped
+		// in `do` are hoisted by the do-case at check time (and declOf
+		// rejects them here), so we don't double-collect.
+		if br, isList := asList(form); isList && (headIdent(br) == "if" || headIdent(br) == "unless") {
+			f := parseIfForm(br, headIdent(br), headIdent(br) == "if")
+			for _, b := range f.Branches {
+				if b.Expr != nil {
+					w.collectOne(scope, b.Expr)
+				}
+			}
+			if f.Else != nil {
+				w.collectOne(scope, f.Else)
+			}
+		}
 		return
 	}
-	head := headIdent(br)
-	switch head {
+	switch d.Head {
 	case "fun":
-		// (fun 'name '(args) '(body)) — define name; 2-arg form has no
-		// name to hoist.
-		if len(br.Children) >= 3 {
-			if name, span, ok := quotedIdent(br.Children[1]); ok {
-				w.define(scope, name, DefFun, span)
-			}
+		// The 2-arg anonymous form has no name to hoist (d.Name == "").
+		if d.Name != "" {
+			w.define(scope, d.Name, DefFun, d.NameSpan)
+		}
+
+	case "macro":
+		// Registered under its bare name as a macro, so call sites can tell
+		// it must be invoked with `!` and a bare reference to it is rejected.
+		if d.Name != "" {
+			w.define(scope, d.Name, DefMacro, d.NameSpan)
 		}
 
 	case "method":
-		// (method Owner 'name '(args) '(body))
-		//
 		// A method is NOT a top-level binding. The runtime stores it in
 		// the owner struct's method table (builtins.method does
 		// `struct.Methods[name] = ...` and never calls ctx.Declare), and
@@ -143,48 +281,89 @@ func (w *walker) collectOne(scope *Scope, form core.PNode) {
 		// so nothing else trips. If the owner isn't a plain identifier we
 		// can't form a stable key, so we skip it rather than risk a false
 		// positive.
-		if len(br.Children) >= 4 {
-			if name, span, ok := quotedIdent(br.Children[2]); ok {
-				if recv, ok := br.Children[1].(*core.PLeaf); ok && looksLikeIdentifier(recv.Value) {
-					w.define(scope, recv.Value+"."+name, DefMethod, span)
+		if d.Owner != "" && d.Name != "" {
+			w.define(scope, d.Owner+"."+d.Name, DefMethod, d.NameSpan)
+			// Attach to the owner's member table. Lookup first: the
+			// struct may have been collected into an outer (package)
+			// scope by a sibling file, and splitting its table across
+			// scopes would lose members.
+			si, ok := scope.LookupStruct(d.Owner)
+			if !ok {
+				si = scope.structAt(d.Owner)
+			}
+			si.Methods[d.Name] = d.NameSpan
+			if si.MethodFiles == nil {
+				si.MethodFiles = map[string]string{}
+			}
+			si.MethodFiles[d.Name] = w.file
+		}
+
+	case "property":
+		// A struct-field property `(property Recv.Name …)` is a computed
+		// member — register it on the owner's table (like a field) so
+		// `inst.Name` resolves. A free-standing `(property Name …)` is a
+		// faux variable backed by getter/setter delegates — register it as
+		// DefVar so a reference reads (and highlights) as a plain variable.
+		switch {
+		case d.Owner != "" && d.Name != "":
+			si, ok := scope.LookupStruct(d.Owner)
+			if !ok {
+				si = scope.structAt(d.Owner)
+			}
+			si.Fields[d.Name] = d.NameSpan
+		case d.Name != "":
+			w.define(scope, d.Name, DefVar, d.NameSpan)
+		}
+
+	case "struct":
+		if d.Name != "" {
+			w.define(scope, d.Name, DefStruct, d.NameSpan)
+			// Record the field table. Adopt a placeholder created by an
+			// earlier method collection (possibly in the package scope)
+			// rather than shadowing it.
+			si, ok := scope.LookupStruct(d.Name)
+			if !ok {
+				si = scope.structAt(d.Name)
+			}
+			si.File = w.file
+			for _, f := range d.Fields {
+				si.Fields[f.Name] = f.Span
+				// Fields aren't scope bindings, but navigation needs a hit
+				// at the decl site so find-references works from the field
+				// name itself. The dotted name mirrors methods' "Owner.name"
+				// convention.
+				if w.onDefine != nil {
+					w.onDefine(f.Span, Definition{
+						Name: d.Name + "." + f.Name,
+						Kind: DefField,
+						Span: f.Span,
+						File: w.file,
+					})
 				}
 			}
 		}
 
-	case "struct":
-		// (struct 'name '(fields))
-		if len(br.Children) >= 2 {
-			if name, span, ok := quotedIdent(br.Children[1]); ok {
-				w.define(scope, name, DefStruct, span)
-			}
-		}
-
 	case "const":
-		// (const 'a 1 'b 2 ...) — pairs.
-		for i := 1; i+1 < len(br.Children); i += 2 {
-			if name, span, ok := quotedIdent(br.Children[i]); ok {
-				w.define(scope, name, DefConst, span)
-			}
+		for _, b := range d.Binds {
+			w.define(scope, b.Name, DefConst, b.Span)
 		}
 
 	case "var":
-		for i := 1; i+1 < len(br.Children); i += 2 {
-			if name, span, ok := quotedIdent(br.Children[i]); ok {
-				w.define(scope, name, DefVar, span)
-			}
+		for _, b := range d.Binds {
+			w.define(scope, b.Name, DefVar, b.Span)
 		}
 
 	case "import", "goimport":
-		w.collectImports(scope, br)
+		w.collectImports(scope, d.Branch)
 	}
 }
 
-// collectImports handles both single-string and aliased-tuple forms:
+// collectImports handles both single-string and aliased-pair forms:
 //
 //	(import "std/io")               — alias = basename of path
-//	(import ["std/io" 'myio])       — explicit alias
-//	(import "a" "b" ["c" 'cc])      — multiple
-func (w *walker) collectImports(scope *Scope, br *core.PBranch) {
+//	(import ("std/io" myio))        — explicit alias (a bare name)
+//	(import "a" "b" ("c" cc))       — multiple
+func (w *walker) collectImports(scope *Scope, br *ast.PBranch) {
 	// `goimport` aliases never have a Pho-side package directory to
 	// inspect, so we leave their Path empty and the dot-member check
 	// silently skips them.
@@ -199,43 +378,60 @@ func (w *walker) collectImports(scope *Scope, br *core.PBranch) {
 			}
 			continue
 		}
-		// Form 2: array of [string, 'alias].
-		if abr, ok := arg.(*core.PBranch); ok && abr.Open == "[" && len(abr.Children) == 2 {
+		// Form 2: aliased pair (string alias) — alias is a bare name.
+		if abr, ok := arg.(*ast.PBranch); ok && abr.Open == "(" && len(abr.Children) == 2 {
 			if path, ok := stringLiteral(abr.Children[0]); ok {
-				if alias, span, ok := quotedIdent(abr.Children[1]); ok {
+				if alias, span, ok := declIdent(abr.Children[1]); ok {
 					w.defineImport(scope, alias, span, path, isGoImport)
 					continue
 				}
 			}
 		}
 		// Anything else is malformed — `(import foo)` (bare ident),
-		// `(import 5)` (number), `(import [x y])` (no string path),
+		// `(import 5)` (number), `(import (x y))` (no string path),
 		// etc. Runtime would silently mis-resolve; flag it loudly.
 		w.emit(Diagnostic{
 			File:     w.file,
 			Span:     arg.GetSpan(),
 			Severity: SeverityError,
 			Code:     "non-string-import-path",
-			Message:  "import argument must be a string path (\"std/io\") or an aliased pair ([\"std/io\" 'name])",
+			Message:  "import argument must be a string path (\"std/io\") or an aliased pair (\"std/io\" name)",
 		})
 	}
 }
 
 // defineImport runs the regular `define` path so redeclaration
-// diagnostics still fire, then stashes the import path on the
-// resulting entry so the dot-member check can find the package's
-// directory. `goimport` paths aren't on the Pho filesystem, so we
-// leave Path empty for them — the member checker treats an empty
-// path as "external, can't validate" and stays silent.
-func (w *walker) defineImport(scope *Scope, alias string, span core.Span, path string, isGoImport bool) {
+// diagnostics still fire, then stashes the RESOLVED import path on
+// the resulting entry so the dot-member check (and everything else
+// that consumes Definition.Path) can find the package's directory
+// regardless of the process cwd. `goimport` paths aren't on the Pho
+// filesystem, so we leave Path empty for them — the member checker
+// treats an empty path as "external, can't validate" and stays
+// silent.
+func (w *walker) defineImport(scope *Scope, alias string, span span.Span, path string, isGoImport bool) {
 	w.define(scope, alias, DefImport, span)
 	if isGoImport {
 		return
 	}
 	if d, ok := scope.Defs[alias]; ok {
-		d.Path = path
+		d.Path = w.resolveImport(path)
 		scope.Defs[alias] = d
 	}
+}
+
+// resolveImport is resolveImportPath relative to the file being
+// walked, memoized for the duration of the pass.
+func (w *walker) resolveImport(path string) string {
+	key := w.file + "\x00" + path
+	if v, ok := w.importResolutions[key]; ok {
+		return v
+	}
+	if w.importResolutions == nil {
+		w.importResolutions = map[string]string{}
+	}
+	v := resolveImportPath(w.file, path)
+	w.importResolutions[key] = v
+	return v
 }
 
 func pathBasename(path string) string {
@@ -246,8 +442,9 @@ func pathBasename(path string) string {
 }
 
 // define mirrors the runtime's Declare: var / const / fun / struct /
-// import can't shadow ANY visible binding (current scope, enclosing
-// scopes, or builtins). Parameters are special — they're installed
+// import may shadow a binding from an enclosing scope, but cannot
+// redeclare a name in the same scope or shadow a builtin. Parameters
+// are special — they're installed
 // directly into the body frame at call time without going through
 // Declare, so they're allowed to shadow. Methods are special too: the
 // runtime never Declares them (they live on the owner struct), so
@@ -258,7 +455,7 @@ func pathBasename(path string) string {
 //
 // Always installs the new binding regardless, so subsequent lookups in
 // this scope resolve to the just-declared name.
-func (w *walker) define(scope *Scope, name string, kind DefKind, span core.Span) {
+func (w *walker) define(scope *Scope, name string, kind DefKind, span span.Span) {
 	var prior Definition
 	var foundIn *Scope
 	var existed bool
@@ -271,7 +468,11 @@ func (w *walker) define(scope *Scope, name string, kind DefKind, span core.Span)
 		prior, foundIn, existed = scope.Lookup(name)
 	}
 
-	scope.Defs[name] = Definition{Name: name, Kind: kind, Span: span}
+	def := Definition{Name: name, Kind: kind, Span: span, File: w.file}
+	scope.Defs[name] = def
+	if w.onDefine != nil {
+		w.onDefine(span, def)
+	}
 
 	if !existed {
 		return
@@ -293,13 +494,15 @@ func (w *walker) define(scope *Scope, name string, kind DefKind, span core.Span)
 		// diagnostics on every legitimate cross-file reference.
 		return
 	case foundIn != scope:
-		w.emit(Diagnostic{
-			File:     w.file,
-			Span:     span,
-			Severity: SeverityError,
-			Code:     "redeclaration",
-			Message:  fmt.Sprintf("'%s' shadows a %s in an enclosing scope", name, prior.Kind),
-		})
+		// The prior binding is in an enclosing scope (an outer block, the
+		// file level, or a closure capture). A var/const/fun here is a
+		// fresh binding that shadows it — allowed, matching Declare.
+		return
+	case kind == DefVar || kind == DefConst:
+		// Same-scope rebind: var/const may re-bind a name in place (a fresh
+		// binding, reducing var + '=' mutation), matching the runtime's
+		// Rebind. fun/struct/import fall through to the redeclaration error.
+		return
 	default:
 		w.emit(Diagnostic{
 			File:     w.file,
@@ -311,6 +514,26 @@ func (w *walker) define(scope *Scope, name string, kind DefKind, span core.Span)
 	}
 }
 
+// checkUnquotedName flags a var/const/= name that still carries a leftover
+// quote. Post-cutover a binding name is a bare identifier — (var x 5) — so a
+// `'x` would declare a binding named literally "x" (quotes and all), which is
+// never intended. A bare name is correct and a dot/index = target is left to
+// the shape checker. label is the prefix, e.g. "var name" or "assignment
+// target".
+func (w *walker) checkUnquotedName(target ast.PNode, label string) {
+	sig, ok := target.(*ast.PSigil)
+	if !ok || sig.Sigil != "'" {
+		return // bare name (correct), dot target, or other — not flagged here
+	}
+	w.emit(Diagnostic{
+		File:     w.file,
+		Span:     sig.Span,
+		Severity: SeverityError,
+		Code:     "quoted-name",
+		Message:  label + " is quoted — names are bare now; remove the leading '",
+	})
+}
+
 // ----------------------------------------------------------------------
 // Check pass — walk expressions, verify references, flag set-on-const
 // ----------------------------------------------------------------------
@@ -319,12 +542,12 @@ func (w *walker) define(scope *Scope, name string, kind DefKind, span core.Span)
 // position that the runtime evaluates (function body, top-level form);
 // it's false inside data positions (quoted forms other than fun/method
 // bodies, macro arguments).
-func (w *walker) checkExpr(scope *Scope, n core.PNode, inCode bool) {
+func (w *walker) checkExpr(scope *Scope, n ast.PNode, inCode bool) {
 	if n == nil {
 		return
 	}
 	switch node := n.(type) {
-	case *core.PLeaf:
+	case *ast.PLeaf:
 		// String literals normally don't get reference-checked, but
 		// `"%name"` interpolation embeds real expressions whose
 		// identifiers we want to resolve. Walk into each interp
@@ -364,35 +587,62 @@ func (w *walker) checkExpr(scope *Scope, n core.PNode, inCode bool) {
 			})
 			return
 		}
+		if w.onLeafResolve != nil {
+			w.onLeafResolve(node.Span, def)
+		}
 		if def.Kind == DefImport {
 			w.usedImports[node.Value] = true
 		}
 
-	case *core.PSigil:
+	case *ast.PSigil:
 		// `'expr` quotes its content — data, not a reference.
-		// `&expr` is an inline block that runs in the caller's scope —
-		// recurse normally.
 		if node.Sigil == "'" {
 			return
 		}
-		w.checkExpr(scope, node.Inner, inCode)
+		// `&expr` is a one-argument block whose implicit parameter is `it`
+		// (see the `block` builtin). Resolve its body in a child scope that
+		// binds `it`, so `&(+ it 1)` / `&do …` don't flag `it` as unresolved.
+		// Inserted directly (not via define) so no phantom decl is reported to
+		// onDefine, and a fresh child scope means nested `&` blocks each get
+		// their own `it`.
+		blockScope := newScope(scope)
+		blockScope.Defs["it"] = Definition{Name: "it", Kind: DefParam, Span: node.Span, File: w.file}
+		w.checkExpr(blockScope, node.Inner, inCode)
 
-	case *core.PDot:
-		// LHS is a reference; RHS is a member name (looked up at
-		// runtime against whatever LHS evaluates to). We always
-		// check the LHS, and additionally — when the LHS is a bare
-		// alias resolving to a Pho-side import — verify the RHS is
-		// a known export of that package.
+	case *ast.PDot:
+		// LHS is a reference; a bare RHS is a member name (looked up
+		// at runtime against whatever LHS evaluates to), while a
+		// bracket RHS (coll.[expr]) carries a real index/key
+		// expression. We always check the LHS; when the LHS is an
+		// import alias we verify the RHS against the package's
+		// exports, and when the LHS's shape is known we mirror the
+		// runtime dot dispatch (member.go). Bracket contents are
+		// ordinary expressions, so we walk them for scope resolution.
 		w.checkExpr(scope, node.LHS, inCode)
 		w.checkPackageMember(scope, node)
+		w.checkMemberAccess(scope, node)
+		if br, ok := bracketRHS(node.RHS); ok {
+			w.checkExpr(scope, br, inCode)
+		}
 
-	case *core.PMacroCall:
-		// (name! args) — runtime quotes args, so they're data. The
-		// macro name itself is a real reference; arg subtrees aren't
-		// reference-checked.
+	case *ast.PMacroCall:
+		// (name! args) — runtime quotes args, so they're data. The macro
+		// name itself is a real reference, and the `!` means it must be a
+		// macro: calling a non-macro (a function, etc.) with `!` is an error.
 		w.checkExpr(scope, node.Head, true)
+		if leaf, ok := node.Head.(*ast.PLeaf); ok && looksLikeIdentifier(leaf.Value) {
+			if def, _, found := scope.Lookup(leaf.Value); found && def.Kind != DefMacro {
+				w.emit(Diagnostic{
+					File:     w.file,
+					Span:     leaf.Span,
+					Severity: SeverityError,
+					Code:     "not-a-macro",
+					Message:  fmt.Sprintf("'%s' is a %s, not a macro — call it without the '!'", leaf.Value, def.Kind),
+				})
+			}
+		}
 
-	case *core.PBranch:
+	case *ast.PBranch:
 		w.checkBranch(scope, node)
 	}
 }
@@ -404,8 +654,8 @@ func (w *walker) checkExpr(scope *Scope, n core.PNode, inCode bool) {
 // no Path), when the RHS isn't a static identifier, or when the
 // imported package's directory can't be read — in any of those cases
 // we can't make a confident static call so we defer to the runtime.
-func (w *walker) checkPackageMember(scope *Scope, dot *core.PDot) {
-	leaf, ok := dot.LHS.(*core.PLeaf)
+func (w *walker) checkPackageMember(scope *Scope, dot *ast.PDot) {
+	leaf, ok := dot.LHS.(*ast.PLeaf)
 	if !ok {
 		return
 	}
@@ -413,19 +663,22 @@ func (w *walker) checkPackageMember(scope *Scope, dot *core.PDot) {
 	if !found || def.Kind != DefImport || def.Path == "" {
 		return
 	}
-	rhs, ok := dot.RHS.(*core.PLeaf)
+	rhs, ok := dot.RHS.(*ast.PLeaf)
 	if !ok {
 		return
 	}
 
-	exports := PackageExports(def.Path)
+	exports := w.exportsFor(def.Path)
 	if exports == nil {
 		// Can't read the package — stay quiet. Surfacing "package
 		// not found" on every dot access would drown out the real
 		// signal when the LSP's cwd doesn't include the project root.
 		return
 	}
-	if _, ok := exports[rhs.Value]; ok {
+	if export, ok := exports[rhs.Value]; ok {
+		if w.onExportResolve != nil {
+			w.onExportResolve(rhs.Span, export)
+		}
 		return
 	}
 	w.emit(Diagnostic{
@@ -437,10 +690,24 @@ func (w *walker) checkPackageMember(scope *Scope, dot *core.PDot) {
 	})
 }
 
+// nonHeadDoIndex returns the index of the first bare `do` element that is
+// not the form's head (position >= 1), or -1. It marks a `do` notation
+// block — `(identity do …)` — whose tail sequences in the current scope.
+// Head-position `do` keeps its own switch case (and is now a runtime
+// error, but the linter stays lenient).
+func nonHeadDoIndex(br *ast.PBranch) int {
+	for i := 1; i < len(br.Children); i++ {
+		if lf, ok := br.Children[i].(*ast.PLeaf); ok && lf.Value == "do" {
+			return i
+		}
+	}
+	return -1
+}
+
 // checkBranch dispatches based on the head of a list. Most special
 // forms (fun, method, var, const, =, etc.) need bespoke handling so
 // we don't flag declaration-position names as unresolved references.
-func (w *walker) checkBranch(scope *Scope, br *core.PBranch) {
+func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 	if br.Open != "(" {
 		// Array or dict literal — every child is an expression.
 		for _, c := range br.Children {
@@ -456,30 +723,88 @@ func (w *walker) checkBranch(scope *Scope, br *core.PBranch) {
 	w.checkSpecialFormShape(br)
 
 	head := headIdent(br)
+
+	// `do` notation: a bare `do` AFTER the head turns every following
+	// sibling into a sequencing block that runs in THIS scope (do
+	// introduces no frame). Operands before `do` — typically the
+	// `identity` wrapper — are ordinary references; the tail is collected
+	// first so forward references resolve, mirroring the head-`do` case.
+	if k := nonHeadDoIndex(br); k >= 0 {
+		for _, c := range br.Children[:k] {
+			w.checkExpr(scope, c, true)
+		}
+		body := br.Children[k+1:]
+		w.collect(scope, body)
+		w.assignDeclShapes(scope, body)
+		for _, c := range body {
+			w.checkExpr(scope, c, true)
+		}
+		return
+	}
+
 	switch head {
 	case "fun":
 		w.checkFun(scope, br)
+	case "macro":
+		// A macro body is reference-checked exactly like a fun body —
+		// declOf hands back its param list and body the same way.
+		w.checkFun(scope, br)
 	case "method":
 		w.checkMethod(scope, br)
+	case "property":
+		w.checkProperty(scope, br)
 	case "struct":
-		// (struct 'name '(fields)) — name + fields are declarations,
+		// (struct Name f0 f1 …) — name + fields are declarations,
 		// nothing to reference-check.
 		return
 	case "var", "const":
 		// (var 'a 1 'b 2 ...) — names are declarations; values are
 		// expressions that may reference other names.
 		for i := 1; i+1 < len(br.Children); i += 2 {
+			w.checkUnquotedName(br.Children[i], headIdent(br)+" name")
 			w.checkExpr(scope, br.Children[i+1], true)
 		}
-	case "for":
-		w.checkFor(scope, br)
+		// Re-record shapes at the decl's lexical position: the hoisting
+		// pre-pass ran before any reassignments, so this refresh keeps
+		// shape tracking lexically accurate.
+		w.assignDeclShapes(scope, []ast.PNode{br})
+	case "if", "unless":
+		// (if cond then expr [elif cond then expr]* [else expr]) and the
+		// elif-less `unless`. The first condition always evaluates; every later
+		// condition and every arm is conditional, so a shape reassignment there
+		// invalidates rather than retargets (see checkAssign). The
+		// then/elif/else keyword markers are consumed by parseIfForm, never
+		// walked as references.
+		f := parseIfForm(br, head, head == "if")
+		if len(f.Branches) > 0 && f.Branches[0].Cond != nil {
+			w.checkExpr(scope, f.Branches[0].Cond, true)
+		}
+		prevBranch := w.inBranch
+		w.inBranch = true
+		for i, b := range f.Branches {
+			if i > 0 && b.Cond != nil {
+				w.checkExpr(scope, b.Cond, true)
+			}
+			if b.Expr != nil {
+				w.checkExpr(scope, b.Expr, true)
+			}
+		}
+		if f.Else != nil {
+			w.checkExpr(scope, f.Else, true)
+		}
+		w.inBranch = prevBranch
+	case "foreach":
+		w.checkForeach(scope, br)
+	case "while", "until":
+		w.checkCondLoop(scope, br)
 	case "do":
 		// `do` doesn't push a new scope — vars/consts inside it land in
 		// the enclosing scope. Run a collect pass over its children
 		// first so subsequent (and forward-referenced) statements can
 		// resolve them, matching how walkFunctionBody hoists body-level
-		// declarations.
+		// declarations. Shapes are recorded in the same pre-pass order.
 		w.collect(scope, br.Children[1:])
+		w.assignDeclShapes(scope, br.Children[1:])
 		for _, c := range br.Children[1:] {
 			w.checkExpr(scope, c, true)
 		}
@@ -524,72 +849,169 @@ func (w *walker) checkBranch(scope *Scope, br *core.PBranch) {
 			})
 		}
 	default:
-		// Generic call: every child is an expression.
+		// Generic call: every child is an expression. But if the head names
+		// a macro, a bare call is wrong — macros are invoked with the `!`
+		// sugar (which the runtime lowers through Macrocall).
+		if len(br.Children) > 0 {
+			if leaf, ok := br.Children[0].(*ast.PLeaf); ok && looksLikeIdentifier(leaf.Value) {
+				if def, _, found := scope.Lookup(leaf.Value); found && def.Kind == DefMacro {
+					w.emit(Diagnostic{
+						File:     w.file,
+						Span:     leaf.Span,
+						Severity: SeverityError,
+						Code:     "macro-needs-bang",
+						Message:  fmt.Sprintf("'%s' is a macro — call it with the '!' syntax: (%s! ...)", leaf.Value, leaf.Value),
+					})
+				}
+			}
+		}
+		// The retired `(T { … })` construction form — a struct constructor
+		// applied to a single brace argument — is no longer how a struct is
+		// built; point at the `T.{ … }` replacement.
+		if name, arg, ok := w.retiredConstruction(scope, br); ok {
+			w.emit(Diagnostic{
+				File:     w.file,
+				Span:     arg.GetSpan(),
+				Severity: SeverityError,
+				Code:     "retired-construction",
+				Message:  fmt.Sprintf("the (%s { … }) construction form was removed; write %s.{ field value … }", name, name),
+			})
+		}
 		for _, c := range br.Children {
 			w.checkExpr(scope, c, true)
 		}
 	}
 }
 
-// checkFor walks both `for` shapes:
-//
-//	(for &cond &body)             -- while-style; both children are
-//	                                 plain expressions, no new bindings
-//	(for 'name collection &body)  -- iterator-style; name is a per-
-//	                                 iteration const visible only in
-//	                                 the body
-//
-// For the iterator form we open a body scope and write the loop
-// variable directly (bypassing w.define) so the natural shadowing of
-// an outer `name` doesn't fire a redeclaration diagnostic — `for`
-// loop variables are conventionally allowed to shadow.
-func (w *walker) checkFor(scope *Scope, br *core.PBranch) {
-	// Anything lexically inside a `for` — body, condition, even the
-	// collection expression — can break/continue. The runtime would
-	// catch any of them: the for's recover wraps every Evaluate of
-	// its child forms.
+// retiredConstruction matches the removed `(T { … })` struct-construction
+// form: a call whose head names a struct constructor (a local `(struct …)`
+// or an imported `pkg.Struct`) and whose only argument is a brace group. It
+// returns the constructor's display name and the offending brace.
+func (w *walker) retiredConstruction(scope *Scope, br *ast.PBranch) (string, *ast.PBranch, bool) {
+	if br.Open != "(" || len(br.Children) != 2 {
+		return "", nil, false
+	}
+	arg, ok := br.Children[1].(*ast.PBranch)
+	if !ok || arg.Open != "{" {
+		return "", nil, false
+	}
+	switch h := br.Children[0].(type) {
+	case *ast.PLeaf:
+		if !looksLikeIdentifier(h.Value) {
+			return "", nil, false
+		}
+		if def, _, found := scope.Lookup(h.Value); found && def.Kind == DefStruct {
+			return h.Value, arg, true
+		}
+	case *ast.PDot:
+		alias, aok := h.LHS.(*ast.PLeaf)
+		member, mok := h.RHS.(*ast.PLeaf)
+		if !aok || !mok {
+			return "", nil, false
+		}
+		def, _, found := scope.Lookup(alias.Value)
+		if !found || def.Kind != DefImport || def.Path == "" {
+			return "", nil, false
+		}
+		if _, ok := w.structsFor(def.Path)[member.Value]; ok {
+			return alias.Value + "." + member.Value, arg, true
+		}
+	}
+	return "", nil, false
+}
+
+// checkForeach walks `(foreach name in collection body)`. The collection is
+// a reference in the caller's scope; the body runs in a child scope with the
+// loop variable bound as a per-iteration constant. The `in` keyword marker
+// (child 2) is structural and is deliberately not walked as a reference.
+func (w *walker) checkForeach(scope *Scope, br *ast.PBranch) {
 	prevLoop := w.inLoop
 	w.inLoop = true
 	defer func() { w.inLoop = prevLoop }()
 
-	switch len(br.Children) {
-	case 3:
-		w.checkExpr(scope, br.Children[1], true)
-		w.checkExpr(scope, br.Children[2], true)
-	case 4:
-		// Collection is evaluated in the caller's scope.
-		w.checkExpr(scope, br.Children[2], true)
+	// Loop bodies run zero or many times — reassignments inside can't
+	// retarget shapes (see checkAssign).
+	prevBranch := w.inBranch
+	w.inBranch = true
+	defer func() { w.inBranch = prevBranch }()
 
-		bodyScope := newScope(scope)
-		if name, span, ok := quotedIdent(br.Children[1]); ok {
-			bodyScope.Defs[name] = Definition{Name: name, Kind: DefConst, Span: span}
-		}
-		w.checkExpr(bodyScope, br.Children[3], true)
+	if len(br.Children) != 5 {
+		return // arity / keyword shape reported by the shape checker
 	}
+	// Collection (child 3) is evaluated in the caller's scope.
+	w.checkExpr(scope, br.Children[3], true)
+
+	bodyScope := newScope(scope)
+	if name, span, ok := declIdent(br.Children[1]); ok {
+		def := Definition{Name: name, Kind: DefConst, Span: span, File: w.file}
+		bodyScope.Defs[name] = def
+		if w.onDefine != nil {
+			w.onDefine(span, def)
+		}
+	}
+	w.checkExpr(bodyScope, br.Children[4], true)
+}
+
+// checkCondLoop walks `(while cond then body)` / `(until cond then body)`.
+// Both the condition and the body can break/continue. The `then` keyword
+// marker (child 2) is structural and is not walked as a reference.
+func (w *walker) checkCondLoop(scope *Scope, br *ast.PBranch) {
+	prevLoop := w.inLoop
+	w.inLoop = true
+	defer func() { w.inLoop = prevLoop }()
+
+	prevBranch := w.inBranch
+	w.inBranch = true
+	defer func() { w.inBranch = prevBranch }()
+
+	if len(br.Children) != 4 {
+		return
+	}
+	w.checkExpr(scope, br.Children[1], true) // condition
+	w.checkExpr(scope, br.Children[3], true) // body
 }
 
 // checkFun walks (fun 'name '(args) '(body)) or (fun '(args) '(body)).
-func (w *walker) checkFun(scope *Scope, br *core.PBranch) {
-	var argList, body core.PNode
-	switch len(br.Children) {
-	case 3:
-		argList, body = br.Children[1], br.Children[2]
-	case 4:
-		argList, body = br.Children[2], br.Children[3]
-	default:
+func (w *walker) checkFun(scope *Scope, br *ast.PBranch) {
+	d, _ := declOf(br)
+	if d.ArgList == nil || d.Body == nil {
 		return
 	}
-	w.walkFunctionBody(scope, argList, body, false /* not a method */)
+	w.walkFunctionBody(scope, d.ArgList, d.Body, "" /* not a method */)
+}
+
+// checkProperty walks (property <Receiver.>Name get getter [set setter]). For
+// a struct-field property the receiver (the dot's LHS) is a reference; the
+// field name (the dot's RHS) and a free-standing bare Name are declarations,
+// not references. `get`/`set` are positional keywords. The getter (child 3)
+// and setter (child 5) are anonymous fun/method forms walked normally.
+func (w *walker) checkProperty(scope *Scope, br *ast.PBranch) {
+	if len(br.Children) >= 2 {
+		if dot, ok := br.Children[1].(*ast.PDot); ok {
+			w.checkExpr(scope, dot.LHS, true)
+		}
+	}
+	for i := 3; i < len(br.Children); i += 2 {
+		w.checkExpr(scope, br.Children[i], true)
+	}
 }
 
 // checkMethod walks (method Owner 'name '(args) '(body)).
-func (w *walker) checkMethod(scope *Scope, br *core.PBranch) {
-	if len(br.Children) < 5 {
-		return
+func (w *walker) checkMethod(scope *Scope, br *ast.PBranch) {
+	d, _ := declOf(br)
+	if d.ArgList == nil || d.Body == nil {
+		return // too short to be a complete method
 	}
-	// Owner is a reference; check it.
-	w.checkExpr(scope, br.Children[1], true)
-	w.walkFunctionBody(scope, br.Children[3], br.Children[4], true /* method */)
+	// The receiver references the owning struct — check it resolves. For a
+	// named method it's the dot's LHS (the name, the dot's RHS, is being
+	// DECLARED — not a member reference); for an anonymous method the bare
+	// first child IS the receiver.
+	if dot, ok := br.Children[1].(*ast.PDot); ok {
+		w.checkExpr(scope, dot.LHS, true)
+	} else if len(br.Children) >= 2 {
+		w.checkExpr(scope, br.Children[1], true)
+	}
+	w.walkFunctionBody(scope, d.ArgList, d.Body, d.Owner)
 }
 
 // walkFunctionBody opens a body scope, defines the parameters in it,
@@ -599,18 +1021,22 @@ func (w *walker) checkMethod(scope *Scope, br *core.PBranch) {
 // first parameter is the receiver (conventionally `self`) — the
 // runtime's BindMethod binds it from the instance stack at call time,
 // but it still appears in the source param list so we define it the
-// normal way.
+// normal way, then stamp it with a privileged instance shape of the
+// owning struct so member checks know what `self.x` reaches.
 //
-// isMethod toggles the `inMethod` flag for the duration of the body
-// walk so the leaf check knows whether `self` is allowed here. The
-// flag stays sticky across nested funs (Pho captures via closure,
-// so a fun defined inside a method can still see the enclosing
-// `self`); it's only reset when we leave the outer method body.
-func (w *walker) walkFunctionBody(parent *Scope, argList, body core.PNode, isMethod bool) {
-	if isMethod {
+// owner is the method's struct name, or "" for a plain fun. It
+// toggles the `inMethod` flag for the duration of the body walk so
+// the leaf check knows whether `self` is allowed here. The flag stays
+// sticky across nested funs (Pho captures via closure, so a fun
+// defined inside a method can still see the enclosing `self`); it's
+// only reset when we leave the outer method body.
+func (w *walker) walkFunctionBody(parent *Scope, argList, body ast.PNode, owner string) {
+	if owner != "" {
 		prev := w.inMethod
+		prevOwner := w.methodOwner
 		w.inMethod = true
-		defer func() { w.inMethod = prev }()
+		w.methodOwner = owner
+		defer func() { w.inMethod = prev; w.methodOwner = prevOwner }()
 	}
 
 	prevFun := w.inFunction
@@ -623,39 +1049,68 @@ func (w *walker) walkFunctionBody(parent *Scope, argList, body core.PNode, isMet
 	w.inLoop = false
 	defer func() { w.inLoop = prevLoop }()
 
+	// A function body runs straight through when called, so its OWN
+	// locals can be shape-tracked linearly; the cross-frame rule in
+	// checkAssign separately protects outer bindings.
+	prevBranch := w.inBranch
+	w.inBranch = false
+	defer func() { w.inBranch = prevBranch }()
+
 	bodyScope := newScope(parent)
 
-	if items, ok := quotedList(argList); ok {
+	// This body's own scope is where reassignment may soundly retarget a
+	// shape (see checkAssign). Restore on exit so a nested fun/method
+	// hands control back to its enclosing body's scope.
+	prevBody := w.bodyScope
+	w.bodyScope = bodyScope
+	defer func() { w.bodyScope = prevBody }()
+
+	// unquoteForm bridges the de-sigiling migration: an old-style `'(args)`
+	// list is unwrapped so its params are still defined here (the form itself
+	// is separately flagged with bad-form-shape). Without this, params of an
+	// un-migrated fun resolve to nothing and every body reference to them
+	// errors as unresolved.
+	if items, ok := declList(unquoteForm(argList)); ok {
 		for _, item := range items {
 			w.collectParam(bodyScope, item)
 		}
 	}
 
-	// Body is `'(...)` — at runtime BindFun calls Evaluate on this
-	// inner expression as a single form. Mirror that here so special
-	// forms (do / if / for / =) get their dispatch in checkBranch
-	// instead of being unrolled into independent leaves. The "do"
-	// case in checkBranch handles its own scope hoisting, so
-	// multi-statement bodies wrapped in `do` keep working.
-	if sig, ok := body.(*core.PSigil); ok && sig.Sigil == "'" {
-		w.checkExpr(bodyScope, sig.Inner, true)
+	if owner != "" {
+		// The receiver param (conventionally the first, named `self`)
+		// is a privileged instance of the owner struct.
+		if d, ok := bodyScope.Defs["self"]; ok {
+			d.Shape = Shape{Kind: ShapeInstance, Owner: owner, Privileged: true}
+			bodyScope.Defs["self"] = d
+		}
 	}
+
+	// The body is a single expression — at runtime BindFun evaluates it as one
+	// form. During the de-sigiling migration it may still be written in the
+	// legacy quoted style `'(...)`; unwrap that (the quote is syntax, not data)
+	// so the body's references are resolved rather than skipped — otherwise an
+	// imported alias used only inside an old-style body is falsely flagged
+	// unused. Walk it directly so special forms (do / if / for / =) get their
+	// dispatch in checkBranch. A `(do …)` / `(identity do …)` body hoists its
+	// own statement scope in the "do" case.
+	w.checkExpr(bodyScope, unquoteForm(body), true)
 }
 
 // collectParam handles a single entry in a parameter list.
 //
 //	identifier            — bound as a regular parameter
 //	(spread name)         — name bound, captures rest-args
-func (w *walker) collectParam(scope *Scope, item core.PNode) {
-	if leaf, ok := item.(*core.PLeaf); ok {
+//	(optional name)       — name bound, omittable (defaults to Nil)
+func (w *walker) collectParam(scope *Scope, item ast.PNode) {
+	if leaf, ok := item.(*ast.PLeaf); ok {
 		if looksLikeIdentifier(leaf.Value) {
 			w.define(scope, leaf.Value, DefParam, leaf.Span)
 		}
 		return
 	}
-	if br, ok := item.(*core.PBranch); ok && br.Open == "(" && len(br.Children) == 2 {
-		if h, ok := br.Children[0].(*core.PLeaf); ok && h.Value == "spread" {
-			if name, ok := br.Children[1].(*core.PLeaf); ok && looksLikeIdentifier(name.Value) {
+	if br, ok := item.(*ast.PBranch); ok && br.Open == "(" && len(br.Children) == 2 {
+		if h, ok := br.Children[0].(*ast.PLeaf); ok && (h.Value == "spread" || h.Value == "optional") {
+			if name, ok := br.Children[1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) {
 				w.define(scope, name.Value, DefParam, name.Span)
 			}
 		}
@@ -665,15 +1120,42 @@ func (w *walker) collectParam(scope *Scope, item core.PNode) {
 // checkAssign handles `(= LHS RHS)`. The LHS may be a quoted name
 // (variable assignment) or a dot chain (struct-field write); only the
 // quoted-name case can fire set-on-constant.
-func (w *walker) checkAssign(scope *Scope, br *core.PBranch) {
+func (w *walker) checkAssign(scope *Scope, br *ast.PBranch) {
 	if len(br.Children) != 3 {
 		return
 	}
 	lhs, rhs := br.Children[1], br.Children[2]
 
-	// Quoted-name LHS: `(= 'PI 4)`.
-	if name, span, ok := quotedIdent(lhs); ok {
-		if def, _, found := scope.Lookup(name); found {
+	// A leftover quoted target ('PI) is flagged; a bare name is correct.
+	w.checkUnquotedName(lhs, "assignment target")
+
+	// Bare-name LHS: `(= PI 4)`.
+	if name, span, ok := declIdent(lhs); ok {
+		if def, defScope, found := scope.Lookup(name); found {
+			if w.onLeafResolve != nil {
+				w.onLeafResolve(span, def)
+			}
+			if def.Kind == DefVar {
+				// Track the binding's new shape. Retargeting is only sound
+				// when the assignment definitely runs exactly once before
+				// later reads: not inside an if-arm or loop (w.inBranch),
+				// and in the SAME linear scope that owns the binding — the
+				// current body's own scope (or the file scope at top
+				// level). A binding from an enclosing function (captured by
+				// this closure) or from file/package level is reassigned at
+				// an unknowable moment, so its shape is invalidated.
+				ownScope := w.bodyScope
+				if ownScope == nil {
+					ownScope = w.fileScope
+				}
+				updated := def
+				if w.inBranch || defScope != ownScope {
+					updated.Shape = Shape{}
+				} else {
+					updated.Shape = w.inferShape(scope, rhs)
+				}
+				defScope.Defs[name] = updated
+			}
 			if def.Kind == DefConst {
 				w.emit(Diagnostic{
 					File:     w.file,
@@ -715,8 +1197,44 @@ func (w *walker) checkAssign(scope *Scope, br *core.PBranch) {
 	}
 
 	// Dot-chain LHS: `(= obj.field val)`. Check the receiver as a
-	// reference; the field name is opaque.
-	w.checkExpr(scope, lhs, true)
+	// reference, then validate the written member against the
+	// receiver's shape — writes have their own rules (only fields are
+	// assignable on instances; fresh static keys on dicts are adds,
+	// not mistakes), so this must NOT go through the read-path
+	// checkExpr on the full dot chain.
+	if dot, ok := lhs.(*ast.PDot); ok {
+		w.checkExpr(scope, dot.LHS, true)
+		// Writing to a member of an imported module is forbidden — a
+		// module's bindings (var/const exports included) are read-only from
+		// outside it. Still validate the member exists, then flag the write.
+		if leaf, ok := dot.LHS.(*ast.PLeaf); ok {
+			if def, _, found := scope.Lookup(leaf.Value); found && def.Kind == DefImport {
+				w.checkPackageMember(scope, dot)
+				member := ""
+				if rhs, ok := dot.RHS.(*ast.PLeaf); ok {
+					member = rhs.Value
+				}
+				w.emit(Diagnostic{
+					File:     w.file,
+					Span:     dot.RHS.GetSpan(),
+					Severity: SeverityError,
+					Code:     "readonly-module-member",
+					Message:  fmt.Sprintf("cannot assign to '%s': bindings of imported module '%s' are read-only from outside it", member, leaf.Value),
+				})
+				w.checkExpr(scope, rhs, true)
+				return
+			}
+		}
+		w.checkPackageMember(scope, dot)
+		w.checkMemberWrite(scope, dot)
+		// A bracket index target (= coll.[expr] v) carries a real
+		// expression; walk it so the index/key resolves and is checked.
+		if br, ok := bracketRHS(dot.RHS); ok {
+			w.checkExpr(scope, br, true)
+		}
+	} else {
+		w.checkExpr(scope, lhs, true)
+	}
 	w.checkExpr(scope, rhs, true)
 }
 
@@ -726,7 +1244,7 @@ func (w *walker) checkAssign(scope *Scope, br *core.PBranch) {
 // span-shifted back to the source file's coordinates, and run through
 // the regular checkExpr path so unresolved-identifier (and friends)
 // fire on names referenced inside `%name` / `%a.b.c` / `%(call args)`.
-func (w *walker) checkInterpChunks(scope *Scope, leaf *core.PLeaf, body string, inCode bool) {
+func (w *walker) checkInterpChunks(scope *Scope, leaf *ast.PLeaf, body string, inCode bool) {
 	chunks, errs := syntax.SplitInterp(body)
 	// Split errors point at the leaf as a whole — we don't have a
 	// precise span for the bad `%` inside the body without re-walking,
@@ -747,6 +1265,7 @@ func (w *walker) checkInterpChunks(scope *Scope, leaf *core.PLeaf, body string, 
 		chunkLine, chunkCol := syntax.BodyByteToPos(body, ch.BodyOffset, leaf.Span.StartLine, leaf.Span.StartCol)
 		tokens, lexErrs := syntax.LexPos(ch.Text)
 		tree, parseErrs := syntax.ParsePos(tokens)
+		tree = syntax.NormalizeDo(tree)
 		// Both lex and parse errors get the same treatment: report at
 		// the OUTER leaf's span — re-lexing produces line 1 / col N
 		// inside the chunk, which we'd need to offset too, but the
@@ -756,7 +1275,7 @@ func (w *walker) checkInterpChunks(scope *Scope, leaf *core.PLeaf, body string, 
 				File:     w.file,
 				Span:     leaf.Span,
 				Severity: SeverityError,
-				Code:     "parse-error",
+				Code:     core.ErrParse,
 				Message:  "interpolation: " + e.Message,
 			})
 		}
@@ -765,7 +1284,7 @@ func (w *walker) checkInterpChunks(scope *Scope, leaf *core.PLeaf, body string, 
 				File:     w.file,
 				Span:     leaf.Span,
 				Severity: SeverityError,
-				Code:     "parse-error",
+				Code:     core.ErrParse,
 				Message:  "interpolation: " + e.Message,
 			})
 		}

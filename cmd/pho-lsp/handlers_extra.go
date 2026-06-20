@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 
 	"pho/pkg/lint"
 )
@@ -14,7 +15,9 @@ import (
 // encodes the result in LSP's delta-compressed integer format.
 //
 // Each token contributes 5 ints:
-//   [deltaLine, deltaStart, length, tokenType, tokenModifiers]
+//
+//	[deltaLine, deltaStart, length, tokenType, tokenModifiers]
+//
 // Where deltas are relative to the previous token (or absolute when
 // the line changes). Modifiers is always 0 — we don't tag any.
 func (s *server) handleSemanticTokens(msg *rawMessage) {
@@ -34,15 +37,20 @@ func (s *server) handleSemanticTokens(msg *rawMessage) {
 
 	tokens := lint.SemanticTokens(uriToPath(p.TextDocument.URI), []byte(text))
 
+	lines := strings.Split(text, "\n")
+
 	// Encode. Tokens come back sorted by source position from
 	// lint.SemanticTokens.
 	data := make([]uint32, 0, len(tokens)*5)
 	prevLine, prevCol := 0, 0
 	for _, tok := range tokens {
-		// 0-based positions for LSP.
-		line := tok.Span.StartLine - 1
-		col := tok.Span.StartCol - 1
-		length := tok.Span.EndCol - tok.Span.StartCol
+		// 0-based, UTF-16 positions for LSP (the lexer's columns are
+		// 1-based bytes). Tokens never span lines, so the length is the
+		// UTF-16 width of the byte range on the start line.
+		pos := toLSPPosition(lines, tok.Span.StartLine, tok.Span.StartCol)
+		line := pos.Line
+		col := pos.Character
+		length := byteColToUTF16(lines[line], tok.Span.EndCol-1) - col
 		if length <= 0 {
 			length = 1
 		}
@@ -88,9 +96,14 @@ func (s *server) handleCompletion(msg *rawMessage) {
 		return
 	}
 
-	// LSP positions are 0-based; lint speaks 1-based.
+	// LSP positions are 0-based UTF-16; lint speaks 1-based byte columns.
+	lines := strings.Split(text, "\n")
+	byteCol := p.Position.Character
+	if p.Position.Line >= 0 && p.Position.Line < len(lines) {
+		byteCol = utf16ColToByte(lines[p.Position.Line], p.Position.Character)
+	}
 	defs := lint.CompletionsAt(uriToPath(p.TextDocument.URI), []byte(text),
-		p.Position.Line+1, p.Position.Character+1)
+		p.Position.Line+1, byteCol+1)
 
 	items := make([]completionItem, 0, len(defs))
 	for _, d := range defs {
@@ -121,12 +134,16 @@ func defKindToCompletionKind(k lint.DefKind) int {
 		return 6 // Variable
 	case lint.DefFun:
 		return 3 // Function
+	case lint.DefMacro:
+		return 3 // Function (LSP completion has no Macro kind; a macro is callable)
 	case lint.DefMethod:
 		return 2 // Method
 	case lint.DefStruct:
 		return 22 // Struct
 	case lint.DefParam:
 		return 6 // Variable (LSP has no Parameter kind)
+	case lint.DefField:
+		return 5 // Field
 	}
 	return 6
 }
