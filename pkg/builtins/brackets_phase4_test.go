@@ -17,7 +17,7 @@ func TestMapAndStructInitRuntime(t *testing.T) {
 	}
 
 	// Struct construction with the new `=` form.
-	src := "(struct P X Y)\n(const p P.{ X = 10 Y = 20 })\np.X"
+	src := "(struct P x y)\n(let p = P.{ x = 10 y = 20 })\np.x"
 	if got := core.Stringify(evalProgram(t, src)); got != "10" {
 		t.Fatalf("struct init with '=' : p.X = %q, want 10", got)
 	}

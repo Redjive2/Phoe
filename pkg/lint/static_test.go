@@ -9,8 +9,8 @@ import "testing"
 
 func TestStaticDeclLintsClean(t *testing.T) {
 	srcs := []string{
-		"(struct Point.{ X Number Y Number })\n(static method Point.At (x y) Self.{ X x Y y })\n(const p (Point.At 1 2))\n(const a p.X)\n",
-		"(struct Counter.{ N Number })\n(static property Counter.Zero get (method Counter (Self) Self.{ N 0 }))\n(const z Counter.Zero)\n",
+		"(struct Point.{ x Number y Number })\n(static method Point.at (x y) self.{ x x y y })\n(let p = (Point.at 1 2))\n(let a = p.x)\n",
+		"(struct Counter.{ n Number })\n(static property Counter.zero get (method Counter (self) self.{ n 0 }))\n(let z = Counter.zero)\n",
 	}
 	for i, src := range srcs {
 		d := AnalyzeFile("t.pho", []byte(src))
@@ -21,7 +21,7 @@ func TestStaticDeclLintsClean(t *testing.T) {
 }
 
 func TestStaticAllowedInLibrary(t *testing.T) {
-	src := "(struct Point.{ X Number })\n(static method Point.Origin () Self.{ X 0 })\n"
+	src := "(struct Point.{ x Number })\n(static method Point.origin () self.{ x 0 })\n"
 	d := AnalyzeFile("t.phl", []byte(src))
 	if hasDiag(d, "phl-side-effect") {
 		t.Errorf("static decls are declarations, not side effects; got %#v", d)
@@ -29,10 +29,10 @@ func TestStaticAllowedInLibrary(t *testing.T) {
 }
 
 func TestStaticDiagnostics(t *testing.T) {
-	if d := AnalyzeFile("t.pho", []byte("(static method Ghost.At (x) Self.{ X x })\n")); !hasDiag(d, "unresolved-identifier") {
+	if d := AnalyzeFile("t.pho", []byte("(static method ghost.at (x) self.{ x x })\n")); !hasDiag(d, "unresolved-identifier") {
 		t.Errorf("an unknown static receiver should fire; got %#v", d)
 	}
-	src := "(struct Point.{ X Number })\n(static method Point.At (x) (bogusFn x))\n"
+	src := "(struct Point.{ x Number })\n(static method Point.at (x) (bogus_fn x))\n"
 	if d := AnalyzeFile("t.pho", []byte(src)); !hasDiag(d, "unresolved-identifier") {
 		t.Errorf("a typo in a static body should fire; got %#v", d)
 	}

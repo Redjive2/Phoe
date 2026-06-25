@@ -24,9 +24,9 @@
 -- quotes included (`'hi'` reaches the macro as the 4-char string `'hi'`),
 -- because macro args are quoted source, not evaluated values. stripQuotes
 -- peels one layer of single quotes so the attached text is the content.
-(fun stripQuotes (s)
-    (if (and (>= s.Size 2) (== s.[0 : 1] '\''))
-        then s.[1 : (- s.Size 1)]
+(fun #strip_quotes (s)
+    (if (and (>= s.size 2) (== s.[0 : 1] '\''))
+        then s.[1 : (- s.size 1)]
         else s))
 
 -- (~type T) — records the value/expression type T, e.g. `--@ (~type num)`.
@@ -39,16 +39,16 @@
 -- revival — to revive, restore the original body shown in the comment below.
 (fun type (t)
     -- Original harvest body (kept for revival): (meta.Attach 'type' t)
-    Nil)
+    none)
 
 -- (~doc "text") — attaches a free-form documentation string for a declaration.
 (fun doc (text)
-    (meta.Attach 'doc' (stripQuotes text)))
+    (meta.Attach 'doc' (#strip_quotes text)))
 
 -- (~desc argOrField "text") — documents one argument or struct field by name.
 -- Attaches "desc" = { "name" argOrField "text" text }; multiple are allowed.
 (fun desc (name text)
-    (meta.Attach 'desc' { 'name' name 'text' (stripQuotes text) }))
+    (meta.Attach 'desc' [ 'name' -> name 'text' -> (#strip_quotes text) ]))
 
 -- (~macrohint toplevel) | (~macrohint local) — declares where a macro may be
 -- called: a toplevel macro only as a top-level form, a local one inline.
@@ -58,7 +58,7 @@
 
 -- (~pure) — marks the annotated function/macro as pure (no side effects).
 (fun pure ()
-    (meta.Attach 'pure' True))
+    (meta.Attach 'pure' true))
 
 -- (~flag argName (default :v0) :v1 :v2 …) — declares the allowed atom values
 -- of a flag-style argument, and optionally which is the default. A value
@@ -66,13 +66,13 @@
 -- every other argument is a plain allowed atom. Attaches
 -- "flag" = { "arg" argName "values" [allowed…] "default" v|Nil }.
 (fun flag ((spread parts)) do
-    (var name parts.[0])
-    (var values [])
-    (var default Nil)
-    (var n parts.Size)
-    (var i 1)
+    (let var name = parts.[0])
+    (let var values = [])
+    (let var default = none)
+    (let var n = parts.size)
+    (let var i = 1)
     (while (< i n) then do
-        (const item parts.[i])
+        (let item = parts.[i])
         (if (list? item)
             -- (default :v) arrives as the array ["default" ":v"].
             then (identity do
@@ -80,7 +80,7 @@
                 (= values (append values item.[1])))
             else (= values (append values item)))
         (= i (+ i 1)))
-    (meta.Attach 'flag' { 'arg' name 'values' values 'default' default }))
+    (meta.Attach 'flag' [ 'arg' -> name 'values' -> values 'default' -> default ]))
 
 -- (~sig (P1 P2 …) R) — a FUNCTION signature: a parenthesized parameter-type
 -- list, then the single result type.
@@ -111,4 +111,4 @@
     --           (meta.Attach 'receiver' parts.[0])
     --           (meta.Attach 'params' parts.[1])
     --           (meta.Attach 'result' parts.[2]))))
-    Nil)
+    none)

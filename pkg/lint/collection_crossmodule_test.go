@@ -12,16 +12,16 @@ import (
 // the same-file behavior and the runtime. Regression for cross-module
 // Collection resolution.
 func TestCrossModuleCollectionMember(t *testing.T) {
-	lib := "(method Collection.Shout (self) self)\n" +
-		"(property Collection.Big? get (method Collection (self) (> self.Size 1)))\n"
+	lib := "(method Collection.shout (self) self)\n" +
+		"(property Collection.big? get (method Collection (self) (> self.size 1)))\n"
 	root := writeTree(t, map[string]string{
 		"script/std/coll/coll.phl": lib,
 		"script/app.pho": "(import 'std/coll')\n" +
-			"(var a 'hi'.Shout)\n" + // String inherits the Collection method
-			"(var b [1 2].Shout)\n" + // List too
-			"(var c { 'k' 1 }.Shout)\n" + // Map too
-			"(var d [1 2].Big?)\n" + // a Collection property, cross-module
-			"(var e [1 2].Nope)\n", // sanity: an unknown member still fires
+			"(let var a = 'hi'.shout)\n" + // String inherits the Collection method
+			"(let var b = [1 2].shout)\n" + // List too
+			"(let var c = [ 'k' -> 1 ].shout)\n" + // Map too
+			"(let var d = [1 2].big?)\n" + // a Collection property, cross-module
+			"(let var e = [1 2].nope)\n", // sanity: an unknown member still fires
 	})
 
 	app := filepath.Join(root, "script/app.pho")
@@ -49,14 +49,14 @@ func TestCrossModuleCollectionMember(t *testing.T) {
 // runtime for the call to resolve. Regression for the unused-import false
 // positive on untyped receivers (std/random.Shuffle's `slice.Concat`).
 func TestExtensionUseOnUnknownReceiver(t *testing.T) {
-	lib := "(method List.Concat (self (spread lists)) self)\n"
+	lib := "(method List.concat (self (spread lists)) self)\n"
 	root := writeTree(t, map[string]string{
 		"script/std/coll/coll.phl": lib,
 		// `a` is an untyped parameter, so the receiver `a.[: 1]` (and `a`
 		// itself) has an unknown static shape — the member access can't be
 		// checked, yet the import is genuinely used.
 		"script/app.pho": "(import 'std/coll')\n" +
-			"(fun f (a b) (a.[: 1].Concat b))\n",
+			"(fun f (a b) (a.[: 1].concat b))\n",
 	})
 
 	app := filepath.Join(root, "script/app.pho")
@@ -73,7 +73,7 @@ func TestExtensionUseOnUnknownReceiver(t *testing.T) {
 	root2 := writeTree(t, map[string]string{
 		"script/std/coll/coll.phl": lib,
 		"script/app.pho": "(import 'std/coll')\n" +
-			"(fun g (a) (a.Nonexistent))\n",
+			"(fun g (a) (a.nonexistent))\n",
 	})
 	app2 := filepath.Join(root2, "script/app.pho")
 	src2, _ := os.ReadFile(app2)

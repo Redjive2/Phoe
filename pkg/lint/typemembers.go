@@ -19,18 +19,18 @@ type builtinMember struct {
 // builtinTypeMembers maps a primitive type's display name to the members the
 // built-in module attaches to it (collections.phl).
 var builtinTypeMembers = map[string][]builtinMember{
-	"List":   {{"Size", DefField}, {"Keys", DefField}, {"Empty?", DefField}},
-	"String": {{"Size", DefField}, {"Keys", DefField}, {"Empty?", DefField}},
-	"Map":    {{"Size", DefField}, {"Keys", DefField}, {"Empty?", DefField}},
+	"List":   {{"size", DefField}, {"keys", DefField}, {"empty?", DefField}},
+	"String": {{"size", DefField}, {"keys", DefField}, {"empty?", DefField}},
+	"Map":    {{"size", DefField}, {"keys", DefField}, {"empty?", DefField}},
 }
 
 // universalMembers are attached to Unknown (the top type), so they resolve on a
 // value of ANY type (universal.phl).
 var universalMembers = []builtinMember{
-	{"Is?", DefMethod},
-	{"In?", DefMethod},
-	{"Pipe", DefMethod},
-	{"To", DefMethod},
+	{"is?", DefMethod},
+	{"in?", DefMethod},
+	{"pipe", DefMethod},
+	{"to", DefMethod},
 }
 
 // isUniversalMember reports whether name is a universal method (resolves on a
@@ -229,13 +229,13 @@ func (w *walker) primitiveMemberSources(scope *Scope, typeName, member string) i
 // builtinMemberDocs holds one-line descriptions for the built-in object-model
 // members, surfaced on hover.
 var builtinMemberDocs = map[string]string{
-	"Size":   "element/rune count of the collection (replaces `len`)",
-	"Keys":   "the collection's keys — a list/string's indices, a map's keys (replaces `keyof`)",
-	"Empty?": "whether the collection has no elements",
-	"Is?":    "whether the value's type is the given type",
-	"In?":    "whether the value is an element of the given collection",
-	"Pipe":   "thread the value left-to-right through each step function, returning the final result",
-	"To":     "convert the value to the given type via that type's `From`",
+	"size":   "element/rune count of the collection (replaces `len`)",
+	"keys":   "the collection's keys — a list/string's indices, a map's keys (replaces `keyof`)",
+	"empty?": "whether the collection has no elements",
+	"is?":    "whether the value's type is the given type",
+	"in?":    "whether the value is an element of the given collection",
+	"pipe":   "thread the value left-to-right through each step function, returning the final result",
+	"to":     "convert the value to the given type via that type's `from`",
 }
 
 func memberKindWord(k DefKind) string {

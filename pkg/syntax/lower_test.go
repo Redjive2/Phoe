@@ -39,7 +39,7 @@ func TestLowerBlockSigil(t *testing.T) {
 
 // Dot accessor — `a.b.c` lowers to nested core.Dot calls.
 func TestLowerDotChain(t *testing.T) {
-	got := dumpTree(lower("(io.PrintLine self.x)"))
+	got := dumpTree(lower("(io.print_line self.#x)"))
 	// Should have two distinct dot subtrees (io.PrintLine and self.x).
 	if strings.Count(got, core.Dot) < 2 {
 		t.Fatalf("expected two dot subtrees, got: %s", got)
@@ -53,7 +53,7 @@ func TestLowerDotChain(t *testing.T) {
 // retired `(LHS { … })` construction form.
 func TestLowerDotBraceConstruction(t *testing.T) {
 	got := dumpTree(lower(`Point.{ X 10 y 20 }`))
-	want := dumpTree(lower(`(Point 'X' 10 'y' 20)`))
+	want := dumpTree(lower(`(point 'X' 10 'y' 20)`))
 	if got != want {
 		t.Fatalf("Point.{...} should lower to (Point \"X\" 10 \"y\" 20)\n  got:  %s\n  want: %s", got, want)
 	}
@@ -76,7 +76,7 @@ func TestLowerDotBraceChains(t *testing.T) {
 	}
 
 	got = dumpTree(lower(`Point.{ X 1 }.X`))
-	want = dumpTree(lower(`(Point 'X' 1).X`))
+	want = dumpTree(lower(`(point 'X' 1).x`))
 	if got != want {
 		t.Fatalf("Struct.{...}.Field mismatch\n  got:  %s\n  want: %s", got, want)
 	}
@@ -246,7 +246,7 @@ func TestEvalSingleQuoteStrings(t *testing.T) {
 // instead of interpolating.
 func TestLowerInterpInsideQuote(t *testing.T) {
 	// String nested inside a fun body (internally quoted by listifyP).
-	got := dumpTree(lower(`(fun f (who) (io.PrintLine 'hi %who'))`))
+	got := dumpTree(lower(`(fun f (who) (io.print_line 'hi %who'))`))
 	if !strings.Contains(got, core.Strinterp) {
 		t.Errorf("expected Strinterp for interpolation inside quoted fun body, got %s", got)
 	}
@@ -263,7 +263,7 @@ func TestLowerArrayDictLiterals(t *testing.T) {
 	if !strings.HasPrefix(got, "(("+core.Slice+" 1 2 3))") {
 		t.Fatalf("expected [1 2 3] to lower to (%s 1 2 3), got: %s", core.Slice, got)
 	}
-	got = dumpTree(lower(`{'a' 1}`))
+	got = dumpTree(lower(`['a' -> 1]`))
 	if !strings.Contains(got, core.Map) {
 		t.Fatalf("expected {...} to lower to %s, got: %s", core.Map, got)
 	}

@@ -7,8 +7,8 @@ import "testing"
 func TestBlockItResolution(t *testing.T) {
 	clean := []string{
 		"(fun apply (x f) (f x))\n(apply 3 &(+ it 1))",
-		"(fun apply (x f) (f x))\n(apply 3 &do (const y (+ it 1)) (* y 2))",
-		"(fun apply (x f) (f x))\n(apply 3 &Nil)",
+		"(fun apply (x f) (f x))\n(apply 3 &do (let y = (+ it 1)) (* y 2))",
+		"(fun apply (x f) (f x))\n(apply 3 &none)",
 		// nested blocks each get their own `it`
 		"(fun apply (x f) (f x))\n(apply 1 &(apply 2 &(* it it)))",
 	}

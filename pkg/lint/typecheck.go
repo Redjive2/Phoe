@@ -69,6 +69,8 @@ func litType(s string) (*core.PhoType, bool) {
 		return core.StrSingleton(core.UnescapeStringLit(core.StrLitBody(s))), true
 	case s == "True" || s == "False" || s == "true" || s == "false":
 		return core.BoolSingleton(s == "True" || s == "true"), true
+	case s == "none" || s == "Nil":
+		return core.TypeNil, true
 	case intLiteralRe.MatchString(s):
 		if n, err := strconv.ParseFloat(s, 64); err == nil {
 			return core.NumSingleton(n), true
@@ -804,7 +806,7 @@ func narrowGuard(cond ast.PNode, env typeEnv) (name string, t *core.PhoType, ok 
 	}
 	// (x.Is? T): head is the dot x.Is?, single argument T.
 	if dot, isDot := br.Children[0].(*ast.PDot); isDot {
-		if rhs, ok := dot.RHS.(*ast.PLeaf); ok && rhs.Value == "Is?" {
+		if rhs, ok := dot.RHS.(*ast.PLeaf); ok && rhs.Value == "is?" {
 			if lhs, ok := dot.LHS.(*ast.PLeaf); ok {
 				return lhs.Value, resolveTypeNode(br.Children[1], env), true
 			}

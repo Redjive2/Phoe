@@ -14,11 +14,11 @@ import (
 func TestNamedTraitLintsClean(t *testing.T) {
 	srcs := []string{
 		// named trait + a satisfying struct + an Is? test
-		"(struct Circle.{ R Number })\n(method Circle.Draw (self) self.R)\n(trait Drawable (method Self.Draw (self)))\n(const c Circle.{ R 5 })\n(const d (c.Is? Drawable))\n",
+		"(struct Circle.{ r Number })\n(method Circle.draw (self) self.r)\n(trait Drawable (method self.draw (self)))\n(let c = Circle.{ r 5 })\n(let d = (c.is? Drawable))\n",
 		// empty extends () is allowed
-		"(trait Named () (property Self.Name get))\n",
+		"(trait Named () (property self.name get))\n",
 		// the user's example: static members + a member annotation
-		"(struct Point.{ X Number Y Number })\n(trait Memo\n    (static method Self.Calc (Self) Point)\n    --@ (~type Point)\n    (static property Self.Cached get)\n)\n",
+		"(struct Point.{ x Number y Number })\n(trait Memo\n    (static method self.calc (self) Point)\n    --@ (~type Point)\n    (static property self.cached get)\n)\n",
 	}
 	for i, src := range srcs {
 		if d := AnalyzeFile("t.pho", []byte(src)); len(d) != 0 {
@@ -33,16 +33,16 @@ func TestNamedTraitSatisfaction(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	const trait = "(trait Drawable (method Self.Draw (self)))\n(fun render (Drawable) Nil)\n(fun render (d) Nil)\n"
+	const trait = "(trait Drawable (method self.draw (self)))\n(fun render (Drawable) none)\n(fun render (d) none)\n"
 	cases := []struct {
 		name    string
 		src     string
 		wantErr bool
 	}{
 		{"satisfies", trait +
-			"(struct Circle.{ R Number })\n(method Circle.Draw (self) self.R)\n(render Circle.{ R 1 })", false},
+			"(struct Circle.{ r Number })\n(method Circle.draw (self) self.r)\n(render Circle.{ r 1 })", false},
 		{"missing method", trait +
-			"(struct Square.{ S Number })\n(render Square.{ S 1 })", true},
+			"(struct Square.{ s Number })\n(render Square.{ s 1 })", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

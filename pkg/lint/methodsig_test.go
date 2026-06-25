@@ -18,9 +18,9 @@ func TestMethodSigHarvest(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	src := "(struct Reader buffer)\n" +
-		"(method Reader.Seek (Reader Number) Boolean)\n" +
-		"(method Reader.Seek (self n) do True)\n"
+	src := "(struct Reader #buffer)\n" +
+		"(method Reader.seek (Reader Number) Boolean)\n" +
+		"(method Reader.seek (self n) do true)\n"
 
 	tokens, _ := syntax.LexPos(src)
 	tree, _ := syntax.ParsePos(tokens)

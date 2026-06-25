@@ -39,11 +39,11 @@ func heads(forms []orderedForm) []string {
 // liftDefinitions moves every non-var/const declaration ahead of the var/const
 // ones, preserving source order within each group.
 func TestLiftDefinitionsPartition(t *testing.T) {
-	src := `(const CurrentTemp Temperature.{ 'Degrees' 15 })
-(method Temperature.Show (self) self.Degrees)
-(var counter 0)
-(struct Temperature Degrees Unit)
-(const Other 5)
+	src := `(let current_temp = Temperature.{ 'Degrees' 15 })
+(method Temperature.show (self) self.degrees)
+(let var counter = 0)
+(struct Temperature degrees unit)
+(let other = 5)
 (fun helper () 1)`
 	got := heads(liftDefinitions(parseForms(t, src)))
 
@@ -57,8 +57,8 @@ func TestLiftDefinitionsPartition(t *testing.T) {
 
 // var/const are NOT sorted among themselves — their source order is preserved.
 func TestLiftDefinitionsDoesNotSortInits(t *testing.T) {
-	src := `(const A (+ B 1))
-(const B 10)`
+	src := `(let a = (+ b 1))
+(let b = 10)`
 	got := parseForms(t, src)
 	out := liftDefinitions(got)
 	// Both are const; order unchanged: A still before B.
@@ -71,9 +71,9 @@ func TestLiftDefinitionsDoesNotSortInits(t *testing.T) {
 
 // A correctly-ordered library is left as-is.
 func TestLiftDefinitionsStable(t *testing.T) {
-	src := `(struct Point X Y)
-(method Point.Sum (self) (+ self.X self.Y))
-(const Origin Point.{ 'X' 0 'Y' 0 })`
+	src := `(struct Point x y)
+(method Point.sum (self) (+ self.x self.y))
+(let origin = Point.{ 'X' 0 'Y' 0 })`
 	got := heads(liftDefinitions(parseForms(t, src)))
 	want := []string{"struct", "method", "const"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {

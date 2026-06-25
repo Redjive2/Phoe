@@ -1,5 +1,5 @@
 (goimport ('stdDependencies' dep))
 
-(fun Num (str)
+(fun num (str)
     (dep.ParseAtoi str)
 )

@@ -49,7 +49,7 @@ func TestDotCompletionUserPrimitiveExtension(t *testing.T) {
 // Hover and go-to-definition resolve a user-declared method on a primitive
 // type, through the same machinery as struct methods.
 func TestNavOnUserPrimitiveExtension(t *testing.T) {
-	src := "(method Number.Double (self) do (* self 2))\n(var n 5)\n(var q (n.Double))\n"
+	src := "(method Number.double (self) do (* self 2))\n(let var n = 5)\n(let var q = (n.double))\n"
 
 	site, ok := DefinitionAt("main.pho", []byte(src), 3, 12)
 	if !ok {
@@ -68,7 +68,7 @@ func TestNavOnUserPrimitiveExtension(t *testing.T) {
 // Hover on a built-in object-model member shows a synthetic description
 // (built-in members have no workspace definition site).
 func TestHoverOnBuiltinMember(t *testing.T) {
-	src := "(var xs [1 2 3])\n(var n xs.Size)\n"
+	src := "(let var xs = [1 2 3])\n(let var n = xs.size)\n"
 	md, _, ok := HoverAt("main.pho", []byte(src), 2, 12)
 	if !ok || !strings.Contains(md, "Size") || !strings.Contains(md, "built-in") {
 		t.Fatalf("expected a built-in hover for xs.Size, got ok=%v md=%q", ok, md)

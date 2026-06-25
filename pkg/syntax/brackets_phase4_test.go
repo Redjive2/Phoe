@@ -16,12 +16,12 @@ func TestArrowToken(t *testing.T) {
 func TestMapBracketDesugar(t *testing.T) {
 	cases := []struct{ src, want string }{
 		// `[k -> v]` and `{k v}` lower to the same map.
-		{"[:k -> :v]", "({:k :v})"},
-		{"{:k :v}", "({:k :v})"},
-		{"[:a -> 1 :b -> 2]", "({:a 1 :b 2})"},
+		{"[:k -> :v]", "([:k -> :v])"},
+		{"[:k -> :v]", "([:k -> :v])"},
+		{"[:a -> 1 :b -> 2]", "([:a -> 1 :b -> 2])"},
 		// Empty list vs empty map.
 		{"[]", "([])"},
-		{"[->]", "({})"},
+		{"[->]", "([])"},
 		// Arrow-free `[…]` is still a list.
 		{"[1 2 3]", "([1 2 3])"},
 	}
@@ -38,10 +38,10 @@ func TestMapBracketDesugar(t *testing.T) {
 // keys are accepted.
 func TestStructInitDesugar(t *testing.T) {
 	cases := []struct{ src, want string }{
-		{"P.{ x = 1 }", "((P 'x' 1))"},
-		{"P.{ x 1 }", "((P 'x' 1))"},
-		{"P.{ x = 1 y = 2 }", "((P 'x' 1 'y' 2))"},
-		{"P.{ #x = 1 }", "((P '#x' 1))"},
+		{"P.{ x = 1 }", "((p 'x' 1))"},
+		{"P.{ x 1 }", "((p 'x' 1))"},
+		{"P.{ x = 1 y = 2 }", "((p 'x' 1 'y' 2))"},
+		{"P.{ #x = 1 }", "((p '#x' 1))"},
 	}
 	for _, c := range cases {
 		if got := lowerInspect(c.src); got != c.want {

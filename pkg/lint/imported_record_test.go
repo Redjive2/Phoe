@@ -18,12 +18,12 @@ func TestImportedStructRecord(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	geo := "(struct Point.{ X Number Y Number })\n"
-	path, src := writeApp(t, geo, "(fun f (Struct.{ Z Number }) Nil)\n(fun f (x) Nil)\n(const p geo.Point.{ X 1 Y 2 })\n(f p)")
+	geo := "(struct Point.{ x Number y Number })\n"
+	path, src := writeApp(t, geo, "(fun f (Struct.{ z Number }) none)\n(fun f (x) none)\n(let p = geo.Point.{ X 1 Y 2 })\n(f p)")
 	if !hasDiag(AnalyzeFile(path, src), "type-mismatch") {
 		t.Errorf("an imported struct missing a required field should fire")
 	}
-	path, src = writeApp(t, geo, "(fun f (Struct.{ X Number }) Nil)\n(fun f (x) Nil)\n(const p geo.Point.{ X 1 Y 2 })\n(f p)")
+	path, src = writeApp(t, geo, "(fun f (Struct.{ x Number }) none)\n(fun f (x) none)\n(let p = geo.Point.{ X 1 Y 2 })\n(f p)")
 	if hasDiag(AnalyzeFile(path, src), "type-mismatch") {
 		t.Errorf("an imported struct satisfying the record should be clean")
 	}

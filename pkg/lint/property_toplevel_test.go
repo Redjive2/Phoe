@@ -12,18 +12,18 @@ import (
 // accept it at the top level and resolve both forms across a module
 // boundary, mirroring the runtime loader's allow-list.
 func TestTopLevelPropertyInLibrary(t *testing.T) {
-	lib := `(var n 5)
-(property Twice get (fun () (* n 2)) set (fun (v) (= n (/ v 2))))
-(struct Box V)
-(property Box.Sq get (method Box (self) (* self.V self.V)))
+	lib := `(let var n = 5)
+(property twice get (fun () (* n 2)) set (fun (v) (= n (/ v 2))))
+(struct Box v)
+(property Box.sq get (method Box (self) (* self.v self.v)))
 `
 	root := writeTree(t, map[string]string{
 		"script/std/mylib/lib.phl": lib,
 		"script/app.pho": "(import ('std/mylib' m))\n" +
-			"(var a m.Twice)\n" + // free-standing property export resolves
-			"(var b m.Box.{ V 6 })\n" +
-			"(var c b.Sq)\n" + // attached property member resolves on instance
-			"(var d m.Nope)\n", // sanity: a real unknown export still fires
+			"(let var a = m.twice)\n" + // free-standing property export resolves
+			"(let var b = m.Box.{ V 6 })\n" +
+			"(let var c = b.sq)\n" + // attached property member resolves on instance
+			"(let var d = m.nope)\n", // sanity: a real unknown export still fires
 	})
 
 	// The library itself must lint clean — no phl-side-effect for either

@@ -22,15 +22,15 @@ func writeTree(t *testing.T, files map[string]string) string {
 	return root
 }
 
-const ioLib = `(fun Visible () 1)
-(struct Reader Id)
+const ioLib = `(fun visible () 1)
+(struct Reader id)
 `
 
 // An entry script's import resolves against its own directory.
 func TestResolveImportFromScriptDir(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/io/io.phl": ioLib,
-		"script/app.pho":       "(import 'std/io')\n(var x (io.Visible))\n(var y (io.Nope))\n",
+		"script/app.pho":       "(import 'std/io')\n(let var x = (io.visible))\n(let var y = (io.nope))\n",
 	})
 	app := filepath.Join(root, "script/app.pho")
 	src, _ := os.ReadFile(app)
@@ -48,7 +48,7 @@ func TestResolveImportFromScriptDir(t *testing.T) {
 func TestResolveImportFromNestedLibrary(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/io/io.phl":     ioLib,
-		"script/std/pctl/pctl.phl": "(import 'std/io')\n(fun Use () (io.Visible))\n(fun Bad () (io.Nope))\n",
+		"script/std/pctl/pctl.phl": "(import 'std/io')\n(fun use () (io.visible))\n(fun bad () (io.nope))\n",
 	})
 	pctl := filepath.Join(root, "script/std/pctl/pctl.phl")
 	src, _ := os.ReadFile(pctl)
@@ -66,7 +66,7 @@ func TestResolveImportFromNestedLibrary(t *testing.T) {
 func TestResolveImportFeedsShapeInference(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/io/io.phl": ioLib,
-		"script/std/app/a.phl": "(import 'std/io')\n(fun Go () (identity do\n  (var r io.Reader.{ Id 1 })\n  (var x r.Id)\n  (var y r.Bogus)))\n",
+		"script/std/app/a.phl": "(import 'std/io')\n(fun go () (identity do\n  (let var r = io.Reader.{ Id 1 })\n  (let var x = r.id)\n  (let var y = r.bogus)))\n",
 	})
 	a := filepath.Join(root, "script/std/app/a.phl")
 	src, _ := os.ReadFile(a)
@@ -84,7 +84,7 @@ func TestResolveImportFeedsShapeInference(t *testing.T) {
 func TestResolveImportPathIsAbsolute(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/io/io.phl": ioLib,
-		"script/app.pho":       "(import 'std/io')\n(var x (io.Visible))\n",
+		"script/app.pho":       "(import 'std/io')\n(let var x = (io.visible))\n",
 	})
 	got := resolveImportPath(filepath.Join(root, "script/app.pho"), "std/io")
 	want := filepath.Join(root, "script/std/io")

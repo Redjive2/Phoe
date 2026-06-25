@@ -8,11 +8,11 @@ import (
 )
 
 const navSrc = `-- Adds one to a number.
-(fun AddOne (n) (+ n 1))
-(struct Point X y)
-(method Point.Shift (self d) (+ self.X d))
-(var p Point.{ X 10 y 20 })
-(var total (AddOne p.X))
+(fun add_one (n) (+ n 1))
+(struct Point x #y)
+(method Point.shift (self d) (+ self.x d))
+(let var p = Point.{ x 10 #y 20 })
+(let var total = (add_one p.x))
 (= total 5)
 `
 
@@ -31,7 +31,7 @@ func TestDefinitionAtFunction(t *testing.T) {
 // Cursor on `p.X` member access jumps to the field declaration in the
 // struct.
 func TestDefinitionAtStructField(t *testing.T) {
-	col := strings.Index("(var total (AddOne p.X))", "X)") + 1
+	col := strings.Index("(let var total = (add_one p.x))", "X)") + 1
 	site, ok := DefinitionAt("main.pho", []byte(navSrc), 6, col)
 	if !ok {
 		t.Fatal("expected a definition for p.X member")
@@ -43,8 +43,8 @@ func TestDefinitionAtStructField(t *testing.T) {
 
 // Cursor on a method call via shape-known instance jumps to the method.
 func TestDefinitionAtMethod(t *testing.T) {
-	src := navSrc + "(var shifted (p.Shift 1))\n"
-	col := strings.Index("(var shifted (p.Shift 1))", "Shift") + 1
+	src := navSrc + "(let var shifted = (p.shift 1))\n"
+	col := strings.Index("(let var shifted = (p.shift 1))", "Shift") + 1
 	site, ok := DefinitionAt("main.pho", []byte(src), 8, col)
 	if !ok {
 		t.Fatal("expected a definition for p.Shift")
@@ -70,7 +70,7 @@ func TestDefinitionAtImportMember(t *testing.T) {
 		t.Fatal(err)
 	}
 	lib := filepath.Join(pkgDir, "lib.phl")
-	if err := os.WriteFile(lib, []byte("(fun Visible () 1)\n"), 0o644); err != nil {
+	if err := os.WriteFile(lib, []byte("(fun visible () 1)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	main := filepath.Join(dir, "main.pho")
@@ -79,7 +79,7 @@ func TestDefinitionAtImportMember(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	col := strings.Index("(var x (mylib.Visible))", "Visible") + 1
+	col := strings.Index("(let var x = (mylib.visible))", "Visible") + 1
 	site, ok := DefinitionAt(main, []byte(src), 2, col)
 	if !ok {
 		t.Fatal("expected cross-file definition for mylib.Visible")
@@ -117,7 +117,7 @@ func TestHoverStructExcludesSwallowedForms(t *testing.T) {
 	if !ok {
 		t.Fatal("expected hover on the struct name")
 	}
-	if !strings.Contains(md, "(struct File id path)") {
+	if !strings.Contains(md, "(struct File #id #path)") {
 		t.Fatalf("expected fields-only header, got %q", md)
 	}
 	if strings.Contains(md, "fun") || strings.Contains(md, "dep.") {
@@ -127,19 +127,19 @@ func TestHoverStructExcludesSwallowedForms(t *testing.T) {
 
 // A valid multi-line struct still renders all its fields.
 func TestHoverStructValidFields(t *testing.T) {
-	src := "(struct Point \n    x\n    y\n    z\n)\n"
+	src := "(struct Point \n    #x\n    #y\n    #z\n)\n"
 	md, _, ok := HoverAt("p.phl", []byte(src), 1, 10)
 	if !ok {
 		t.Fatal("expected hover on the struct name")
 	}
-	if !strings.Contains(md, "(struct Point x y z)") {
+	if !strings.Contains(md, "(struct Point #x #y #z)") {
 		t.Fatalf("expected all fields in header, got %q", md)
 	}
 }
 
 // Hover on a shaped var names the struct it holds.
 func TestHoverAtShapedVar(t *testing.T) {
-	col := strings.Index("(var total (AddOne p.X))", "p.X") + 1
+	col := strings.Index("(let var total = (add_one p.x))", "p.X") + 1
 	md, _, ok := HoverAt("main.pho", []byte(navSrc), 6, col)
 	if !ok {
 		t.Fatal("expected hover for p")
@@ -164,8 +164,8 @@ func TestReferencesAtVar(t *testing.T) {
 
 // References on a struct member finds dot accesses plus the decl.
 func TestReferencesAtMember(t *testing.T) {
-	src := navSrc + "(var more p.X)\n"
-	col := strings.Index("(var total (AddOne p.X))", "X)") + 1
+	src := navSrc + "(let var more = p.x)\n"
+	col := strings.Index("(let var total = (add_one p.x))", "X)") + 1
 	sites := ReferencesAt("", "main.pho", []byte(src), 6, col)
 	// self.X (line 4), p.X (line 6), p.X (line 8), decl X (line 3).
 	if len(sites) != 4 {

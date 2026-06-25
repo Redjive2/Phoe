@@ -10,45 +10,45 @@ import (
 // providing the required members — no `implements` anywhere. A property
 // requirement is met by a FIELD of the same name.
 func TestTraitMembership(t *testing.T) {
-	greeter := "(type Greeter (Trait ()\n  (method Self.Hi (self))\n  (method Self.Bye (self))))\n"
-	wantBool(t, greeter+"(struct P X)\n(method P.Hi (self) 1)\n(method P.Bye (self) 2)\n(const p P.{ X 1 })\n(p.Is? Greeter)", true)
-	wantBool(t, greeter+"(struct Q X)\n(method Q.Hi (self) 1)\n(const q Q.{ X 1 })\n(q.Is? Greeter)", false)
+	greeter := "(type Greeter (Trait ()\n  (method self.hi (self))\n  (method self.bye (self))))\n"
+	wantBool(t, greeter+"(struct P x)\n(method P.hi (self) 1)\n(method P.bye (self) 2)\n(let p = P.{ x 1 })\n(p.is? Greeter)", true)
+	wantBool(t, greeter+"(struct Q x)\n(method Q.hi (self) 1)\n(let q = Q.{ x 1 })\n(q.is? Greeter)", false)
 
 	// A property requirement satisfied by a field of the same name.
-	hasName := "(type HasName (Trait () (property Self.Name get)))\n"
-	wantBool(t, hasName+"(struct R Name)\n(const r R.{ Name 'x' })\n(r.Is? HasName)", true)
-	wantBool(t, hasName+"(struct S X)\n(const s S.{ X 1 })\n(s.Is? HasName)", false)
+	hasName := "(type Has_Name (Trait () (property self.name get)))\n"
+	wantBool(t, hasName+"(struct R name)\n(let r = R.{ name 'x' })\n(r.is? Has_Name)", true)
+	wantBool(t, hasName+"(struct S x)\n(let s = S.{ x 1 })\n(s.is? Has_Name)", false)
 
 	// A mutable-property requirement (get set) is also met by a field.
-	mut := "(type Mut (Trait () (property Self.V get set)))\n"
-	wantBool(t, mut+"(struct B V)\n(const b B.{ V 1 })\n(b.Is? Mut)", true)
+	mut := "(type Mut (Trait () (property self.v get set)))\n"
+	wantBool(t, mut+"(struct B v)\n(let b = B.{ v 1 })\n(b.is? Mut)", true)
 
 	// extends: a sub-trait inherits the supertrait's requirements.
-	ext := "(type Drawable (Trait () (method Self.Draw (self))))\n" +
-		"(type Shape (Trait (Drawable) (method Self.Area (self))))\n"
-	wantBool(t, ext+"(struct C X)\n(method C.Draw (self) 1)\n(method C.Area (self) 2)\n(const c C.{ X 1 })\n(c.Is? Shape)", true)
-	wantBool(t, ext+"(struct D X)\n(method D.Area (self) 2)\n(const d D.{ X 1 })\n(d.Is? Shape)", false) // missing Draw
+	ext := "(type Drawable (Trait () (method self.draw (self))))\n" +
+		"(type Shape (Trait (Drawable) (method self.area (self))))\n"
+	wantBool(t, ext+"(struct C x)\n(method C.draw (self) 1)\n(method C.area (self) 2)\n(let c = C.{ x 1 })\n(c.is? Shape)", true)
+	wantBool(t, ext+"(struct D x)\n(method D.area (self) 2)\n(let d = D.{ x 1 })\n(d.is? Shape)", false) // missing Draw
 }
 
 // A default implementation is auto-injected on a value that satisfies the trait
 // but doesn't define the member itself; an own member wins; defaults take args.
 func TestTraitDefaults(t *testing.T) {
-	wantStr(t, "(type Greet (Trait () (method Self.Hi (self) 'hello')))\n(struct P X)\n(const p P.{ X 1 })\n(p.Hi)", "hello")
-	wantStr(t, "(type Greet (Trait () (method Self.Hi (self) 'def')))\n(struct Q X)\n(method Q.Hi (self) 'own')\n(const q Q.{ X 1 })\n(q.Hi)", "own")
-	wantBool(t, "(type Add (Trait () (method Self.Inc (self n) (+ n 1))))\n(struct R X)\n(const r R.{ X 1 })\n(== (r.Inc 41) 42)", true)
+	wantStr(t, "(type Greet (Trait () (method self.hi (self) 'hello')))\n(struct P x)\n(let p = P.{ x 1 })\n(p.hi)", "hello")
+	wantStr(t, "(type Greet (Trait () (method self.hi (self) 'def')))\n(struct Q x)\n(method Q.hi (self) 'own')\n(let q = Q.{ x 1 })\n(q.hi)", "own")
+	wantBool(t, "(type Add (Trait () (method self.inc (self n) (+ n 1))))\n(struct R x)\n(let r = R.{ x 1 })\n(== (r.inc 41) 42)", true)
 
 	// A property getter default is auto-injected and called immediately.
-	wantBool(t, "(type Zero (Trait () (property Self.Z get (method Self (self) 0))))\n(struct S X)\n(const s S.{ X 1 })\n(== s.Z 0)", true)
+	wantBool(t, "(type Zero (Trait () (property self.z get (method self (self) 0))))\n(struct S x)\n(let s = S.{ x 1 })\n(== s.z 0)", true)
 
 	// A value that does NOT satisfy the trait's other requirements gets no default.
-	if _, codes := evalProgramDiag(t, "(type Two (Trait () (method Self.A (self)) (method Self.B (self) 'd')))\n(struct T X)\n(const t T.{ X 1 })\n(t.B)"); !hasCode(codes, core.ErrField) {
+	if _, codes := evalProgramDiag(t, "(type Two (Trait () (method self.A (self)) (method self.B (self) 'd')))\n(struct T x)\n(let t = T.{ x 1 })\n(t.B)"); !hasCode(codes, core.ErrField) {
 		t.Errorf("T lacks A ⇒ doesn't satisfy Two ⇒ B default must NOT inject; got %v", codes)
 	}
 
 	// Two satisfied traits defaulting the same member ⇒ ambiguity error.
-	amb := "(type A (Trait () (method Self.M (self) 1)))\n(type B (Trait () (method Self.M (self) 2)))\n" +
-		"(struct U X)\n(const u U.{ X 1 })\n"
-	if _, codes := evalProgramDiag(t, amb+"(u.M)"); !hasCode(codes, core.ErrField) {
+	amb := "(type A (Trait () (method self.m (self) 1)))\n(type B (Trait () (method self.m (self) 2)))\n" +
+		"(struct U x)\n(let u = U.{ x 1 })\n"
+	if _, codes := evalProgramDiag(t, amb+"(u.m)"); !hasCode(codes, core.ErrField) {
 		t.Errorf("two traits default M and U satisfies both ⇒ ambiguous; got %v", codes)
 	}
 }

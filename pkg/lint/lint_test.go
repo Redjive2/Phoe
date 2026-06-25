@@ -44,7 +44,7 @@ func TestPackageScopeResolvesCrossFile(t *testing.T) {
 	// Sibling file: defines `helper`, imports `io` as `io`.
 	sibling := filepath.Join(dir, "lib.phl")
 	if err := os.WriteFile(sibling, []byte(`(import 'std/io')
-(const helper 42)
+(let helper = 42)
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -52,8 +52,8 @@ func TestPackageScopeResolvesCrossFile(t *testing.T) {
 	// Target file: refers to `helper` (visible) and to `io` (must NOT
 	// be visible — sibling's import is file-scoped).
 	target := filepath.Join(dir, "main.phl")
-	src := []byte(`(const doubled (+ helper helper))
-(const mystery io)
+	src := []byte(`(let doubled = (+ helper helper))
+(let mystery = io)
 `)
 	if err := os.WriteFile(target, src, 0o644); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestPackageScopeResolvesCrossFile(t *testing.T) {
 
 func TestUnusedImport(t *testing.T) {
 	src := []byte(`(import 'std/io')
-(io.PrintLine 'hi')
+(io.print_line 'hi')
 `)
 	used := AnalyzeFile("test.pho", src)
 	if hasDiag(used, "unused-import") {
@@ -95,7 +95,7 @@ func TestUnusedImport(t *testing.T) {
 
 func TestInvalidSelfUsage(t *testing.T) {
 	// `self` outside any method body is flagged.
-	src := []byte(`(io.PrintLine self)
+	src := []byte(`(io.print_line self)
 `)
 	diags := AnalyzeFile("test.pho", src)
 	if !hasDiag(diags, "invalid-self-usage") {
@@ -103,8 +103,8 @@ func TestInvalidSelfUsage(t *testing.T) {
 	}
 
 	// `self` inside a method body is not flagged.
-	src = []byte(`(struct T x)
-(method T.foo (self) (identity do (io.PrintLine self.x)))
+	src = []byte(`(struct T #x)
+(method T.#foo (self) (identity do (io.print_line self.#x)))
 `)
 	diags = AnalyzeFile("test.pho", src)
 	if hasDiag(diags, "invalid-self-usage") {
@@ -113,9 +113,9 @@ func TestInvalidSelfUsage(t *testing.T) {
 
 	// `self` inside a fun nested in a method is allowed (closure
 	// captures the receiver).
-	src = []byte(`(struct T x)
-(method T.foo (self) (identity do
-  (fun inner () (io.PrintLine self.x))
+	src = []byte(`(struct T #x)
+(method T.#foo (self) (identity do
+  (fun inner () (io.print_line self.#x))
   (inner)
 ))
 `)
@@ -135,7 +135,7 @@ func TestArityOnSpecialForms(t *testing.T) {
 		{"struct-too-few", `(struct)`},
 		{"= without value", `(= x)`},
 		{"do-empty", `(do)`},
-		{"var-odd-args", `(var a 1 b)`},
+		{"var-odd-args", `(let var a = 1 b)`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -150,7 +150,7 @@ func TestArityOnSpecialForms(t *testing.T) {
 func TestSigilShape(t *testing.T) {
 	// Post-cutover the declaration/control forms are BARE (no '/& sigils);
 	// `if` uses the then/elif/else keyword markers, with bare arms.
-	d := AnalyzeFile("test.pho", []byte("(const cond True)\n(const foo 1)\n(const bar 2)\n(if cond then foo else bar)"))
+	d := AnalyzeFile("test.pho", []byte("(let cond = true)\n(let foo = 1)\n(let bar = 2)\n(if cond then foo else bar)"))
 	if hasDiag(d, "bad-form-shape") {
 		t.Errorf("keyword-form if should be valid, got %#v", d)
 	}
@@ -160,7 +160,7 @@ func TestSigilShape(t *testing.T) {
 	// "unrecognized character" (covered by the lexer tests), not a lint
 	// diagnostic — so here the linter only needs to confirm the bare forms
 	// stay clean.
-	d = AnalyzeFile("test.pho", []byte(`(var x 5)`))
+	d = AnalyzeFile("test.pho", []byte(`(let var x = 5)`))
 	if hasDiag(d, "bad-form-shape") {
 		t.Errorf("bare var name should be clean, got %#v", d)
 	}
@@ -169,11 +169,11 @@ func TestSigilShape(t *testing.T) {
 	// (a library var is read-only module state). Neither flags it — the
 	// dedicated ban was removed, and var is a libraryForms declaration so
 	// it isn't a side effect either.
-	d = AnalyzeFile("script.pho", []byte(`(var x 5)`))
+	d = AnalyzeFile("script.pho", []byte(`(let var x = 5)`))
 	if hasDiag(d, "no-top-level-var") || hasDiag(d, "phl-side-effect") {
 		t.Errorf("did not expect a top-level-var diagnostic on .pho, got %#v", d)
 	}
-	d = AnalyzeFile("library.phl", []byte(`(var x 5)`))
+	d = AnalyzeFile("library.phl", []byte(`(let var x = 5)`))
 	if hasDiag(d, "no-top-level-var") || hasDiag(d, "phl-side-effect") {
 		t.Errorf("top-level var is now allowed in .phl libraries, got %#v", d)
 	}
@@ -195,7 +195,7 @@ func TestSigilShape(t *testing.T) {
 	// `=` accepts a bare ident or a dot target — the user's mixed
 	// style across the cards/ scripts must keep linting clean.
 	d = AnalyzeFile("test.pho", []byte(`(fun main () (identity do
-  (var x 0)
+  (let var x = 0)
   (= x 5)
   (= x 10)
 ))`))
@@ -231,8 +231,8 @@ func TestControlFlowScoping(t *testing.T) {
 	if hasDiag(d, "return-outside-function") {
 		t.Errorf("did not expect return-outside-function inside fun body, got %#v", d)
 	}
-	d = AnalyzeFile("test.pho", []byte(`(struct P x)
-(method P.M (self) (return self.x))`))
+	d = AnalyzeFile("test.pho", []byte(`(struct P #x)
+(method P.m (self) (return self.#x))`))
 	if hasDiag(d, "return-outside-function") {
 		t.Errorf("did not expect return-outside-function inside method body, got %#v", d)
 	}
@@ -242,7 +242,7 @@ func TestControlFlowScoping(t *testing.T) {
 	if hasDiag(d, "break-outside-loop") {
 		t.Errorf("did not expect break-outside-loop inside for body, got %#v", d)
 	}
-	d = AnalyzeFile("test.pho", []byte(`(fun f () (foreach True in (continue)))`))
+	d = AnalyzeFile("test.pho", []byte(`(fun f () (foreach true in (continue)))`))
 	if hasDiag(d, "continue-outside-loop") {
 		t.Errorf("did not expect continue-outside-loop inside for body, got %#v", d)
 	}
@@ -251,7 +251,7 @@ func TestControlFlowScoping(t *testing.T) {
 	// (break) inside the inner fun is still invalid.
 	d = AnalyzeFile("test.pho", []byte(`(fun outer () (foreach i in [1 2 3]
     (identity do
-        (var inner (fun () (break)))
+        (let var inner = (fun () (break)))
         (inner)
     )))`))
 	if !hasDiag(d, "break-outside-loop") {
@@ -263,7 +263,7 @@ func TestControlFlowScoping(t *testing.T) {
 	if !hasDiag(d, "bad-form-arity") {
 		t.Errorf("expected bad-form-arity on (return 1 2), got %#v", d)
 	}
-	d = AnalyzeFile("test.pho", []byte(`(fun f () (foreach True in (break x)))`))
+	d = AnalyzeFile("test.pho", []byte(`(fun f () (foreach true in (break x)))`))
 	if !hasDiag(d, "bad-form-arity") {
 		t.Errorf("expected bad-form-arity on (break x), got %#v", d)
 	}
@@ -274,8 +274,8 @@ func TestControlFlowScoping(t *testing.T) {
 // `%(call args)` fires unresolved-identifier. Resolved names stay
 // clean.
 func TestInterpolationReferenceChecks(t *testing.T) {
-	d := AnalyzeFile("test.pho", []byte(`(const name 'ok')
-(io.PrintLine 'hi %name')`))
+	d := AnalyzeFile("test.pho", []byte(`(let name = 'ok')
+(io.print_line 'hi %name')`))
 	if hasDiag(d, "unresolved-identifier") {
 		// `name` is defined, `io` resolves via the import surface only,
 		// so io may or may not be defined here — but a real test
@@ -288,24 +288,24 @@ func TestInterpolationReferenceChecks(t *testing.T) {
 	}
 
 	// Unresolved bare-name interpolation.
-	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine 'hi %who')`))
+	d = AnalyzeFile("test.pho", []byte(`(io.print_line 'hi %who')`))
 	if !hasDiagWithName(d, "unresolved-identifier", "who") {
 		t.Errorf("expected unresolved-identifier 'who' inside %%who, got %#v", d)
 	}
 
 	// Unresolved name inside %(call ...).
-	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine 'got %(len missing)')`))
+	d = AnalyzeFile("test.pho", []byte(`(io.print_line 'got %(len missing)')`))
 	if !hasDiagWithName(d, "unresolved-identifier", "missing") {
 		t.Errorf("expected unresolved-identifier 'missing' inside %%(len missing), got %#v", d)
 	}
 
 	// Bad interpolation shape — trailing %, empty %(), %X for X not a
 	// valid start — surfaces as bad-interpolation.
-	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine 'trailing %')`))
+	d = AnalyzeFile("test.pho", []byte(`(io.print_line 'trailing %')`))
 	if !hasDiag(d, "bad-interpolation") {
 		t.Errorf("expected bad-interpolation on trailing %%, got %#v", d)
 	}
-	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine 'empty %()')`))
+	d = AnalyzeFile("test.pho", []byte(`(io.print_line 'empty %()')`))
 	if !hasDiag(d, "bad-interpolation") {
 		t.Errorf("expected bad-interpolation on empty %%(), got %#v", d)
 	}
@@ -331,7 +331,7 @@ func TestUnknownExport(t *testing.T) {
 	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(pkgDir, "lib.phl"), []byte(`(fun Square (x) (* x x))
+	if err := os.WriteFile(filepath.Join(pkgDir, "lib.phl"), []byte(`(fun square (x) (* x x))
 (fun cube (x) (* x (* x x)))
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -370,7 +370,7 @@ func TestUnknownExport(t *testing.T) {
 // the real signal.
 func TestUnknownExportSilentOnUnresolvableImport(t *testing.T) {
 	src := []byte(`(import 'definitely/does/not/exist')
-(exist.Foo)
+(exist.foo)
 `)
 	diags := AnalyzeFile("test.pho", src)
 	if hasDiag(diags, "unknown-export") {
@@ -411,13 +411,13 @@ func TestPackageScopeDoesNotShadowOnRedeclare(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	sibling := filepath.Join(dir, "lib.phl")
-	if err := os.WriteFile(sibling, []byte(`(const shared 1)
+	if err := os.WriteFile(sibling, []byte(`(let shared = 1)
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	target := filepath.Join(dir, "main.phl")
-	src := []byte(`(const shared 2)
+	src := []byte(`(let shared = 2)
 `)
 	if err := os.WriteFile(target, src, 0o644); err != nil {
 		t.Fatal(err)
@@ -436,28 +436,28 @@ func TestPackageScopeDoesNotShadowOnRedeclare(t *testing.T) {
 // second 'Stdout on Process itself is a genuine redeclaration.
 func TestMethodDoesNotShadowFunOrOtherReceiver(t *testing.T) {
 	// method vs fun of the same name — no redeclaration.
-	d := AnalyzeFile("test.pho", []byte(`(struct Process pid)
-(fun Stdout () (Nil))
-(method Process.Stdout (self) (self.pid))
+	d := AnalyzeFile("test.pho", []byte(`(struct Process #pid)
+(fun stdout () (none))
+(method Process.stdout (self) (self.#pid))
 `))
 	if hasDiag(d, "redeclaration") {
 		t.Errorf("method must not shadow a fun of the same name, got %#v", d)
 	}
 
 	// two methods named Stdout on DIFFERENT receivers — no redeclaration.
-	d = AnalyzeFile("test.pho", []byte(`(struct Process pid)
-(struct File fd)
-(method Process.Stdout (self) (self.pid))
-(method File.Stdout (self) (self.fd))
+	d = AnalyzeFile("test.pho", []byte(`(struct Process #pid)
+(struct File #fd)
+(method Process.stdout (self) (self.#pid))
+(method File.stdout (self) (self.#fd))
 `))
 	if hasDiag(d, "redeclaration") {
 		t.Errorf("methods named the same on different receivers must not collide, got %#v", d)
 	}
 
 	// the SAME method on the SAME receiver twice — still a redeclaration.
-	d = AnalyzeFile("test.pho", []byte(`(struct Process pid)
-(method Process.Stdout (self) (self.pid))
-(method Process.Stdout (self) (self.pid))
+	d = AnalyzeFile("test.pho", []byte(`(struct Process #pid)
+(method Process.stdout (self) (self.#pid))
+(method Process.stdout (self) (self.#pid))
 `))
 	if !hasDiag(d, "redeclaration") {
 		t.Errorf("a method redefined on the same receiver should be flagged, got %#v", d)

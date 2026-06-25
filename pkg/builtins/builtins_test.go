@@ -50,22 +50,22 @@ func TestInterpolationEndToEnd(t *testing.T) {
 	}{
 		{
 			"bare name",
-			"(const who 'World')\n'hi %who'",
+			"(let who = 'World')\n'hi %who'",
 			"hi World",
 		},
 		{
 			"number coercion",
-			"(const n 42)\n'n=%n'",
+			"(let n = 42)\n'n=%n'",
 			"n=42",
 		},
 		{
 			"paren expression",
-			"(const xs [1 2 3])\n'len=%(+ 0 xs.Size)'",
+			"(let xs = [1 2 3])\n'len=%(+ 0 xs.Size)'",
 			"len=3",
 		},
 		{
 			"two interpolations and a literal tail",
-			"(const a 1 b 2)\n'%a+%b='",
+			"(let a = 1 b = 2)\n'%a+%b='",
 			"1+2=",
 		},
 		{
@@ -214,7 +214,7 @@ func TestInterpolationInFunBody(t *testing.T) {
 		},
 		{
 			"interp inside (do ...) body",
-			"(fun tag (n) (identity do (var s 'n=%n') s))\n(tag 7)",
+			"(fun tag (n) (identity do (let var s = 'n=%n') s))\n(tag 7)",
 			"n=7",
 		},
 		{

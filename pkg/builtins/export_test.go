@@ -20,7 +20,7 @@ func TestPackageExportsVarConst(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(pkgDir, "cfg.phl"),
-		[]byte("(const Pi 3)\n(var Count 0)\n(const lower 9)\n"), 0o644); err != nil {
+		[]byte("(let pi = 3)\n(let var count = 0)\n(let lower = 9)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

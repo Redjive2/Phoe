@@ -3,7 +3,6 @@ package builtins
 import (
 	"fmt"
 	"math"
-	"unicode"
 
 	"pho/pkg/core"
 	"pho/pkg/goop"
@@ -149,9 +148,9 @@ func dotBuiltins() map[string]core.StackEntry {
 						return ctx.Errorf(core.ErrField, "cannot index struct instance with non-identifier key '%s'", ident)
 					}
 
-					// Lowercase fields and methods are private: visible only
+					// `#`-prefixed fields and methods are private: visible only
 					// while one of the instance's own methods is running.
-					if unicode.IsLower(rune(ident[0])) && !inst.Privileged {
+					if ident[0] == '#' && !inst.Privileged {
 						return ctx.Errorf(core.ErrField, "cannot index struct instance with private key '%s'", ident)
 					}
 

@@ -18,19 +18,19 @@ func TestConstTypePropagation(t *testing.T) {
 	defer annot.SetDefault(annot.New(nil))
 
 	f := "(fun f (Number) String)\n(fun f (n) 's')\n" // f  : Number -> String
-	g := "(fun g (Number) Nil)\n(fun g (n) Nil)\n"    // g  : Number -> Nil
-	gs := "(fun gs (String) Nil)\n(fun gs (s) Nil)\n" // gs : String -> Nil
+	g := "(fun g (Number) none)\n(fun g (n) none)\n"    // g  : Number -> Nil
+	gs := "(fun gs (String) none)\n(fun gs (s) none)\n" // gs : String -> Nil
 	cases := []struct {
 		name    string
 		src     string
 		wantErr bool
 	}{
-		{"call-result chain", f + g + "(const a (f 5))\n(g a)", true},
-		{"multi-hop const", f + g + "(const a (f 5))\n(const b a)\n(g b)", true},
-		{"const matches expected", f + gs + "(const a (f 5))\n(gs a)", false},
-		{"var is NOT propagated", f + g + "(var a (f 5))\n(g a)", false},
-		{"unannotated call result stays gradual", g + "(fun h (x) x)\n(const a (h 5))\n(g a)", false},
-		{"const literal stays precise", g + gs + "(const a 5)\n(gs a)", true},
+		{"call-result chain", f + g + "(let a = (f 5))\n(g a)", true},
+		{"multi-hop const", f + g + "(let a = (f 5))\n(let b = a)\n(g b)", true},
+		{"const matches expected", f + gs + "(let a = (f 5))\n(gs a)", false},
+		{"var is NOT propagated", f + g + "(let var a = (f 5))\n(g a)", false},
+		{"unannotated call result stays gradual", g + "(fun h (x) x)\n(let a = (h 5))\n(g a)", false},
+		{"const literal stays precise", g + gs + "(let a = 5)\n(gs a)", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

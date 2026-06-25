@@ -23,7 +23,7 @@ func TestShapeBridge(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	point := "(struct Point.{ X Number })\n"
+	point := "(struct Point.{ x Number })\n"
 	expect := func(paramType string) string {
 		return "(fun f (" + paramType + ") Nil)\n(fun f (x) Nil)\n"
 	}
@@ -33,18 +33,18 @@ func TestShapeBridge(t *testing.T) {
 		wantErr bool
 	}{
 		// Fires: a shaped variable against an incompatible declared type, no annotation.
-		{"struct-var vs String", point + expect("String") + "(var p Point.{ X 1 })\n(f p)", true},
-		{"list-var vs String", expect("String") + "(var xs [1 2 3])\n(f xs)", true},
-		{"num-var vs String", expect("String") + "(var n 5)\n(f n)", true},
-		{"nil-var vs Number", expect("Number") + "(var z Nil)\n(f z)", true},
+		{"struct-var vs String", point + expect("String") + "(let var p = Point.{ x 1 })\n(f p)", true},
+		{"list-var vs String", expect("String") + "(let var xs = [1 2 3])\n(f xs)", true},
+		{"num-var vs String", expect("String") + "(let var n = 5)\n(f n)", true},
+		{"nil-var vs Number", expect("Number") + "(let var z = none)\n(f z)", true},
 
 		// Soundness: must stay silent where the shape can't see the refinement.
-		{"num-var vs Number", expect("Number") + "(var n 5)\n(f n)", false},
-		{"num-var vs Number|Nil", expect("(Or Number Nil)") + "(var n 5)\n(f n)", false},
-		{"num-var vs singleton 5", expect("5") + "(var n 5)\n(f n)", false},
-		{"list-var vs (List Number)", expect("(List Number)") + "(var xs [1 2 3])\n(f xs)", false},
-		{"list-var vs (List String)", expect("(List String)") + "(var xs [1 2 3])\n(f xs)", false},
-		{"struct-var vs record it satisfies", point + expect("Struct.{ X Number }") + "(var p Point.{ X 1 })\n(f p)", false},
+		{"num-var vs Number", expect("Number") + "(let var n = 5)\n(f n)", false},
+		{"num-var vs Number|Nil", expect("(Or Number none)") + "(let var n = 5)\n(f n)", false},
+		{"num-var vs singleton 5", expect("5") + "(let var n = 5)\n(f n)", false},
+		{"list-var vs (List Number)", expect("(List Number)") + "(let var xs = [1 2 3])\n(f xs)", false},
+		{"list-var vs (List String)", expect("(List String)") + "(let var xs = [1 2 3])\n(f xs)", false},
+		{"struct-var vs record it satisfies", point + expect("Struct.{ X Number }") + "(let var p = Point.{ x 1 })\n(f p)", false},
 
 		// Control: the precise (literal) path is unchanged.
 		{"list-literal vs String", expect("String") + "(f [1 2 3])", true},

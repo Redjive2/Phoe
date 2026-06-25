@@ -52,24 +52,24 @@ func TestPrimitiveMethod(t *testing.T) {
 	}{
 		{
 			"zero-arg method on a literal",
-			"(method Number.Double (self) do (* self 2))\n(5.Double)",
+			"(method Number.double (self) do (* self 2))\n(5.double)",
 			10,
 		},
 		{
 			"method with an argument",
-			"(method Number.Plus (self n) do (+ self n))\n(10.Plus 5)",
+			"(method Number.plus (self n) do (+ self n))\n(10.plus 5)",
 			15,
 		},
 		{
 			"method on a bound variable",
-			"(method Number.Square (self) do (* self self))\n(const n 7)\n(n.Square)",
+			"(method Number.square (self) do (* self self))\n(let n = 7)\n(n.square)",
 			49,
 		},
 		{
 			// `x.M` yields a bound method reference; each (…) call applies it,
 			// so a method's result can take another method call.
 			"call on a method result",
-			"(method Number.Inc (self) do (+ self 1))\n(((3.Inc).Inc).Inc)",
+			"(method Number.inc (self) do (+ self 1))\n(((3.inc).inc).inc)",
 			6,
 		},
 	}
@@ -90,7 +90,7 @@ func TestPrimitiveProperty(t *testing.T) {
 	// A read-only computed property on Number, backed by an anonymous method.
 	// A property is read WITHOUT a call — `n.Zero?` is the value directly
 	// (unlike a method `(n.Method)`, which is a call on a method reference).
-	const decl = "(property Number.Zero? get (method Number (self) do (== self 0)))\n"
+	const decl = "(property Number.zero? get (method Number (self) do (== self 0)))\n"
 
 	if got := evalInPackage(t, decl+"0.Zero?", nil); got.Kind != core.KindBool || got.Val.(bool) != true {
 		t.Fatalf("0.Zero? = %v (%s), want True", got.Val, got.Kind)
@@ -104,7 +104,7 @@ func TestPrimitiveMethodUnknownMember(t *testing.T) {
 	// Accessing an undefined member is a clean error (Nil after the
 	// diagnostic), not a panic.
 	var codes []string
-	got := evalInPackage(t, "(5.Nope)", func(c string) { codes = append(codes, c) })
+	got := evalInPackage(t, "(5.nope)", func(c string) { codes = append(codes, c) })
 	if got.Kind != core.KindNil {
 		t.Fatalf("(5.Nope) = %v (%s), want Nil after diagnostic", got.Val, got.Kind)
 	}
@@ -117,7 +117,7 @@ func TestPrimitiveMethodDuplicate(t *testing.T) {
 	// Declaring the same (type, member) twice in one package is rejected.
 	var codes []string
 	evalInPackage(t,
-		"(method Number.Dup (self) do self)\n(method Number.Dup (self) do self)",
+		"(method Number.dup (self) do self)\n(method Number.dup (self) do self)",
 		func(c string) { codes = append(codes, c) })
 	if !hasCode(codes, core.ErrRedeclare) {
 		t.Fatalf("expected a %q diagnostic for a duplicate primitive method; got %v", core.ErrRedeclare, codes)
@@ -136,11 +136,11 @@ func TestBuiltinModuleCollectionMethods(t *testing.T) {
 		}
 	}
 	// .Size / .Keys / .Empty? are PROPERTIES — read without a call.
-	num("[1 2 3].Size", 3)
+	num("[1 2 3].size", 3)
 	num("'café'.Size", 4) // rune count, not bytes
-	num("{ 'a' 1 'b' 2 }.Size", 2)
+	num("[ 'a' -> 1 'b' -> 2 ].size", 2)
 
-	keys := evalInPackage(t, "[10 20 30].Keys", nil)
+	keys := evalInPackage(t, "[10 20 30].keys", nil)
 	if keys.Kind != core.KindArray {
 		t.Fatalf("([10 20 30].Keys) kind = %s, want array", keys.Kind)
 	}
@@ -149,10 +149,10 @@ func TestBuiltinModuleCollectionMethods(t *testing.T) {
 		t.Errorf("([10 20 30].Keys) = %v, want [0 1 2]", ks)
 	}
 
-	if got := evalInPackage(t, "[].Empty?", nil); got.Kind != core.KindBool || !got.Val.(bool) {
+	if got := evalInPackage(t, "[].empty?", nil); got.Kind != core.KindBool || !got.Val.(bool) {
 		t.Errorf("[].Empty? = %v, want True", got.Val)
 	}
-	if got := evalInPackage(t, "[1].Empty?", nil); got.Kind != core.KindBool || got.Val.(bool) {
+	if got := evalInPackage(t, "[1].empty?", nil); got.Kind != core.KindBool || got.Val.(bool) {
 		t.Errorf("[1].Empty? = %v, want False", got.Val)
 	}
 }
@@ -166,11 +166,11 @@ func TestBuiltinUniversalMethods(t *testing.T) {
 			t.Errorf("%s = %v (%s), want %v", src, got.Val, got.Kind, want)
 		}
 	}
-	boolean("(5.Is? Number)", true)
-	boolean("(5.Is? String)", false)
-	boolean("('hi'.Is? String)", true)
-	boolean("([1 2 3].Is? List)", true)
+	boolean("(5.is? Number)", true)
+	boolean("(5.is? String)", false)
+	boolean("('hi'.is? String)", true)
+	boolean("([1 2 3].is? List)", true)
 
-	boolean("(2.In? [1 2 3])", true)
-	boolean("(9.In? [1 2 3])", false)
+	boolean("(2.in? [1 2 3])", true)
+	boolean("(9.in? [1 2 3])", false)
 }

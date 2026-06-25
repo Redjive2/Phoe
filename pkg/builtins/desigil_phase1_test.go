@@ -18,17 +18,17 @@ func TestDesigiledBuiltins(t *testing.T) {
 		src  string
 		want float64
 	}{
-		{"var + ref", "(var x 5)\nx", 5},
-		{"const + ref", "(const k 7)\nk", 7},
+		{"var + ref", "(let var x = 5)\nx", 5},
+		{"const + ref", "(let k = 7)\nk", 7},
 		{"fun named", "(fun square (n) (* n n))\n(square 6)", 36},
-		{"fun anon", "(var dbl (fun (n) (* n 2)))\n(dbl 9)", 18},
-		{"if then", "(if True then 1 else 2)", 1},
-		{"if else", "(if False then 1 else 2)", 2},
-		{"assign", "(var x 1)\n(= x 10)\nx", 10},
-		{"foreach iterator", "(var s 0)\n(foreach n in [1 2 3 4] (= s (+ s n)))\ns", 10},
-		{"while loop", "(var i 0)\n(while (< i 3) then (= i (+ i 1)))\ni", 3},
-		{"multi-stmt body", "(fun f (n) (identity do (var t (* n 2)) (+ t 1)))\n(f 5)", 11},
-		{"string dict key read by bracket", "(var m { 'k' 9 })\nm.['k']", 9},
+		{"fun anon", "(let var dbl = (fun (n) (* n 2)))\n(dbl 9)", 18},
+		{"if then", "(if true then 1 else 2)", 1},
+		{"if else", "(if false then 1 else 2)", 2},
+		{"assign", "(let var x = 1)\n(= x 10)\nx", 10},
+		{"foreach iterator", "(let var s = 0)\n(foreach n in [1 2 3 4] (= s (+ s n)))\ns", 10},
+		{"while loop", "(let var i = 0)\n(while (< i 3) then (= i (+ i 1)))\ni", 3},
+		{"multi-stmt body", "(fun f (n) (identity do (let var t = (* n 2)) (+ t 1)))\n(f 5)", 11},
+		{"string dict key read by bracket", "(let var m = [ 'k' -> 9 ])\nm.['k']", 9},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -47,11 +47,11 @@ func TestDesigiledBuiltins(t *testing.T) {
 // mutating method with a multi-statement body, called twice. Construction
 // uses the bare-key `Counter.{ Value 10 step 3 }` form.
 func TestDesigiledStructMethod(t *testing.T) {
-	src := `(struct Counter Value step)
-(method Counter.Bump (self) (identity do (= self.Value (+ self.Value self.step)) self.Value))
-(var c Counter.{ Value 10 step 3 })
-(c.Bump)
-(c.Bump)`
+	src := `(struct Counter value #step)
+(method Counter.bump (self) (identity do (= self.value (+ self.value self.#step)) self.value))
+(let var c = Counter.{ value 10 #step 3 })
+(c.bump)
+(c.bump)`
 	got := evalProgram(t, src)
 	if got.Kind != core.KindNum || got.Val.(float64) != 16 {
 		t.Errorf("Bump twice from 10 step 3 = %#v, want num 16", got)

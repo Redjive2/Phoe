@@ -18,10 +18,10 @@ func analyze(t *testing.T, src string) []Diagnostic {
 	return AnalyzeFile(path, []byte(src))
 }
 
-const pointPrelude = `(struct Point X y)
-(method Point.Shift (self d) (+ self.X d))
-(method Point.tweak (self d) (+ self.y d))
-(var p Point.{ X 10 y 20 })
+const pointPrelude = `(struct Point x #y)
+(method Point.shift (self d) (+ self.x d))
+(method Point.#tweak (self d) (+ self.#y d))
+(let var p = Point.{ x 10 #y 20 })
 `
 
 // ----------------------------------------------------------------------
@@ -29,7 +29,7 @@ const pointPrelude = `(struct Point X y)
 // ----------------------------------------------------------------------
 
 func TestUnknownMemberOnInstance(t *testing.T) {
-	diags := analyze(t, pointPrelude+`(var q p.Nope)
+	diags := analyze(t, pointPrelude+`(let var q = p.nope)
 `)
 	if !hasDiagWithName(diags, "unknown-member", "Nope") {
 		t.Fatalf("expected unknown-member for p.Nope, got %#v", diags)
@@ -37,8 +37,8 @@ func TestUnknownMemberOnInstance(t *testing.T) {
 }
 
 func TestKnownMembersAreSilent(t *testing.T) {
-	diags := analyze(t, pointPrelude+`(var a p.X)
-(var b (p.Shift 1))
+	diags := analyze(t, pointPrelude+`(let var a = p.x)
+(let var b = (p.shift 1))
 `)
 	for _, code := range []string{"unknown-member", "private-member-access", "invalid-member-access"} {
 		if hasDiag(diags, code) {
@@ -48,8 +48,8 @@ func TestKnownMembersAreSilent(t *testing.T) {
 }
 
 func TestPrivateMemberOutsideMethod(t *testing.T) {
-	diags := analyze(t, pointPrelude+`(var a p.y)
-(var b (p.tweak 1))
+	diags := analyze(t, pointPrelude+`(let var a = p.#y)
+(let var b = (p.#tweak 1))
 `)
 	if !hasDiagWithName(diags, "private-member-access", "'y'") {
 		t.Fatalf("expected private-member-access for p.y, got %#v", diags)
@@ -60,9 +60,9 @@ func TestPrivateMemberOutsideMethod(t *testing.T) {
 }
 
 func TestSelfAccessIsPrivileged(t *testing.T) {
-	diags := analyze(t, `(struct Point X y)
-(method Point.Sum (self) (+ self.X self.y))
-(method Point.Bad (self) self.zzz)
+	diags := analyze(t, `(struct Point x #y)
+(method Point.sum (self) (+ self.x self.#y))
+(method Point.bad (self) self.#zzz)
 `)
 	if hasDiag(diags, "private-member-access") {
 		t.Fatalf("self access must not fire privacy, got %#v", diags)
@@ -73,10 +73,10 @@ func TestSelfAccessIsPrivileged(t *testing.T) {
 }
 
 func TestSelfAliasKeepsPrivilege(t *testing.T) {
-	diags := analyze(t, `(struct Point X y)
-(method Point.Roundabout (self) (identity do
-  (var me self)
-  me.y))
+	diags := analyze(t, `(struct Point x #y)
+(method Point.roundabout (self) (identity do
+  (let var me = self)
+  me.#y))
 `)
 	if hasDiag(diags, "private-member-access") {
 		t.Fatalf("aliased self must keep privilege, got %#v", diags)
@@ -86,17 +86,17 @@ func TestSelfAliasKeepsPrivilege(t *testing.T) {
 func TestUnknownMemberViaSiblingFile(t *testing.T) {
 	dir := t.TempDir()
 	sibling := filepath.Join(dir, "types.phl")
-	if err := os.WriteFile(sibling, []byte(`(struct Box Content)
-(method Box.Open (self) self.Content)
+	if err := os.WriteFile(sibling, []byte(`(struct Box content)
+(method Box.open (self) self.content)
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(dir, "use.phl")
-	src := []byte(`(fun Use () (identity do
-  (var b Box.{ Content 1 })
-  (var x b.Content)
-  (var y (b.Open))
-  (var z b.Missing)))
+	src := []byte(`(fun use () (identity do
+  (let var b = Box.{ content 1 })
+  (let var x = b.content)
+  (let var y = (b.open))
+  (let var z = b.missing)))
 `)
 	if err := os.WriteFile(target, src, 0o644); err != nil {
 		t.Fatal(err)
@@ -115,12 +115,12 @@ func TestUnknownMemberViaSiblingFile(t *testing.T) {
 // ----------------------------------------------------------------------
 
 func TestReassignmentRetargetsShape(t *testing.T) {
-	diags := analyze(t, `(struct Point X)
-(struct Line Length)
-(var v Point.{ X 1 })
-(= v Line.{ Length 2 })
-(var a v.Length)
-(var b v.X)
+	diags := analyze(t, `(struct Point x)
+(struct Line length)
+(let var v = Point.{ x 1 })
+(= v Line.{ length 2 })
+(let var a = v.length)
+(let var b = v.x)
 `)
 	if !hasDiagWithName(diags, "unknown-member", "'X'") {
 		t.Fatalf("expected unknown-member for v.X after retarget to Line, got %#v", diags)
@@ -131,10 +131,10 @@ func TestReassignmentRetargetsShape(t *testing.T) {
 }
 
 func TestBranchReassignmentInvalidatesShape(t *testing.T) {
-	diags := analyze(t, `(struct Point X)
-(var v Point.{ X 1 })
+	diags := analyze(t, `(struct Point x)
+(let var v = Point.{ x 1 })
 (if (== 1 1) then (= v 5))
-(var a v.Whatever)
+(let var a = v.whatever)
 `)
 	if hasDiag(diags, "unknown-member") || hasDiag(diags, "invalid-member-access") {
 		t.Fatalf("branch reassignment must invalidate the shape, got %#v", diags)
@@ -142,10 +142,10 @@ func TestBranchReassignmentInvalidatesShape(t *testing.T) {
 }
 
 func TestFunctionBodyAssignInvalidatesTopLevelShape(t *testing.T) {
-	diags := analyze(t, `(struct Point X)
-(var v Point.{ X 1 })
+	diags := analyze(t, `(struct Point x)
+(let var v = Point.{ x 1 })
 (fun clobber () (= v 5))
-(var a v.Anything)
+(let var a = v.anything)
 `)
 	if hasDiag(diags, "unknown-member") {
 		t.Fatalf("cross-frame assignment must invalidate the shape, got %#v", diags)
@@ -157,8 +157,8 @@ func TestFunctionBodyAssignInvalidatesTopLevelShape(t *testing.T) {
 // ----------------------------------------------------------------------
 
 func TestDictBareAccessNeedsBrackets(t *testing.T) {
-	diags := analyze(t, `(var d {'a' 1 'b' 2})
-(var x d.zzz)
+	diags := analyze(t, `(let var d = ['a' -> 1 'b' -> 2])
+(let var x = d.#zzz)
 `)
 	// Bare dot on a dict is a member lookup; `zzz` isn't a member of Map, so
 	// it's flagged (dict KEY lookup must use brackets, d.[zzz]).
@@ -168,8 +168,8 @@ func TestDictBareAccessNeedsBrackets(t *testing.T) {
 }
 
 func TestDictBracketUnboundKeyIsUnresolved(t *testing.T) {
-	diags := analyze(t, `(var d {'a' 1})
-(var x d.[zzz])
+	diags := analyze(t, `(let var d = ['a' -> 1])
+(let var x = d.[zzz])
 `)
 	// The key expression inside the bracket is an ordinary expression, so
 	// an unbound name is the standard unresolved-identifier, not a
@@ -180,9 +180,9 @@ func TestDictBracketUnboundKeyIsUnresolved(t *testing.T) {
 }
 
 func TestDictBracketBoundKeyIsSilent(t *testing.T) {
-	diags := analyze(t, `(var d {'a' 1})
-(var k 'a')
-(var x d.[k])
+	diags := analyze(t, `(let var d = ['a' -> 1])
+(let var k = 'a')
+(let var x = d.[k])
 `)
 	if hasDiag(diags, "unknown-key") || hasDiag(diags, "unresolved-identifier") {
 		t.Fatalf("a bound computed key must be silent, got %#v", diags)
@@ -190,8 +190,8 @@ func TestDictBracketBoundKeyIsSilent(t *testing.T) {
 }
 
 func TestDictUnknownStaticKeyWarns(t *testing.T) {
-	diags := analyze(t, `(var d {'a' 1 'b' 2})
-(var x d.['missing'])
+	diags := analyze(t, `(let var d = ['a' -> 1 'b' -> 2])
+(let var x = d.['missing'])
 `)
 	found := false
 	for _, d := range diags {
@@ -205,9 +205,9 @@ func TestDictUnknownStaticKeyWarns(t *testing.T) {
 }
 
 func TestDictKnownStaticKeySilent(t *testing.T) {
-	diags := analyze(t, `(var d {'a' 1 'b' 2})
-(var x d.['a'])
-(var y d.['b'])
+	diags := analyze(t, `(let var d = ['a' -> 1 'b' -> 2])
+(let var x = d.['a'])
+(let var y = d.['b'])
 `)
 	if hasDiag(diags, "unknown-key") {
 		t.Fatalf("known static keys must be silent, got %#v", diags)
@@ -215,9 +215,9 @@ func TestDictKnownStaticKeySilent(t *testing.T) {
 }
 
 func TestDictWriteAddsKey(t *testing.T) {
-	diags := analyze(t, `(var d {'a' 1})
+	diags := analyze(t, `(let var d = ['a' -> 1])
 (= d.['fresh'] 2)
-(var x d.['fresh'])
+(let var x = d.['fresh'])
 `)
 	if hasDiag(diags, "unknown-key") {
 		t.Fatalf("a written key must be readable without warning, got %#v", diags)
@@ -225,9 +225,9 @@ func TestDictWriteAddsKey(t *testing.T) {
 }
 
 func TestComputedDictKeysDisableKeyChecks(t *testing.T) {
-	diags := analyze(t, `(var k 'dyn')
-(var d {k 1})
-(var x d.['anything'])
+	diags := analyze(t, `(let var k = 'dyn')
+(let var d = [k -> 1])
+(let var x = d.['anything'])
 `)
 	if hasDiag(diags, "unknown-key") {
 		t.Fatalf("computed keys must disable key tracking, got %#v", diags)
@@ -235,9 +235,9 @@ func TestComputedDictKeysDisableKeyChecks(t *testing.T) {
 }
 
 func TestArrayBareAccessNeedsBrackets(t *testing.T) {
-	diags := analyze(t, `(var arr [1 2 3])
-(var x arr.qqq)
-(var z arr.0)
+	diags := analyze(t, `(let var arr = [1 2 3])
+(let var x = arr.#qqq)
+(let var z = arr.0)
 `)
 	// An identifier after a bare dot is a member lookup that misses on a List;
 	// a numeric literal is steered to bracket indexing.
@@ -250,18 +250,18 @@ func TestArrayBareAccessNeedsBrackets(t *testing.T) {
 }
 
 func TestArrayBracketAccessIsChecked(t *testing.T) {
-	diags := analyze(t, `(var arr [1 2 3])
-(var i 0)
-(var y arr.[i])
-(var z arr.[0])
-(var w arr.[1 : 2])
+	diags := analyze(t, `(let var arr = [1 2 3])
+(let var i = 0)
+(let var y = arr.[i])
+(let var z = arr.[0])
+(let var w = arr.[1 : 2])
 `)
 	if hasDiag(diags, "invalid-member-access") {
 		t.Fatalf("bracket indexing/slicing must be silent, got %#v", diags)
 	}
 	// An unbound index expression inside the bracket is still caught.
-	unbound := analyze(t, `(var arr [1 2 3])
-(var x arr.[qqq])
+	unbound := analyze(t, `(let var arr = [1 2 3])
+(let var x = arr.[qqq])
 `)
 	if !hasDiagWithName(unbound, "unresolved-identifier", "qqq") {
 		t.Fatalf("an unbound index expression must be flagged, got %#v", unbound)
@@ -294,11 +294,11 @@ func TestIncompleteIfDoesNotPanicTheWalker(t *testing.T) {
 }
 
 func TestScalarAccess(t *testing.T) {
-	diags := analyze(t, `(var n 5)
-(var x n.foo)
-(var f 1.5)
-(var b True)
-(var y b.thing)
+	diags := analyze(t, `(let var n = 5)
+(let var x = n.#foo)
+(let var f = 1.5)
+(let var b = true)
+(let var y = b.#thing)
 `)
 	if !hasDiagWithName(diags, "unknown-member", "foo") {
 		t.Fatalf("expected unknown-member for n.foo, got %#v", diags)
@@ -319,7 +319,7 @@ func TestScalarAccess(t *testing.T) {
 // ----------------------------------------------------------------------
 
 func TestWriteUnknownField(t *testing.T) {
-	diags := analyze(t, pointPrelude+`(= p.Nope 1)
+	diags := analyze(t, pointPrelude+`(= p.nope 1)
 `)
 	if !hasDiagWithName(diags, "unknown-member", "Nope") {
 		t.Fatalf("expected unknown-member for write to p.Nope, got %#v", diags)
@@ -327,7 +327,7 @@ func TestWriteUnknownField(t *testing.T) {
 }
 
 func TestWriteToMethod(t *testing.T) {
-	diags := analyze(t, pointPrelude+`(= p.Shift 1)
+	diags := analyze(t, pointPrelude+`(= p.shift 1)
 `)
 	if !hasDiagWithName(diags, "unknown-member", "Shift") {
 		t.Fatalf("expected unknown-member for write to method p.Shift, got %#v", diags)
@@ -335,7 +335,7 @@ func TestWriteToMethod(t *testing.T) {
 }
 
 func TestWritePrivateFieldOutside(t *testing.T) {
-	diags := analyze(t, pointPrelude+`(= p.y 1)
+	diags := analyze(t, pointPrelude+`(= p.#y 1)
 `)
 	if !hasDiagWithName(diags, "private-member-access", "'y'") {
 		t.Fatalf("expected private-member-access for write to p.y, got %#v", diags)
@@ -343,8 +343,8 @@ func TestWritePrivateFieldOutside(t *testing.T) {
 }
 
 func TestWriteOwnFieldInMethod(t *testing.T) {
-	diags := analyze(t, `(struct Point X y)
-(method Point.Reset (self) (= self.y 0))
+	diags := analyze(t, `(struct Point x #y)
+(method Point.reset (self) (= self.#y 0))
 `)
 	if hasDiag(diags, "private-member-access") || hasDiag(diags, "unknown-member") {
 		t.Fatalf("self field writes must be fine, got %#v", diags)
@@ -356,13 +356,13 @@ func TestWriteOwnFieldInMethod(t *testing.T) {
 // ----------------------------------------------------------------------
 
 func TestUnknownShapesStaySilent(t *testing.T) {
-	diags := analyze(t, `(struct Point X)
-(fun mk () Point.{ X 1 })
+	diags := analyze(t, `(struct Point x)
+(fun mk () Point.{ x 1 })
 (fun use (p) (identity do
-  (var a p.Whatever)
-  (var b (mk))
-  (var c b.AlsoWhatever)
-  (var d b.AlsoWhatever.Chained)))
+  (let var a = p.whatever)
+  (let var b = (mk))
+  (let var c = b.also_whatever)
+  (let var d = b.also_whatever.chained)))
 `)
 	for _, code := range []string{"unknown-member", "invalid-member-access", "unknown-key", "private-member-access"} {
 		if hasDiag(diags, code) {

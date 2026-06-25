@@ -59,7 +59,7 @@ func TestEvaluateAttaches(t *testing.T) {
 // prepare strips the macro `resume` wrapper: `(~sig ...)` lowers to
 // `(resume (sig ...))`, and we must evaluate the inner `(sig ...)` directly.
 func TestPrepareUnwrapsResume(t *testing.T) {
-	node := prepare(parseForm(t, "(~sig Num Num)"))
+	node := prepare(parseForm(t, "(~sig num num)"))
 	br, ok := core.AsBranch(node)
 	if !ok {
 		t.Fatalf("expected a branch after prepare, got %T", node)
@@ -95,11 +95,11 @@ func TestEvaluateMacroCallUnwrapped(t *testing.T) {
 // the next.
 func TestIsolationBetweenAnnotations(t *testing.T) {
 	ev := New(nil)
-	a := ev.Evaluate(`(const shared 5)`, parseForm(t, `(const shared 5)`))
+	a := ev.Evaluate(`(let shared = 5)`, parseForm(t, `(let shared = 5)`))
 	if len(a.Diags) != 0 {
 		t.Fatalf("annotation A should be clean, got diags: %v", a.Diags)
 	}
-	b := ev.Evaluate(`(const other shared)`, parseForm(t, `(const other shared)`))
+	b := ev.Evaluate(`(let other = shared)`, parseForm(t, `(let other = shared)`))
 	if len(b.Diags) == 0 {
 		t.Fatalf("annotation B must not see A's 'shared'; expected an unresolved-identifier error")
 	}

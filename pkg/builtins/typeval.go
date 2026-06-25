@@ -163,7 +163,7 @@ func unknownIsMethod(ctx core.Context, argv []core.Node) core.Value {
 		return ctx.Errorf(core.ErrArity, "'Is?' takes exactly 1 argument (the type); got %d", len(argv))
 	}
 	self := ctx.Env.InstStack[0]
-	t, ok := asType(ctx, argv[0].Evaluate(ctx), "Is?")
+	t, ok := asType(ctx, argv[0].Evaluate(ctx), "is?")
 	if !ok {
 		return core.TvNil
 	}

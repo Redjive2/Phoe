@@ -11,13 +11,13 @@ import "testing"
 func TestContextAwareDoLintsClean(t *testing.T) {
 	src := []byte(`(fun classify (n) do
     (if (< n 0) then do
-        (const r 'neg')
+        (let r = 'neg')
         r
      elif (== n 0) then do
-        (const r 'zero')
+        (let r = 'zero')
         r
      else do
-        (const r 'pos')
+        (let r = 'pos')
         r))
 (classify -3)`)
 	for _, d := range AnalyzeFile("test.pho", src) {
@@ -29,12 +29,12 @@ func TestContextAwareDoLintsClean(t *testing.T) {
 func TestContextAwareDoUnlessLintsClean(t *testing.T) {
 	src := []byte(`(fun pick (b) do
     (unless b then do
-        (const r 1)
+        (let r = 1)
         r
      else do
-        (const r 2)
+        (let r = 2)
         r))
-(pick False)`)
+(pick false)`)
 	for _, d := range AnalyzeFile("test.pho", src) {
 		t.Errorf("unless+do should lint clean, got %s: %s", d.Code, d.Message)
 	}

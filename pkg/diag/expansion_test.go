@@ -20,7 +20,7 @@ func TestRenderExpansion(t *testing.T) {
 		Source: "(top)\n(evilMacro!)\n",
 		Expansion: &Expansion{
 			Macro:  "evilMacro",
-			Source: "(fakeFn arg)",
+			Source: "(fake_fn arg)",
 			Span:   sp(1, 1, 1, 13),
 		},
 	}

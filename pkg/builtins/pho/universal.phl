@@ -10,18 +10,18 @@
 
 -- True iff `self` is an element of `collection` (a list or string, or one of a
 -- dict's keys — whatever `foreach` iterates).
-(method Unknown.In? (self collection) do
+(method Unknown.in? (self collection) do
     (foreach value in collection
         (if (== self value) then 
-            (return True)
+            (return true)
         )
     )
     
-    False
+    false
 )
 
-(method Unknown.Pipe (self (spread steps)) do
-    (var acc self)
+(method Unknown.pipe (self (spread steps)) do
+    (let var acc = self)
 
     (foreach step in steps
         (= acc (step acc))
@@ -32,6 +32,6 @@
 
 -- (1.To String) <-> (String.From 1)
 --@ (~methodsig i ((From i) o) -> o)
-(method Unknown.To (self type) 
-    (type.From self)
+(method Unknown.to (self type) 
+    (type.from self)
 )

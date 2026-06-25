@@ -141,7 +141,7 @@ func isFunSigForm(params, ret ast.PNode) bool {
 func looksLikeReturnTypePNode(n ast.PNode) bool {
 	if leaf, ok := n.(*ast.PLeaf); ok {
 		switch leaf.Value {
-		case "Nil", "True", "False":
+		case "Nil", "True", "False", "none", "true", "false":
 			return true
 		}
 	}

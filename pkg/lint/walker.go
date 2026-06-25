@@ -1288,12 +1288,18 @@ func (w *walker) checkStatic(scope *Scope, br *ast.PBranch) {
 	switch d.Sub {
 	case "method":
 		if d.ArgList != nil && d.Body != nil {
-			w.walkStaticBody(scope, d.ArgList, d.Body)
+			w.walkStaticBody(scope, d.ArgList, d.Body, d.Owner)
 		}
 	case "property":
 		for _, c := range br.Children[3:] {
 			if cb, ok := c.(*ast.PBranch); ok && cb.Open == "(" && headIdent(cb) == "method" && len(cb.Children) >= 4 {
-				w.walkFunctionBody(scope, cb.Children[2], cb.Children[3], "")
+				// The getter `(method Recv (self) body)` has its receiver type at
+				// child 1; pass it as owner so `self` is allowed and resolves.
+				owner := ""
+				if recv, ok := cb.Children[1].(*ast.PLeaf); ok {
+					owner = recv.Value
+				}
+				w.walkFunctionBody(scope, cb.Children[2], cb.Children[3], owner)
 			}
 		}
 	}
@@ -1303,13 +1309,16 @@ func (w *walker) checkStatic(scope *Scope, br *ast.PBranch) {
 // `Self` (the receiver type) in scope. It reuses walkFunctionBody by prepending
 // a synthetic `Self` parameter, so `Self` and `Self.{ … }` resolve; no owner is
 // passed because a static method has no `self` instance.
-func (w *walker) walkStaticBody(scope *Scope, argList, body ast.PNode) {
-	items := []ast.PNode{&ast.PLeaf{Value: "Self", Span: argList.GetSpan()}}
+func (w *walker) walkStaticBody(scope *Scope, argList, body ast.PNode, owner string) {
+	items := []ast.PNode{&ast.PLeaf{Value: "self", Span: argList.GetSpan()}}
 	if br, ok := argList.(*ast.PBranch); ok {
 		items = append(items, br.Children...)
 	}
 	augmented := &ast.PBranch{Open: "(", Close: ")", Children: items, Span: argList.GetSpan()}
-	w.walkFunctionBody(scope, augmented, body, "")
+	// Passing the owner sets inMethod so `self` (the receiver type) is allowed
+	// in the body; a static method has no instance, but the privileged shape is
+	// harmless for reference checks.
+	w.walkFunctionBody(scope, augmented, body, owner)
 }
 
 // checkTrait walks a `(Trait (extends…) member…)` form. The extends-list
@@ -1333,14 +1342,14 @@ func (w *walker) checkTrait(scope *Scope, br *ast.PBranch) {
 		switch headIdent(sb) {
 		case "method":
 			if len(sb.Children) >= 4 { // (method Self.Name (args) body) — a default
-				w.walkFunctionBody(scope, sb.Children[2], sb.Children[3], "Self")
+				w.walkFunctionBody(scope, sb.Children[2], sb.Children[3], "self")
 			}
 		case "property":
 			// (property Self.Name get [impl] [set [impl]]) — each impl is a
 			// (method <recv> (args) body) default.
 			for _, c := range sb.Children[2:] {
 				if cb, ok := c.(*ast.PBranch); ok && cb.Open == "(" && headIdent(cb) == "method" && len(cb.Children) >= 4 {
-					w.walkFunctionBody(scope, cb.Children[2], cb.Children[3], "Self")
+					w.walkFunctionBody(scope, cb.Children[2], cb.Children[3], "self")
 				}
 			}
 			// `static` members are signature-only requirements whose `Self` receiver

@@ -2,7 +2,6 @@ package lint
 
 import (
 	"fmt"
-	"unicode"
 
 	"pho/pkg/ast"
 	"pho/pkg/span"
@@ -170,7 +169,7 @@ func (w *walker) checkInstanceMember(scope *Scope, dot *ast.PDot, sh Shape, writ
 	// Privacy mirrors the runtime's check order: lowercase members are only
 	// reachable while one of the instance's own methods runs, which
 	// statically means "the receiver traces back to self".
-	if (unicode.IsLower(rune(name[0])) || name[0] == '#') && !sh.Privileged {
+	if name[0] == '#' && !sh.Privileged {
 		w.emitMember(rhs.Span, "private-member-access",
 			fmt.Sprintf("'%s' is private to struct '%s' — lowercase or '#'-prefixed members are only accessible through 'self' inside its methods", name, si.Name))
 		return

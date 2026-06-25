@@ -57,7 +57,7 @@ func builtinModule() *core.Package {
 		// Membership `(x.Is? T)` lives here, NOT as a builtin, so the dot form
 		// is the only way to test a type. Being pure Go, it is also immune to
 		// any breakage in the macro/do pipeline the .phl bindings rely on.
-		ctx.AddMethod(core.UnknownTypeKey, "Is?", unknownIsMethod, false, true)
+		ctx.AddMethod(core.UnknownTypeKey, "is?", unknownIsMethod, false, true)
 
 		entries, err := builtinModuleFS.ReadDir("pho")
 		if err != nil {

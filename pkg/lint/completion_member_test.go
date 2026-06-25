@@ -56,10 +56,10 @@ func TestDotCompletionOnSelf(t *testing.T) {
 
 // Partial member already typed: `p.Sh` still completes members.
 func TestDotCompletionPartialMember(t *testing.T) {
-	src := `(struct Point X y)
-(method Point.Shift (self d) (+ self.X d))
-(var p Point.{ X 10 y 20 })
-(var q p.Sh)
+	src := `(struct Point x #y)
+(method Point.shift (self d) (+ self.x d))
+(let var p = Point.{ x 10 #y 20 })
+(let var q = p.sh)
 `
 	defs := CompletionsAt("main.pho", []byte(src), 4, 12)
 	if !containsName(defs, "Shift") {
@@ -86,9 +86,9 @@ func TestDotCompletionOnImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	lib := filepath.Join(pkgDir, "lib.phl")
-	if err := os.WriteFile(lib, []byte(`(fun Visible () 1)
+	if err := os.WriteFile(lib, []byte(`(fun visible () 1)
 (fun hidden () 2)
-(struct Thing Part)
+(struct Thing part)
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +111,8 @@ func TestDotCompletionOnImport(t *testing.T) {
 
 // Without a dot context, completion falls back to scope names.
 func TestPlainCompletionStillWorks(t *testing.T) {
-	src := `(var value 1)
-(var x )
+	src := `(let var value = 1)
+(let var x )
 `
 	defs := CompletionsAt("main.pho", []byte(src), 2, 9)
 	if !containsName(defs, "value") {

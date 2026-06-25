@@ -7,8 +7,8 @@ import "testing"
 // frame), so a later reference must resolve — no false unresolved.
 func TestIfArmVarHoists(t *testing.T) {
 	src := "(fun F () (identity do\n" +
-		"    (if True then (var x 5))\n" +
-		"    (const y x)\n" +
+		"    (if true then (let var x = 5))\n" +
+		"    (let y = x)\n" +
 		"))\n"
 	diags := AnalyzeFile("t.phl", []byte(src))
 	if hasDiag(diags, "unresolved-identifier") {
@@ -23,9 +23,9 @@ func TestIfArmVarHoists(t *testing.T) {
 // This is the regression for "do-notation declarations show up as unresolved".
 func TestDoBodyVarsResolve(t *testing.T) {
 	cases := map[string]string{
-		"fun body const":  "(fun f (a b) do\n  (const sum (+ a b))\n  (+ sum 1))\n",
-		"var then rebind": "(fun g () do\n  (var n 0)\n  (= n (+ n 1))\n  n)\n",
-		"nested for-do":   "(fun h (xs) do\n  (var acc 0)\n  (foreach x in xs do\n    (var step (+ x 1))\n    (= acc (+ acc step)))\n  acc)\n",
+		"fun body const":  "(fun f (a b) do\n  (let sum = (+ a b))\n  (+ sum 1))\n",
+		"var then rebind": "(fun g () do\n  (let var n = 0)\n  (= n (+ n 1))\n  n)\n",
+		"nested for-do":   "(fun h (xs) do\n  (let var acc = 0)\n  (foreach x in xs do\n    (let var step = (+ x 1))\n    (= acc (+ acc step)))\n  acc)\n",
 	}
 	for name, src := range cases {
 		diags := AnalyzeFile("t.phl", []byte(src))
@@ -39,7 +39,7 @@ func TestDoBodyVarsResolve(t *testing.T) {
 // writing into a string index must be a static error.
 func TestStringIndexWriteRejected(t *testing.T) {
 	src := "(fun F () (identity do\n" +
-		"    (var s 'hello')\n" +
+		"    (let var s = 'hello')\n" +
 		"    (= s.0 9)\n" +
 		"))\n"
 	diags := AnalyzeFile("t.phl", []byte(src))
@@ -53,11 +53,11 @@ func TestStringIndexWriteRejected(t *testing.T) {
 // binding's shape, so the outer's member access isn't checked against the
 // closure's value — no false invalid-member-access.
 func TestNestedClosureDoesNotRetargetOuterShape(t *testing.T) {
-	src := "(struct P Field)\n" +
+	src := "(struct P field)\n" +
 		"(fun outer () (identity do\n" +
-		"    (var x P.{ Field 1 })\n" +
+		"    (let var x = P.{ field 1 })\n" +
 		"    (fun inner () (= x 5))\n" +
-		"    (const y x.Field)\n" +
+		"    (let y = x.field)\n" +
 		"))\n"
 	diags := AnalyzeFile("t.phl", []byte(src))
 	if hasDiag(diags, "invalid-member-access") {
@@ -69,8 +69,8 @@ func TestNestedClosureDoesNotRetargetOuterShape(t *testing.T) {
 // `p.X.`, the receiver's type isn't tracked, so completion must offer
 // nothing rather than dumping the whole scope.
 func TestChainedDotCompletionOffersNothing(t *testing.T) {
-	src := "(struct P X)\n" +
-		"(var p P.{ X 1 })\n" +
+	src := "(struct P x)\n" +
+		"(let var p = P.{ x 1 })\n" +
 		"(p.X.\n"
 	// Cursor right after the second dot on line 3: "(p.X." -> col 6.
 	defs := CompletionsAt("t.pho", []byte(src), 3, 6)

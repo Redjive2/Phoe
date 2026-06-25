@@ -13,12 +13,12 @@ import (
 // An unknown field name in a `T.{ field value … }` construction is an error
 // (the runtime rejects an undeclared key — see builtins/decl.go).
 func TestUnknownFieldInConstruction(t *testing.T) {
-	diags := analyze(t, "(struct Point X y)\n(var p Point.{ Bogus 1 })\n")
+	diags := analyze(t, "(struct Point x #y)\n(let var p = Point.{ bogus 1 })\n")
 	if !hasDiagWithName(diags, "unknown-field", "Bogus") {
 		t.Fatalf("expected unknown-field for Point.{ Bogus … }, got %#v", diags)
 	}
 	// Valid fields draw nothing.
-	clean := analyze(t, "(struct Point X y)\n(var p Point.{ X 1 y 2 })\n")
+	clean := analyze(t, "(struct Point x #y)\n(let var p = Point.{ x 1 #y 2 })\n")
 	if hasDiag(clean, "unknown-field") {
 		t.Fatalf("Point.{ X … y … } must be clean, got %#v", clean)
 	}
@@ -27,7 +27,7 @@ func TestUnknownFieldInConstruction(t *testing.T) {
 // Setting the same field twice in a construction is a (warning) — the last
 // value silently wins.
 func TestDuplicateFieldInConstruction(t *testing.T) {
-	diags := analyze(t, "(struct Point X y)\n(var p Point.{ X 1 X 2 })\n")
+	diags := analyze(t, "(struct Point x #y)\n(let var p = Point.{ x 1 x 2 })\n")
 	if !hasDiag(diags, "duplicate-field") {
 		t.Fatalf("expected duplicate-field for Point.{ X 1 X 2 }, got %#v", diags)
 	}
@@ -39,17 +39,17 @@ func TestDuplicateFieldInConstruction(t *testing.T) {
 
 func TestUnreachableAfterReturn(t *testing.T) {
 	// A statement after a bare (return …) in a do-sequence can never run.
-	diags := analyze(t, "(fun f () (identity do (return 1) (var x 2)))\n")
+	diags := analyze(t, "(fun f () (identity do (return 1) (let var x = 2)))\n")
 	if !hasDiag(diags, "unreachable-code") {
 		t.Fatalf("expected unreachable-code after (return …), got %#v", diags)
 	}
 	// A return as the LAST statement is the exit value — not unreachable.
-	last := analyze(t, "(fun f () (identity do (var x 1) (return x)))\n")
+	last := analyze(t, "(fun f () (identity do (let var x = 1) (return x)))\n")
 	if hasDiag(last, "unreachable-code") {
 		t.Fatalf("return as last statement must not flag unreachable, got %#v", last)
 	}
 	// A return nested inside an `(if …)` arm is conditional — not unreachable.
-	cond := analyze(t, "(fun f (c) (identity do (if c then (return 1)) (var x 2) x))\n")
+	cond := analyze(t, "(fun f (c) (identity do (if c then (return 1)) (let var x = 2) x))\n")
 	if hasDiag(cond, "unreachable-code") {
 		t.Fatalf("conditional return must not flag unreachable, got %#v", cond)
 	}

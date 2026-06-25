@@ -9,7 +9,7 @@ import (
 // The lexer emits a `--@ ` line as an annotation token carrying the body
 // text verbatim, distinct from an ordinary skipped comment.
 func TestLexAnnotationToken(t *testing.T) {
-	tokens, errs := LexPos("--@ (~type Str)\n(const m 'hi')")
+	tokens, errs := LexPos("--@ (~type Str)\n(let m = 'hi')")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected lex errors: %#v", errs)
 	}
@@ -23,8 +23,8 @@ func TestLexAnnotationToken(t *testing.T) {
 	if got == nil {
 		t.Fatalf("no annotation token produced; tokens=%#v", tokens)
 	}
-	if got.Value != "(~type Str)" {
-		t.Fatalf("annotation body = %q, want %q", got.Value, "(~type Str)")
+	if got.Value != "(~type str)" {
+		t.Fatalf("annotation body = %q, want %q", got.Value, "(~type str)")
 	}
 }
 
@@ -51,8 +51,8 @@ func TestAnnotationCaptured(t *testing.T) {
 		t.Fatalf("expected 1 annotation, got %d", len(br.Annotations))
 	}
 	ann := br.Annotations[0]
-	if ann.Raw != "(~sig Num Num)" {
-		t.Fatalf("annotation Raw = %q, want %q", ann.Raw, "(~sig Num Num)")
+	if ann.Raw != "(~sig num num)" {
+		t.Fatalf("annotation Raw = %q, want %q", ann.Raw, "(~sig num num)")
 	}
 	mc, ok := ann.Form.(*ast.PMacroCall)
 	if !ok {
@@ -74,7 +74,7 @@ func TestAnnotationStacked(t *testing.T) {
 	if len(br.Annotations) != 2 {
 		t.Fatalf("expected 2 annotations, got %d", len(br.Annotations))
 	}
-	if br.Annotations[0].Raw != "(~sig Num)" || br.Annotations[1].Raw != "(~doc 'adds')" {
+	if br.Annotations[0].Raw != "(~sig num)" || br.Annotations[1].Raw != "(~doc 'adds')" {
 		t.Fatalf("annotation order wrong: %q then %q",
 			br.Annotations[0].Raw, br.Annotations[1].Raw)
 	}

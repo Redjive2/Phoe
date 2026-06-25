@@ -22,16 +22,16 @@ func TestBracketIndexReads(t *testing.T) {
 		return v.Val.(float64)
 	}
 
-	if got := num("(var arr [10 20 30])\n(var i 1)\narr.[i]"); got != 20 {
+	if got := num("(let var arr = [10 20 30])\n(let var i = 1)\narr.[i]"); got != 20 {
 		t.Errorf("arr.[i] = %v, want 20", got)
 	}
-	if got := num("(var arr [10 20 30])\narr.[0]"); got != 10 {
+	if got := num("(let var arr = [10 20 30])\narr.[0]"); got != 10 {
 		t.Errorf("arr.[0] = %v, want 10", got)
 	}
-	if got := num("(var d {'a' 1 'b' 2})\n(var k 'b')\nd.[k]"); got != 2 {
+	if got := num("(let var d = ['a' -> 1 'b' -> 2])\n(let var k = 'b')\nd.[k]"); got != 2 {
 		t.Errorf("d.[k] = %v, want 2", got)
 	}
-	if got := num("(var d {'a' 1 'b' 2})\nd.['a']"); got != 1 {
+	if got := num("(let var d = ['a' -> 1 'b' -> 2])\nd.['a']"); got != 1 {
 		t.Errorf("d.[\"a\"] = %v, want 1", got)
 	}
 	// The fractional-decimal hack is a bare numeric RHS, NOT indexing, and
@@ -42,7 +42,7 @@ func TestBracketIndexReads(t *testing.T) {
 }
 
 func TestBracketSliceReads(t *testing.T) {
-	v := evalProgram(t, "(var arr [10 20 30 40])\narr.[1 : 3]")
+	v := evalProgram(t, "(let var arr = [10 20 30 40])\narr.[1 : 3]")
 	if v.Kind != core.KindArray {
 		t.Fatalf("arr.[1 : 3] kind = %q, want array", v.Kind)
 	}
@@ -52,10 +52,10 @@ func TestBracketSliceReads(t *testing.T) {
 }
 
 func TestBracketIndexWrites(t *testing.T) {
-	if got := evalProgram(t, "(var arr [10 20 30])\n(= arr.[2] 99)\narr.[2]"); got.Val.(float64) != 99 {
+	if got := evalProgram(t, "(let var arr = [10 20 30])\n(= arr.[2] 99)\narr.[2]"); got.Val.(float64) != 99 {
 		t.Errorf("after (= arr.[2] 99), arr.[2] = %v, want 99", got.Val)
 	}
-	if got := evalProgram(t, "(var d {'a' 1})\n(= d.['c'] 3)\nd.['c']"); got.Val.(float64) != 3 {
+	if got := evalProgram(t, "(let var d = ['a' -> 1])\n(= d.['c'] 3)\nd.['c']"); got.Val.(float64) != 3 {
 		t.Errorf("after (= d.[\"c\"] 3), d.[\"c\"] = %v, want 3", got.Val)
 	}
 }
@@ -69,10 +69,10 @@ func TestBareDynamicIndexIsError(t *testing.T) {
 		src  string
 		code string
 	}{
-		{"array read by var", "(fun f (xs) (identity do (var i 0) xs.i))\n(f [1 2 3])", core.ErrField},
+		{"array read by var", "(fun f (xs) (identity do (let var i = 0) xs.#i))\n(f [1 2 3])", core.ErrField},
 		{"array read by num", "(fun f (xs) xs.0)\n(f [1 2 3])", core.ErrField},
-		{"string read", "(fun f (s) (identity do (var i 0) s.i))\n(f 'hi')", core.ErrField},
-		{"dict read literal key", "(fun f (d) d.'a')\n(f {'a' 1})", core.ErrField},
+		{"string read", "(fun f (s) (identity do (let var i = 0) s.#i))\n(f 'hi')", core.ErrField},
+		{"dict read literal key", "(fun f (d) d.'a')\n(f ['a' -> 1])", core.ErrField},
 		{"array write", "(fun f (xs) (= xs.0 9))\n(f [1 2 3])", core.ErrField},
 	}
 	for _, c := range cases {
@@ -92,10 +92,10 @@ func TestBracketFormErrors(t *testing.T) {
 		src  string
 		code string
 	}{
-		{"multi-element index", "(var arr [1 2 3])\narr.[0 1]", core.ErrBadForm},
-		{"empty bracket", "(var arr [1 2 3])\narr.[]", core.ErrBadForm},
-		{"slice a dict", "(var d {'a' 1})\nd.[0 : 1]", core.ErrBadForm},
-		{"assign to a slice", "(var arr [1 2 3])\n(= arr.[0 : 1] 9)", core.ErrBadAssign},
+		{"multi-element index", "(let var arr = [1 2 3])\narr.[0 1]", core.ErrBadForm},
+		{"empty bracket", "(let var arr = [1 2 3])\narr.[]", core.ErrBadForm},
+		{"slice a dict", "(let var d = ['a' -> 1])\nd.[0 : 1]", core.ErrBadForm},
+		{"assign to a slice", "(let var arr = [1 2 3])\n(= arr.[0 : 1] 9)", core.ErrBadAssign},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -110,12 +110,12 @@ func TestBracketFormErrors(t *testing.T) {
 // Field access on structs stays bare; bracketing a struct access is the
 // inverse mistake and is rejected.
 func TestStructFieldAccessStaysBare(t *testing.T) {
-	field := "(struct P X)\n(var p P.{ X 7 })\np.X"
+	field := "(struct P x)\n(let var p = P.{ x 7 })\np.x"
 	if got := evalProgram(t, field); got.Kind != core.KindNum || got.Val.(float64) != 7 {
 		t.Errorf("p.X = %v, want 7", got.Val)
 	}
 
-	bracketed := "(struct P X)\n(var p P.{ X 7 })\np.['X']"
+	bracketed := "(struct P x)\n(let var p = P.{ x 7 })\np.['X']"
 	if _, codes := evalProgramDiag(t, bracketed); !hasCode(codes, core.ErrField) {
 		t.Errorf("p.[\"X\"] should be a no-field error, got codes %v", codes)
 	}

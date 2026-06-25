@@ -12,10 +12,10 @@ import (
 // the runtime already evaluates (Doc/PlanV1/Syntax.md, Phase 3).
 func TestLetAndReassignRuntime(t *testing.T) {
 	cases := []struct{ name, src, want string }{
-		{"let binds a constant", "(let x = 5)\nx", "5"},
-		{"let var binds mutable state", "(let var c = 1)\nc", "1"},
-		{"reassign a let var with infix =", "(let var c = 1)\n(c = 2)\nc", "2"},
-		{"infix = mutates an existing var", "(var n 0)\n(n = 7)\nn", "7"},
+		{"let binds a constant", "(let = = 5)\nx", "5"},
+		{"let var binds mutable state", "(let var var c = = 1)\nc", "1"},
+		{"reassign a let var with infix =", "(let var var c = = 1)\n(c = 2)\nc", "2"},
+		{"infix = mutates an existing var", "(let var n = 0)\n(n = 7)\nn", "7"},
 	}
 	for _, tc := range cases {
 		if got := core.Stringify(evalProgram(t, tc.src)); got != tc.want {

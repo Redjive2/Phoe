@@ -10,7 +10,7 @@ import (
 // declares "x". Post-cutover there is no dynamic / quoted / string-literal
 // name form — the name is always the leaf's text.
 func TestDeclNameIsLiteral(t *testing.T) {
-	got := evalProgram(t, "(const x 5)\nx")
+	got := evalProgram(t, "(let x = 5)\nx")
 	if got.Kind != core.KindNum || got.Val != float64(5) {
 		t.Fatalf("x = %#v, want 5", got)
 	}
@@ -18,7 +18,7 @@ func TestDeclNameIsLiteral(t *testing.T) {
 
 // = with a bare target assigns to that binding.
 func TestAssignTarget(t *testing.T) {
-	got := evalProgram(t, "(var x 1)\n(= x 5)\nx")
+	got := evalProgram(t, "(let var x = 1)\n(= x 5)\nx")
 	if got.Kind != core.KindNum || got.Val != float64(5) {
 		t.Fatalf("x = %#v, want 5", got)
 	}

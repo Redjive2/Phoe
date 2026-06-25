@@ -1,25 +1,25 @@
 (import 'std/core')
 
 (macro ~pipe2 (initial (spread parts)) do
-    (const pieces (parts.Split 3 :strict))
+    (let pieces = (parts.split 3 :strict))
     
-    (var result ['do'
+    (let var result = ['do'
         ['var' 'it' initial]
     ])
 
-    (foreach i in pieces.Keys do
-        (const piece pieces.[i])
+    (foreach i in pieces.keys do
+        (let piece = pieces.[i])
         
         (if (~= piece.[0 : 2] ['-' '>']) then 
-            (return Nil)
+            (return none)
         )
         
-        (const expr piece.[2])
+        (let expr = piece.[2])
 
-        (= result (result.Append ['=' 'it' expr]))
+        (= result (result.append ['=' 'it' expr]))
     )
 
-    (result.Append 'it')
+    (result.append 'it')
 )
 
-(core.PrintLine ('abcdefghijk'.Split 20 :loose))
+(core.print_line ('abcdefghijk'.split 20 :loose))

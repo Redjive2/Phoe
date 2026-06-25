@@ -12,10 +12,10 @@ import (
 // `(struct Name f …)` keeps working.
 
 func TestTypedStructFieldsResolve(t *testing.T) {
-	src := "(struct Point.{ X Number Y Number })\n" +
-		"(const p Point.{ X 1 Y 2 })\n" +
-		"(const a p.X)\n" + // a typed field resolves
-		"(const c p.Nope)\n" // an unknown member still fires
+	src := "(struct Point.{ x Number y Number })\n" +
+		"(let p = Point.{ x 1 y 2 })\n" +
+		"(let a = p.x)\n" + // a typed field resolves
+		"(let c = p.nope)\n" // an unknown member still fires
 	d := AnalyzeFile("t.pho", []byte(src))
 	if hasDiag(d, "bad-form-shape") {
 		t.Errorf("typed-field struct should not be a bad form; got %#v", d)
@@ -29,7 +29,7 @@ func TestTypedStructFieldsResolve(t *testing.T) {
 }
 
 func TestBareStructStillWorks(t *testing.T) {
-	src := "(struct Plain A B)\n(const q Plain.{ A 5 B 6 })\n(const x q.A)\n(const y q.Z)\n"
+	src := "(struct Plain a b)\n(let q = Plain.{ a 5 b 6 })\n(let x = q.a)\n(let y = q.z)\n"
 	d := AnalyzeFile("t.pho", []byte(src))
 	if hasDiag(d, "bad-form-shape") {
 		t.Errorf("bare struct form must stay valid; got %#v", d)
@@ -48,17 +48,17 @@ func TestTypedStructFieldTypeChecking(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	const box = "(struct Box.{ N Number })\n(const b Box.{ N 1 })\n"
+	const box = "(struct Box.{ n Number })\n(let b = Box.{ n 1 })\n"
 	stageE(t, []struct {
 		name    string
 		src     string
 		wantErr bool
 	}{
 		{"typed field matches param", box +
-			"(fun needN (Number) Nil)\n(fun needN (n) Nil)\n(needN b.N)", false},
+			"(fun need_n (Number) none)\n(fun need_n (n) none)\n(need_n b.n)", false},
 		{"typed field clashes with param", box +
-			"(fun needS (String) Nil)\n(fun needS (s) Nil)\n(needS b.N)", true},
+			"(fun need_s (String) none)\n(fun need_s (s) none)\n(need_s b.n)", true},
 		{"typed field as a typed var init", box +
-			"(const (String s) b.N)", true},
+			"(let (String s) = b.n)", true},
 	})
 }

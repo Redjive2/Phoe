@@ -10,13 +10,13 @@ import "testing"
 // the classification and spans must not shift.
 func TestSemanticTokensGolden(t *testing.T) {
 	src := "(import 'std/io')\n" +
-		"(struct Point X y)\n" +
-		"(method Point.Shift (self n) (+ self.X n))\n" +
+		"(struct Point x #y)\n" +
+		"(method Point.shift (self n) (+ self.x n))\n" +
 		"(fun main (a) (identity do\n" +
-		"\t(var p Point.{ X 1 y 2 })\n" +
-		"\t(foreach i in (range a) (io.PrintLine i))\n" +
+		"\t(let var p = Point.{ x 1 #y 2 })\n" +
+		"\t(foreach i in (range a) (io.print_line i))\n" +
 		"))\n" +
-		"(const PI 3)\n"
+		"(let pi = 3)\n"
 
 	type tok struct {
 		line, startCol, endCol int
@@ -78,7 +78,7 @@ func TestSemanticTokensGolden(t *testing.T) {
 func TestSemanticTokensInterpolation(t *testing.T) {
 	// One line, so columns are easy to verify. `who` is a parameter;
 	// `range` is a builtin; `p` a parameter, `X` a property via dot.
-	src := "(fun f (who p) (io.Print 'hi %who n=%(range who) d=%p.X'))\n"
+	src := "(fun f (who p) (io.print 'hi %who n=%(range who) d=%p.X'))\n"
 
 	got := SemanticTokens("interp.phl", []byte(src))
 

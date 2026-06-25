@@ -8,8 +8,8 @@ import "testing"
 // union-receiver dispatch. A genuinely-unknown member still flags.
 func TestCollectionMemberResolves(t *testing.T) {
 	clean := []string{
-		"(method Collection.Foo (self) self)\n(const a [1 2].Foo)\n(const b 'x'.Foo)\n(const c { 'k' 1 }.Foo)\n",
-		"(property Collection.Big? get (method Collection (self) (> self.Size 1)))\n(const a [1 2].Big?)\n(const b 'x'.Big?)\n",
+		"(method Collection.foo (self) self)\n(let a = [1 2].foo)\n(let b = 'x'.foo)\n(let c = [ 'k' -> 1 ].foo)\n",
+		"(property Collection.big? get (method Collection (self) (> self.size 1)))\n(let a = [1 2].big?)\n(let b = 'x'.big?)\n",
 	}
 	for _, src := range clean {
 		d := AnalyzeFile("t.phl", []byte(src))
@@ -17,7 +17,7 @@ func TestCollectionMemberResolves(t *testing.T) {
 			t.Errorf("Collection member must resolve on a concrete list/string/map\n  %q\n  → %#v", src, d)
 		}
 	}
-	if d := AnalyzeFile("t.phl", []byte("(const a [1 2].Nope)\n")); !hasDiagWithName(d, "unknown-member", "Nope") {
+	if d := AnalyzeFile("t.phl", []byte("(let a = [1 2].nope)\n")); !hasDiagWithName(d, "unknown-member", "Nope") {
 		t.Errorf("a genuinely-unknown member should still flag; got %#v", d)
 	}
 }

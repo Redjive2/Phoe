@@ -197,7 +197,7 @@ func memberCompletions(w *walker, scope *Scope, recv string) ([]Definition, bool
 	case ShapeInstance:
 		if si, ok := w.resolveStruct(scope, sh); ok {
 			visible := func(name string) bool {
-				return sh.Privileged || (!startsLower(name) && !isHashPrivate(name))
+				return sh.Privileged || !isHashPrivate(name)
 			}
 			for name, span := range si.Fields {
 				if visible(name) {

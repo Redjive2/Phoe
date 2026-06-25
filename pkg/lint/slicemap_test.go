@@ -12,20 +12,20 @@ import (
 // the literal syntax.
 func TestSliceMapAreNotBuiltins(t *testing.T) {
 	// Literals lint clean.
-	d := AnalyzeFile("ok.pho", []byte("(const a [1 2 3])\n(const b {'k' 1})"))
+	d := AnalyzeFile("ok.pho", []byte("(let a = [1 2 3])\n(let b = ['k' -> 1])"))
 	if hasDiag(d, "unresolved-identifier") {
 		t.Errorf("[…]/{…} literals should lint clean, got %#v", d)
 	}
 
 	// Bare (slice …) is unresolved with a bracket-literal hint.
-	d = AnalyzeFile("bad.pho", []byte("(const a (slice 1 2 3))"))
+	d = AnalyzeFile("bad.pho", []byte("(let a = (slice 1 2 3))"))
 	if msg, ok := unresolvedMessage(d); !ok || !strings.Contains(msg, "'slice'") || !strings.Contains(msg, "[a b c]") {
 		t.Errorf("(slice …) should be unresolved with a [a b c] hint, got %q (%#v)", msg, d)
 	}
 
 	// Bare (map …) is unresolved with a brace-literal hint.
-	d = AnalyzeFile("bad2.pho", []byte("(const a (map 'k' 1))"))
-	if msg, ok := unresolvedMessage(d); !ok || !strings.Contains(msg, "'map'") || !strings.Contains(msg, "{k v}") {
+	d = AnalyzeFile("bad2.pho", []byte("(let a = (map 'k' 1))"))
+	if msg, ok := unresolvedMessage(d); !ok || !strings.Contains(msg, "'map'") || !strings.Contains(msg, "[k -> v]") {
 		t.Errorf("(map …) should be unresolved with a {k v} hint, got %q (%#v)", msg, d)
 	}
 }
