@@ -38,10 +38,10 @@ func TestMapBracketDesugar(t *testing.T) {
 // keys are accepted.
 func TestStructInitDesugar(t *testing.T) {
 	cases := []struct{ src, want string }{
-		{"P.{ x = 1 }", "((p 'x' 1))"},
-		{"P.{ x 1 }", "((p 'x' 1))"},
-		{"P.{ x = 1 y = 2 }", "((p 'x' 1 'y' 2))"},
-		{"P.{ #x = 1 }", "((p '#x' 1))"},
+		{"P.{ x = 1 }", "((P 'x' 1))"},
+		{"P.{ x 1 }", "((P 'x' 1))"},
+		{"P.{ x = 1 y = 2 }", "((P 'x' 1 'y' 2))"},
+		{"P.{ #x = 1 }", "((P '#x' 1))"},
 	}
 	for _, c := range cases {
 		if got := lowerInspect(c.src); got != c.want {

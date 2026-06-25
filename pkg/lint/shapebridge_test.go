@@ -44,7 +44,7 @@ func TestShapeBridge(t *testing.T) {
 		{"num-var vs singleton 5", expect("5") + "(let var n = 5)\n(f n)", false},
 		{"list-var vs (List Number)", expect("(List Number)") + "(let var xs = [1 2 3])\n(f xs)", false},
 		{"list-var vs (List String)", expect("(List String)") + "(let var xs = [1 2 3])\n(f xs)", false},
-		{"struct-var vs record it satisfies", point + expect("Struct.{ X Number }") + "(let var p = Point.{ x 1 })\n(f p)", false},
+		{"struct-var vs record it satisfies", point + expect("Struct.{ x Number }") + "(let var p = Point.{ x 1 })\n(f p)", false},
 
 		// Control: the precise (literal) path is unchanged.
 		{"list-literal vs String", expect("String") + "(f [1 2 3])", true},

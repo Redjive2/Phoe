@@ -46,7 +46,7 @@ func TestRecase(t *testing.T) {
 		// A type head with no args must not panic (len-1 children).
 		{"type call no args", "(Point)", "(Point)"},
 		// A builtin type keeps its exact spelling (not re-split by Title_Snake).
-		{"builtin NilT", "(x.is? NilT)", "(x.is? NilT)"},
+		{"builtin NilT", "(f NilT)", "(f NilT)"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

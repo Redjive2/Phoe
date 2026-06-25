@@ -41,14 +41,14 @@ func TestReferencesAcrossSiblings(t *testing.T) {
 	b := filepath.Join(root, "lib/b.phl")
 
 	// From the declaration in a.phl.
-	sites := refsFromFile(t, root, a, 1, "(fun helper () 1)", "Helper")
+	sites := refsFromFile(t, root, a, 1, "(fun helper () 1)", "helper")
 	got := sitesByFile(sites)
 	if got[a] != 2 || got[b] != 1 {
 		t.Fatalf("expected 2 sites in a.phl (decl + local use) and 1 in b.phl, got %#v", sites)
 	}
 
 	// From the use site in b.phl — same answer.
-	sites = refsFromFile(t, root, b, 1, "(fun use_remote () (helper))", "Helper")
+	sites = refsFromFile(t, root, b, 1, "(fun use_remote () (helper))", "helper")
 	got = sitesByFile(sites)
 	if got[a] != 2 || got[b] != 1 {
 		t.Fatalf("expected identical results from the b.phl side, got %#v", sites)
@@ -65,14 +65,14 @@ func TestReferencesAcrossImporters(t *testing.T) {
 	lib := filepath.Join(root, "lib/lib.phl")
 	app := filepath.Join(root, "app.pho")
 
-	sites := refsFromFile(t, root, lib, 1, "(fun visible () 1)", "Visible")
+	sites := refsFromFile(t, root, lib, 1, "(fun visible () 1)", "visible")
 	got := sitesByFile(sites)
 	if got[lib] != 1 || got[app] != 1 {
 		t.Fatalf("expected decl in lib + use in app, got %#v", sites)
 	}
 
 	// From the importer side.
-	sites = refsFromFile(t, root, app, 2, "(let var x = (lib.visible))", "Visible")
+	sites = refsFromFile(t, root, app, 2, "(let var x = (lib.visible))", "visible")
 	got = sitesByFile(sites)
 	if got[lib] != 1 || got[app] != 1 {
 		t.Fatalf("expected identical results from the app side, got %#v", sites)
@@ -90,7 +90,7 @@ func TestReferencesMemberAcrossImporters(t *testing.T) {
 	app := filepath.Join(root, "app.pho")
 
 	// Method: decl in lib + call in app.
-	sites := refsFromFile(t, root, lib, 2, "(method Thing.grow (self) self.part)", "Grow")
+	sites := refsFromFile(t, root, lib, 2, "(method Thing.grow (self) self.part)", "grow")
 	got := sitesByFile(sites)
 	if got[lib] != 1 || got[app] != 1 {
 		t.Fatalf("expected Grow decl + app call, got %#v", sites)
@@ -99,7 +99,7 @@ func TestReferencesMemberAcrossImporters(t *testing.T) {
 	// Field, from its declaration inside the struct form: decl +
 	// self.Part in lib, t.Part in app (the dict key in the constructor
 	// is not a field reference).
-	sites = refsFromFile(t, root, lib, 1, "(struct Thing part)", "Part")
+	sites = refsFromFile(t, root, lib, 1, "(struct Thing part)", "part")
 	got = sitesByFile(sites)
 	if got[lib] != 2 || got[app] != 1 {
 		t.Fatalf("expected field decl + self read in lib, read in app, got %#v", sites)
@@ -116,7 +116,7 @@ func TestReferencesStdStyleLayout(t *testing.T) {
 	io := filepath.Join(root, "script/std/io/io.phl")
 	pctl := filepath.Join(root, "script/std/pctl/pctl.phl")
 
-	sites := refsFromFile(t, root, io, 1, "(fun visible () 1)", "Visible")
+	sites := refsFromFile(t, root, io, 1, "(fun visible () 1)", "visible")
 	got := sitesByFile(sites)
 	if got[io] != 1 || got[pctl] != 1 {
 		t.Fatalf("expected decl in io + use in pctl, got %#v", sites)
@@ -178,7 +178,7 @@ func TestReferencesSeeOverlay(t *testing.T) {
 	})
 	defer SetSourceReader(nil)
 
-	sites := refsFromFile(t, root, lib, 1, "(fun visible () 1)", "Visible")
+	sites := refsFromFile(t, root, lib, 1, "(fun visible () 1)", "visible")
 	got := sitesByFile(sites)
 	if got[app] != 2 {
 		t.Fatalf("expected 2 app sites from the edited buffer, got %#v", sites)
@@ -193,7 +193,7 @@ func TestReferencesProgramDeclsAreLocal(t *testing.T) {
 		"other.pho": "(fun helper () 2)\n",
 	})
 	main := filepath.Join(root, "main.pho")
-	sites := refsFromFile(t, root, main, 1, "(fun helper () 1)", "Helper")
+	sites := refsFromFile(t, root, main, 1, "(fun helper () 1)", "helper")
 	for _, s := range sites {
 		if s.File != main {
 			t.Fatalf("program decls must stay in-file, got %#v", sites)

@@ -9,7 +9,7 @@ import (
 // The lexer emits a `--@ ` line as an annotation token carrying the body
 // text verbatim, distinct from an ordinary skipped comment.
 func TestLexAnnotationToken(t *testing.T) {
-	tokens, errs := LexPos("--@ (~type Str)\n(let m = 'hi')")
+	tokens, errs := LexPos("--@ (~type str)\n(let m = 'hi')")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected lex errors: %#v", errs)
 	}
@@ -32,7 +32,7 @@ func TestLexAnnotationToken(t *testing.T) {
 // to that form, with its body re-parsed into a real PNode (here a macro
 // call, since the body uses the `name!` shape).
 func TestAnnotationCaptured(t *testing.T) {
-	tokens, lexErrs := LexPos("--@ (~sig Num Num)\n(fun add (x y) (+ x y))")
+	tokens, lexErrs := LexPos("--@ (~sig num num)\n(fun add (x y) (+ x y))")
 	if len(lexErrs) != 0 {
 		t.Fatalf("unexpected lex errors: %#v", lexErrs)
 	}
@@ -65,7 +65,7 @@ func TestAnnotationCaptured(t *testing.T) {
 
 // Multiple stacked `--@` lines all attach to the next form, in source order.
 func TestAnnotationStacked(t *testing.T) {
-	src := "--@ (~sig Num)\n--@ (~doc 'adds')\n(fun add (x) (+ x 1))"
+	src := "--@ (~sig num)\n--@ (~doc 'adds')\n(fun add (x) (+ x 1))"
 	tree, errs := ParsePos(mustLex(t, src))
 	if len(errs) != 0 {
 		t.Fatalf("unexpected parse errors: %#v", errs)

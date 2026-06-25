@@ -20,10 +20,10 @@ func TestTypedStructFieldsResolve(t *testing.T) {
 	if hasDiag(d, "bad-form-shape") {
 		t.Errorf("typed-field struct should not be a bad form; got %#v", d)
 	}
-	if hasDiagWithName(d, "unknown-member", "X") {
-		t.Errorf("typed field X should resolve; got %#v", d)
+	if hasDiagWithName(d, "unknown-member", "'x'") {
+		t.Errorf("typed field x should resolve; got %#v", d)
 	}
-	if !hasDiagWithName(d, "unknown-member", "Nope") {
+	if !hasDiagWithName(d, "unknown-member", "'nope'") {
 		t.Errorf("an unknown member should still fire; got %#v", d)
 	}
 }
@@ -34,11 +34,11 @@ func TestBareStructStillWorks(t *testing.T) {
 	if hasDiag(d, "bad-form-shape") {
 		t.Errorf("bare struct form must stay valid; got %#v", d)
 	}
-	if hasDiagWithName(d, "unknown-member", "A") {
-		t.Errorf("bare field A should resolve; got %#v", d)
+	if hasDiagWithName(d, "unknown-member", "'a'") {
+		t.Errorf("bare field a should resolve; got %#v", d)
 	}
-	if !hasDiagWithName(d, "unknown-member", "Z") {
-		t.Errorf("unknown member Z should fire; got %#v", d)
+	if !hasDiagWithName(d, "unknown-member", "'z'") {
+		t.Errorf("unknown member z should fire; got %#v", d)
 	}
 }
 

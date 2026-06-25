@@ -581,17 +581,17 @@ func reachableBeyondFile(target hit, targetSite DefSite, path string, src []byte
 }
 
 // exportedTarget reports whether the target crosses package
-// boundaries: capitalized decl, or any member of a capitalized struct
-// (lowercase members of exported structs are only reachable via self,
-// which can't occur in an importer, so scanning importers for them is
-// harmless but pointless — the capitalized-struct test keeps it
-// simple and correct).
+// boundaries: a public decl (no leading '#'), or any member of a
+// public struct ('#'-private members of public structs are only
+// reachable via self, which can't occur in an importer, so scanning
+// importers for them is harmless but pointless — the '#'-prefix test
+// keeps it simple and correct).
 func exportedTarget(target hit) bool {
 	name := target.Def.Name
 	if target.SI != nil {
 		name = target.SI.Name
 	}
-	return name != "" && name[0] >= 'A' && name[0] <= 'Z'
+	return name != "" && name[0] != '#'
 }
 
 // topLevelDeclSpans returns the set of declaration-name spans that sit

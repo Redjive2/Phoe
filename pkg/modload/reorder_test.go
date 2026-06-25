@@ -61,11 +61,11 @@ func TestLiftDefinitionsDoesNotSortInits(t *testing.T) {
 (let b = 10)`
 	got := parseForms(t, src)
 	out := liftDefinitions(got)
-	// Both are const; order unchanged: A still before B.
+	// Both are const; order unchanged: a still before b.
 	a0, _ := core.AsBranch(out[0].form)
 	n0, _ := core.AsLeaf(a0[1])
-	if string(n0) != "A" {
-		t.Errorf("const order should be unchanged (A then B); got first = %s", n0)
+	if string(n0) != "a" {
+		t.Errorf("const order should be unchanged (a then b); got first = %s", n0)
 	}
 }
 

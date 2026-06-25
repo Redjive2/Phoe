@@ -32,9 +32,9 @@ func TestMethodSigHarvest(t *testing.T) {
 	w.collect(scope, tree)
 	w.harvestMethodSigs(scope, tree)
 
-	sig := w.methodSigFor(scope, "Reader", "Seek")
+	sig := w.methodSigFor(scope, "Reader", "seek")
 	if sig == nil {
-		t.Fatal("expected a harvested signature for Reader.Seek")
+		t.Fatal("expected a harvested signature for Reader.seek")
 	}
 	// The receiver (Reader) is not an argument; params are just [Number].
 	if len(sig.Params) != 1 || sig.Params[0] != core.TypeNumber {

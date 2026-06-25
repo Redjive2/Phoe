@@ -53,7 +53,7 @@ func TestLowerDotChain(t *testing.T) {
 // retired `(LHS { … })` construction form.
 func TestLowerDotBraceConstruction(t *testing.T) {
 	got := dumpTree(lower(`Point.{ X 10 y 20 }`))
-	want := dumpTree(lower(`(point 'X' 10 'y' 20)`))
+	want := dumpTree(lower(`(Point 'X' 10 'y' 20)`))
 	if got != want {
 		t.Fatalf("Point.{...} should lower to (Point \"X\" 10 \"y\" 20)\n  got:  %s\n  want: %s", got, want)
 	}
@@ -76,7 +76,7 @@ func TestLowerDotBraceChains(t *testing.T) {
 	}
 
 	got = dumpTree(lower(`Point.{ X 1 }.X`))
-	want = dumpTree(lower(`(point 'X' 1).x`))
+	want = dumpTree(lower(`(Point 'X' 1).X`))
 	if got != want {
 		t.Fatalf("Struct.{...}.Field mismatch\n  got:  %s\n  want: %s", got, want)
 	}

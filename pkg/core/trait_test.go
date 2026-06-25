@@ -40,7 +40,7 @@ func TestTraitSubtype(t *testing.T) {
 	if f.IsEmpty() {
 		t.Error("a trait is inhabited (not empty)")
 	}
-	if got := f.Name(); got != "(Trait f)" {
+	if got := f.Name(); got != "(Trait F)" {
 		t.Errorf("render = %q, want (Trait F)", got)
 	}
 }

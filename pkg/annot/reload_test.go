@@ -27,7 +27,7 @@ func TestReloadRecoversFromBrokenLibrary(t *testing.T) {
 	// parse.
 	const broken = "(goimport (\"phoAnnot\" meta))\n(fun type (t) \"oops)\n"
 	const good = "(goimport ('phoAnnot' meta))\n" +
-		"(fun type (t)\n    (meta.attach 'type' t))\n"
+		"(fun type (t)\n    (meta.Attach 'type' t))\n"
 
 	// 1. A library that doesn't parse: InitDefault fails and leaves Default's
 	//    macros untouched (annotations would degrade to "macro not defined").
@@ -55,7 +55,7 @@ func TestReloadRecoversFromBrokenLibrary(t *testing.T) {
 	if len(res.Diags) != 0 {
 		t.Fatalf("after reload the macro should resolve cleanly, got diags: %v", diagMsgs(res))
 	}
-	if got := entryString(t, res, "type"); got != "Foo" {
-		t.Fatalf("type entry = %q, want Foo", got)
+	if got := entryString(t, res, "type"); got != "foo" {
+		t.Fatalf("type entry = %q, want foo", got)
 	}
 }

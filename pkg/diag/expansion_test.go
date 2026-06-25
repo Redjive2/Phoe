@@ -34,7 +34,7 @@ func TestRenderExpansion(t *testing.T) {
 		"  |",
 		"  = expanded from macro 'evilMacro':",
 		"  |",
-		"1 | (fakeFn arg)",
+		"1 | (fake_fn arg)",
 		"  | ^^^^^^^^^^^^",
 		"",
 		"",

@@ -164,7 +164,7 @@ func scopeImportDefs(scope *Scope) []Definition {
 // nothing. Conservative by construction: it can only suppress a false
 // unused-import, never emit a diagnostic.
 func (w *walker) markExtensionImportUse(scope *Scope, member string) {
-	if startsLower(member) {
+	if isHashPrivate(member) {
 		return
 	}
 	for _, imp := range scopeImportDefs(scope) {
@@ -211,7 +211,7 @@ func (w *walker) primitiveMemberSources(scope *Scope, typeName, member string) i
 	// member is private to its declaring package, so it's invisible across the
 	// import boundary (mirroring the runtime resolver). A lowercase access thus
 	// never resolves through an import.
-	if !startsLower(member) {
+	if !isHashPrivate(member) {
 		for _, imp := range scopeImportDefs(scope) {
 			if si, ok := w.structsFor(imp.Path)[typeName]; ok {
 				if _, found := si.Methods[member]; found {
@@ -283,7 +283,7 @@ func (w *walker) importedPrimitiveExtensions(scope *Scope, typeName string) []De
 			continue
 		}
 		for name, span := range si.Methods {
-			if startsLower(name) {
+			if isHashPrivate(name) {
 				continue // private to its declaring package — not exported
 			}
 			out = append(out, Definition{Name: name, Kind: DefMethod, Span: span, File: si.MethodFiles[name]})

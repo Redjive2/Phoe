@@ -92,10 +92,10 @@ func TestPrimitiveProperty(t *testing.T) {
 	// (unlike a method `(n.Method)`, which is a call on a method reference).
 	const decl = "(property Number.zero? get (method Number (self) do (== self 0)))\n"
 
-	if got := evalInPackage(t, decl+"0.Zero?", nil); got.Kind != core.KindBool || got.Val.(bool) != true {
+	if got := evalInPackage(t, decl+"0.zero?", nil); got.Kind != core.KindBool || got.Val.(bool) != true {
 		t.Fatalf("0.Zero? = %v (%s), want True", got.Val, got.Kind)
 	}
-	if got := evalInPackage(t, decl+"5.Zero?", nil); got.Kind != core.KindBool || got.Val.(bool) != false {
+	if got := evalInPackage(t, decl+"5.zero?", nil); got.Kind != core.KindBool || got.Val.(bool) != false {
 		t.Fatalf("5.Zero? = %v (%s), want False", got.Val, got.Kind)
 	}
 }
@@ -137,7 +137,7 @@ func TestBuiltinModuleCollectionMethods(t *testing.T) {
 	}
 	// .Size / .Keys / .Empty? are PROPERTIES — read without a call.
 	num("[1 2 3].size", 3)
-	num("'café'.Size", 4) // rune count, not bytes
+	num("'café'.size", 4) // rune count, not bytes
 	num("[ 'a' -> 1 'b' -> 2 ].size", 2)
 
 	keys := evalInPackage(t, "[10 20 30].keys", nil)

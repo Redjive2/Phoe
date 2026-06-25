@@ -33,7 +33,7 @@ func TestTraitLintsClean(t *testing.T) {
 		t.Errorf("a typo in a trait default body should flag; got %#v", d)
 	}
 	// An unknown extended trait still flags as unresolved.
-	if d := AnalyzeFile("t.phl", []byte("(type Shape (Trait (nonexistent) (method self.area (self))))\n")); !hasDiagWithName(d, "unresolved-identifier", "Nonexistent") {
+	if d := AnalyzeFile("t.phl", []byte("(type Shape (Trait (nonexistent) (method self.area (self))))\n")); !hasDiagWithName(d, "unresolved-identifier", "nonexistent") {
 		t.Errorf("an unknown extended trait should flag; got %#v", d)
 	}
 }

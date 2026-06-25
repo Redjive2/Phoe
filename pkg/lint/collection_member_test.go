@@ -17,7 +17,7 @@ func TestCollectionMemberResolves(t *testing.T) {
 			t.Errorf("Collection member must resolve on a concrete list/string/map\n  %q\n  → %#v", src, d)
 		}
 	}
-	if d := AnalyzeFile("t.phl", []byte("(let a = [1 2].nope)\n")); !hasDiagWithName(d, "unknown-member", "Nope") {
+	if d := AnalyzeFile("t.phl", []byte("(let a = [1 2].nope)\n")); !hasDiagWithName(d, "unknown-member", "nope") {
 		t.Errorf("a genuinely-unknown member should still flag; got %#v", d)
 	}
 }

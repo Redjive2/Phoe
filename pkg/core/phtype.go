@@ -813,7 +813,7 @@ func (t *PhoType) render() string {
 		sort.Strings(names)
 		return "(Trait " + strings.Join(names, " ") + ")"
 	}
-	// A pure structural record renders as its field shape `{x Number y String}`.
+	// A pure structural record renders as its field shape `[x -> Number y -> String]`.
 	if t.fields != nil && t.base == 0 && len(t.structs) == 0 && t.allStr && !t.dyn {
 		keys := make([]string, 0, len(t.fields))
 		for k := range t.fields {
@@ -822,9 +822,9 @@ func (t *PhoType) render() string {
 		sort.Strings(keys)
 		parts := make([]string, len(keys))
 		for i, k := range keys {
-			parts[i] = k + " " + t.fields[k].Name()
+			parts[i] = k + " -> " + t.fields[k].Name()
 		}
-		return "{" + strings.Join(parts, " ") + "}"
+		return "[" + strings.Join(parts, " ") + "]"
 	}
 	// Pure parametric collections render with their element types.
 	if t.base == bList && t.listElem != nil && !t.allStr && len(t.structs) == 0 && !t.dyn {

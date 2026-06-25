@@ -21,7 +21,7 @@ func TestTopLevelPropertyInLibrary(t *testing.T) {
 		"script/std/mylib/lib.phl": lib,
 		"script/app.pho": "(import ('std/mylib' m))\n" +
 			"(let var a = m.twice)\n" + // free-standing property export resolves
-			"(let var b = m.Box.{ V 6 })\n" +
+			"(let var b = m.Box.{ v 6 })\n" +
 			"(let var c = b.sq)\n" + // attached property member resolves on instance
 			"(let var d = m.nope)\n", // sanity: a real unknown export still fires
 	})
@@ -45,7 +45,7 @@ func TestTopLevelPropertyInLibrary(t *testing.T) {
 		t.Errorf("attached property b.Sq should resolve as a member, got %#v", diags)
 	}
 	// Guard the test isn't vacuous: an actual missing export still fires.
-	if !hasDiagWithName(diags, "unknown-export", "Nope") {
-		t.Errorf("expected unknown-export for m.Nope, got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-export", "nope") {
+		t.Errorf("expected unknown-export for m.nope, got %#v", diags)
 	}
 }

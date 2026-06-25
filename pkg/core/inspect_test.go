@@ -61,7 +61,7 @@ func TestSynthSpansNestedSpan(t *testing.T) {
 	// (do (undefinedThing)) — the inner form starts at column 5.
 	tree := ttbranch{ttleaf("do"), ttbranch{ttleaf("undefinedThing")}}
 	wrapped, text := SynthSpans(tree)
-	if text != "(do (undefined_thing))" {
+	if text != "(do (undefinedThing))" {
 		t.Fatalf("text = %q", text)
 	}
 

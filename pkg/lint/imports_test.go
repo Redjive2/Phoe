@@ -35,11 +35,11 @@ func TestResolveImportFromScriptDir(t *testing.T) {
 	app := filepath.Join(root, "script/app.pho")
 	src, _ := os.ReadFile(app)
 	diags := AnalyzeFile(app, src)
-	if !hasDiagWithName(diags, "unknown-export", "Nope") {
-		t.Fatalf("expected unknown-export for io.Nope (import must resolve), got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-export", "nope") {
+		t.Fatalf("expected unknown-export for io.nope (import must resolve), got %#v", diags)
 	}
-	if hasDiagWithName(diags, "unknown-export", "Visible") {
-		t.Fatalf("io.Visible is exported — no diagnostic expected, got %#v", diags)
+	if hasDiagWithName(diags, "unknown-export", "visible") {
+		t.Fatalf("io.visible is exported — no diagnostic expected, got %#v", diags)
 	}
 }
 
@@ -53,11 +53,11 @@ func TestResolveImportFromNestedLibrary(t *testing.T) {
 	pctl := filepath.Join(root, "script/std/pctl/pctl.phl")
 	src, _ := os.ReadFile(pctl)
 	diags := AnalyzeFile(pctl, src)
-	if !hasDiagWithName(diags, "unknown-export", "Nope") {
+	if !hasDiagWithName(diags, "unknown-export", "nope") {
 		t.Fatalf("expected unknown-export via ancestor-resolved import, got %#v", diags)
 	}
-	if hasDiagWithName(diags, "unknown-export", "Visible") {
-		t.Fatalf("io.Visible must validate, got %#v", diags)
+	if hasDiagWithName(diags, "unknown-export", "visible") {
+		t.Fatalf("io.visible must validate, got %#v", diags)
 	}
 }
 
@@ -66,16 +66,16 @@ func TestResolveImportFromNestedLibrary(t *testing.T) {
 func TestResolveImportFeedsShapeInference(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/io/io.phl": ioLib,
-		"script/std/app/a.phl": "(import 'std/io')\n(fun go () (identity do\n  (let var r = io.Reader.{ Id 1 })\n  (let var x = r.id)\n  (let var y = r.bogus)))\n",
+		"script/std/app/a.phl": "(import 'std/io')\n(fun go () (identity do\n  (let var r = io.Reader.{ id 1 })\n  (let var x = r.id)\n  (let var y = r.bogus)))\n",
 	})
 	a := filepath.Join(root, "script/std/app/a.phl")
 	src, _ := os.ReadFile(a)
 	diags := AnalyzeFile(a, src)
-	if !hasDiagWithName(diags, "unknown-member", "Bogus") {
+	if !hasDiagWithName(diags, "unknown-member", "bogus") {
 		t.Fatalf("expected unknown-member on imported struct instance, got %#v", diags)
 	}
-	if hasDiagWithName(diags, "unknown-member", "Id") {
-		t.Fatalf("r.Id is a real field, got %#v", diags)
+	if hasDiagWithName(diags, "unknown-member", "id") {
+		t.Fatalf("r.id is a real field, got %#v", diags)
 	}
 }
 

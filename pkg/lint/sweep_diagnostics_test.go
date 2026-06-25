@@ -14,8 +14,8 @@ import (
 // (the runtime rejects an undeclared key — see builtins/decl.go).
 func TestUnknownFieldInConstruction(t *testing.T) {
 	diags := analyze(t, "(struct Point x #y)\n(let var p = Point.{ bogus 1 })\n")
-	if !hasDiagWithName(diags, "unknown-field", "Bogus") {
-		t.Fatalf("expected unknown-field for Point.{ Bogus … }, got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-field", "bogus") {
+		t.Fatalf("expected unknown-field for Point.{ bogus … }, got %#v", diags)
 	}
 	// Valid fields draw nothing.
 	clean := analyze(t, "(struct Point x #y)\n(let var p = Point.{ x 1 #y 2 })\n")

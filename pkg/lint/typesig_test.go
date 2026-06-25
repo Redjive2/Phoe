@@ -32,8 +32,8 @@ func TestTypedBindingRecognized(t *testing.T) {
 func TestTypedBindingNameIsSecond(t *testing.T) {
 	// `n` is the binding; `Nope` is not defined.
 	d := AnalyzeFile("t.pho", []byte("(let (Number n) = 5)\n(+ nope 1)"))
-	if !hasDiagWithName(d, "unresolved-identifier", "Nope") {
-		t.Fatalf("expected Nope unresolved, got %v", d)
+	if !hasDiagWithName(d, "unresolved-identifier", "nope") {
+		t.Fatalf("expected nope unresolved, got %v", d)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestFunSignatureRecognized(t *testing.T) {
 	clean := []string{
 		"(fun add (Number Number) Number)\n(fun add (a b) (+ a b))\n(add 1 2)",
 		"(fun add (a b) (+ a b))\n(fun add (Number Number) Number)\n(add 1 2)", // impl first
-		"(fun id (self) self)\n(fun id (x) x)\n(id 5)",
+		"(fun id (Self) Self)\n(fun id (x) x)\n(id 5)",
 		"(fun pick () (Or Number none))\n(fun pick () none)\n(pick)", // type-form return
 	}
 	for _, src := range clean {
@@ -75,7 +75,7 @@ func TestFunImplNotMistakenForSig(t *testing.T) {
 // 0) is recognized and erased; the `self`-bodied implementation registers it.
 func TestMethodSignatureRecognized(t *testing.T) {
 	clean := []string{
-		"(struct P x)\n(method P.show (self) Number)\n(method P.show (self) self.x)\n(let var p = P.{ x 5 })\np.show",
+		"(struct P x)\n(method P.show (Self) Number)\n(method P.show (self) self.x)\n(let var p = P.{ x 5 })\np.show",
 		"(struct P x)\n(method P.show (self) self.x)\n(let var p = P.{ x 5 })\np.show", // impl-only
 	}
 	for _, src := range clean {
@@ -92,7 +92,7 @@ func TestMethodSignatureRecognized(t *testing.T) {
 func TestMissingImplementation(t *testing.T) {
 	missing := []string{
 		"(fun add (Number Number) Number)",                // lone fun sig
-		"(struct P x)\n(method P.show (self) Number)",     // lone method sig
+		"(struct P x)\n(method P.show (Self) Number)",     // lone method sig
 		"(fun add (Number Number) Number)\n(let add = 5)", // wrong kind (const, not fun)
 	}
 	for _, src := range missing {
@@ -103,7 +103,7 @@ func TestMissingImplementation(t *testing.T) {
 	clean := []string{
 		"(fun add (Number Number) Number)\n(fun add (a b) (+ a b))", // sig then impl
 		"(fun add (a b) (+ a b))\n(fun add (Number Number) Number)", // impl then sig (hoist)
-		"(struct P x)\n(method P.show (self) Number)\n(method P.show (self) self.x)",
+		"(struct P x)\n(method P.show (Self) Number)\n(method P.show (self) self.x)",
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); hasDiag(d, "missing-implementation") {
@@ -189,7 +189,7 @@ func TestInlineTypedBindingChecks(t *testing.T) {
 // An inline method signature checks method-call arguments; param 0 is the
 // receiver type, excluded from the call signature.
 func TestInlineMethodSigChecks(t *testing.T) {
-	base := "(struct P x)\n(method P.take (self Number) Number)\n(method P.take (self n) n)\n(let var p = P.{ x 1 })\n"
+	base := "(struct P x)\n(method P.take (Self Number) Number)\n(method P.take (self n) n)\n(let var p = P.{ x 1 })\n"
 	if !hasDiag(AnalyzeFile("t.pho", []byte(base+"(p.take 'hi')")), "type-mismatch") {
 		t.Error("expected type-mismatch for (p.Take 'hi')")
 	}

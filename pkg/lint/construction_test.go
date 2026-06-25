@@ -6,7 +6,7 @@ import "testing"
 // `retired-construction` diagnostic that points at the `T.{ … }` replacement.
 func TestRetiredConstructionFlagged(t *testing.T) {
 	diags := analyze(t, `(struct Point x #y)
-(let var p = (Point [ 'X' -> 1 'y' -> 2 ]))
+(let var p = (Point { 'X' -> 1 'y' -> 2 }))
 `)
 	if !hasDiag(diags, "retired-construction") {
 		t.Fatalf("expected retired-construction for (Point { … }), got %#v", diags)

@@ -14,11 +14,11 @@ func TestImportedStructNavigation(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/coll/coll.phl": "(struct Node.{ value Number next Node })\n(struct B.{ x Number })\n",
 		"script/app.pho": "(import 'std/coll')\n" +
-			"(let n = coll.Node.{ Value 1 Next none })\n" +
+			"(let n = coll.Node.{ value 1 next none })\n" +
 			"(let ok1 = n.next.value)\n" +
 			"(let deep = n.next.next.value)\n" +
 			"(struct A.{ inner coll.B })\n" +
-			"(let a = A.{ inner coll.B.{ X 1 } })\n" +
+			"(let a = A.{ inner coll.B.{ x 1 } })\n" +
 			"(let ok2 = a.inner.x)\n",
 	})
 	app := filepath.Join(root, "script/app.pho")
@@ -30,16 +30,16 @@ func TestImportedStructNavigation(t *testing.T) {
 	bad := writeTree(t, map[string]string{
 		"script/std/coll/coll.phl": "(struct Node.{ value Number next Node })\n(struct B.{ x Number })\n",
 		"script/app.pho": "(import 'std/coll')\n" +
-			"(let n = coll.Node.{ Value 1 Next none })\n" +
+			"(let n = coll.Node.{ value 1 next none })\n" +
 			"(let x = n.next.next.nope)\n" + // deep recursive typo, cross-module
 			"(struct A.{ inner coll.B })\n" +
-			"(let a = A.{ inner coll.B.{ X 1 } })\n" +
+			"(let a = A.{ inner coll.B.{ x 1 } })\n" +
 			"(let y = a.inner.zap)\n", // imported-struct field typo
 	})
 	app2 := filepath.Join(bad, "script/app.pho")
 	src2, _ := os.ReadFile(app2)
 	d := AnalyzeFile(app2, src2)
-	for _, member := range []string{"Nope", "Zap"} {
+	for _, member := range []string{"nope", "zap"} {
 		if !hasDiagWithName(d, "unknown-member", member) {
 			t.Errorf("a typo %q through an imported struct should fire; got %#v", member, d)
 		}
@@ -54,7 +54,7 @@ func TestTransitiveImportedNavigation(t *testing.T) {
 		"script/std/geo/geo.phl":     "(struct Point.{ x Number y Number })\n",
 		"script/std/shape/shape.phl": "(import 'std/geo')\n(struct Shape.{ origin geo.Point })\n",
 	}
-	files["script/app.pho"] = "(import 'std/shape')\n(let s = shape.Shape.{ Origin none })\n(let ok = s.origin.x)\n"
+	files["script/app.pho"] = "(import 'std/shape')\n(let s = shape.Shape.{ origin none })\n(let ok = s.origin.x)\n"
 	root := writeTree(t, files)
 	app := filepath.Join(root, "script/app.pho")
 	src, _ := os.ReadFile(app)
@@ -62,11 +62,11 @@ func TestTransitiveImportedNavigation(t *testing.T) {
 		t.Errorf("transitive imported-struct navigation should be clean; got %#v", d)
 	}
 
-	files["script/app.pho"] = "(import 'std/shape')\n(let s = shape.Shape.{ Origin none })\n(let bad = s.origin.nope)\n"
+	files["script/app.pho"] = "(import 'std/shape')\n(let s = shape.Shape.{ origin none })\n(let bad = s.origin.nope)\n"
 	root = writeTree(t, files)
 	app = filepath.Join(root, "script/app.pho")
 	src, _ = os.ReadFile(app)
-	if !hasDiagWithName(AnalyzeFile(app, src), "unknown-member", "Nope") {
+	if !hasDiagWithName(AnalyzeFile(app, src), "unknown-member", "nope") {
 		t.Errorf("a typo through a transitive imported struct should fire")
 	}
 }

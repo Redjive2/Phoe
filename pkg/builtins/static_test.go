@@ -26,7 +26,7 @@ func TestStaticMethod(t *testing.T) {
 func TestStaticProperty(t *testing.T) {
 	src := "(struct Counter.{ n Number })\n" +
 		"(static property Counter.zero get (method Counter (self) self.{ n 0 }))\n"
-	staticEq(t, src+"Counter.Zero.N", "0")
+	staticEq(t, src+"Counter.zero.n", "0")
 }
 
 func TestStaticMethodNotOnInstance(t *testing.T) {

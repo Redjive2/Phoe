@@ -60,7 +60,7 @@ func TestInterpolationEndToEnd(t *testing.T) {
 		},
 		{
 			"paren expression",
-			"(let xs = [1 2 3])\n'len=%(+ 0 xs.Size)'",
+			"(let xs = [1 2 3])\n'len=%(+ 0 xs.size)'",
 			"len=3",
 		},
 		{
@@ -219,7 +219,7 @@ func TestInterpolationInFunBody(t *testing.T) {
 		},
 		{
 			"paren expr in fun body",
-			"(fun count (xs) 'len=%(+ 0 xs.Size)')\n(count [1 2 3 4])",
+			"(fun count (xs) 'len=%(+ 0 xs.size)')\n(count [1 2 3 4])",
 			"len=4",
 		},
 		// NOTE: method-body interpolation uses the exact same quoted-body

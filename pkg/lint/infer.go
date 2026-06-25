@@ -157,6 +157,13 @@ func (w *walker) inferShape(scope *Scope, n ast.PNode) Shape {
 	case *ast.PBranch:
 		switch node.Open {
 		case "[":
+			// `[…]` is a list literal, EXCEPT when it carries `->` separators —
+			// then it's the new map literal `[k -> v  …]` (mirroring bracketIsMap
+			// in pkg/syntax/lower.go). The arrow-aware key reader collects the key
+			// node before each `->`.
+			if bracketIsMap(node.Children) {
+				return Shape{Kind: ShapeDict, Keys: arrowDictKeys(node.Children)}
+			}
 			return Shape{Kind: ShapeArray}
 		case "{":
 			return Shape{Kind: ShapeDict, Keys: dictLiteralKeys(node.Children)}
@@ -287,6 +294,44 @@ func dictLiteralKeys(entries []ast.PNode) map[string]span.Span {
 			continue
 		}
 		return nil
+	}
+	return keys
+}
+
+// bracketIsMap reports whether a `[…]` literal carries `->` separators,
+// which distinguishes the new map literal `[k -> v]` from a plain list
+// `[a b c]` (mirrors bracketIsMap in pkg/syntax/lower.go).
+func bracketIsMap(children []ast.PNode) bool {
+	for _, c := range children {
+		if lf, ok := c.(*ast.PLeaf); ok && lf.Value == "->" {
+			return true
+		}
+	}
+	return false
+}
+
+// arrowDictKeys harvests the statically known keys of the new map literal
+// `[k -> v  …]`: the string-literal key node that precedes each `->`
+// separator. Returns nil — "keys unknown" — if any key position holds
+// something computed, since then the literal's key set can't be trusted.
+// The empty map `[->]` yields empty (non-nil) Keys.
+func arrowDictKeys(children []ast.PNode) map[string]span.Span {
+	keys := map[string]span.Span{}
+	for i, c := range children {
+		lf, ok := c.(*ast.PLeaf)
+		if !ok || lf.Value != "->" {
+			continue
+		}
+		if i == 0 {
+			// `->` with no preceding key node (e.g. the empty map `[->]`).
+			continue
+		}
+		key := children[i-1]
+		if str, ok := stringLiteral(key); ok {
+			keys[str] = key.GetSpan()
+		} else {
+			return nil
+		}
 	}
 	return keys
 }

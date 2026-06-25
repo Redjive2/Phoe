@@ -85,8 +85,8 @@ func TestStructSyntaxFieldResolution(t *testing.T) {
 
 func TestStructSyntaxPropertyDetection(t *testing.T) {
 	prelude := "(struct Temp #celsius)\n" +
-		"(property Temp.Fahrenheit\n" +
-		"    get (method Temp (self) (+ self.celsius 32)))\n" +
+		"(property Temp.fahrenheit\n" +
+		"    get (method Temp (self) (+ self.#celsius 32)))\n" +
 		"(let var t = Temp.{ #celsius 0 })\n"
 
 	// The attached property is detected as a member of the struct.
@@ -120,7 +120,7 @@ func TestStructSyntaxCrossPackage(t *testing.T) {
 
 	main := filepath.Join(dir, "main.pho")
 	src := "(import 'shapes')\n" +
-		"(let var c = shapes.Circle.{ Radius 2 Center 0 })\n" +
+		"(let var c = shapes.Circle.{ radius 2 center 0 })\n" +
 		"(let var r = c.radius)\n" + // imported struct field
 		"(let var a = c.area)" // imported attached property
 	if cs := codes(main, src); len(cs) != 0 {

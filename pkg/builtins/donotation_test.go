@@ -23,7 +23,7 @@ func TestDoNotationSequencesAndReturnsLast(t *testing.T) {
 // A multi-statement function body uses (identity do …) to sequence its
 // forms and yield the last; bodies are bare expressions post-cutover.
 func TestDoNotationInFunBody(t *testing.T) {
-	src := "(fun addWithLog (a b) (identity do\n" +
+	src := "(fun add_with_log (a b) (identity do\n" +
 		"  (+ a 0)\n" +
 		"  (+ a b)))\n" +
 		"(add_with_log 3 4)"

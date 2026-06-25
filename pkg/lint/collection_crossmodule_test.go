@@ -33,7 +33,7 @@ func TestCrossModuleCollectionMember(t *testing.T) {
 			t.Errorf("cross-module Collection member %q should resolve on String/List/Map; got %#v", member, d)
 		}
 	}
-	if !hasDiagWithName(d, "unknown-member", "Nope") {
+	if !hasDiagWithName(d, "unknown-member", "nope") {
 		t.Errorf("a genuinely-unknown member should still fire; got %#v", d)
 	}
 	// Importing a package purely for its extension methods is a USE — the import

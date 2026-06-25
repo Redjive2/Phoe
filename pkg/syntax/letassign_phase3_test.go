@@ -9,11 +9,11 @@ import "testing"
 func TestLetAndAssignDesugar(t *testing.T) {
 	cases := []struct{ src, want string }{
 		// let -> const, let var -> var.
-		{"(let = = 1)", "((let x = 1))"},
-		{"(let var var x = = 1)", "((let var x = 1))"},
+		{"(let x = 1)", "((const x 1))"},
+		{"(let var x = 1)", "((var x 1))"},
 		// Multiple bindings.
-		{"(let = = 1 b = = 2)", "((let a = 1 b = 2))"},
-		{"(let var var a = = 1 b = = 2)", "((let var a = 1 b = 2))"},
+		{"(let a = 1 b = 2)", "((const a 1 b 2))"},
+		{"(let var a = 1 b = 2)", "((var a 1 b 2))"},
 		// Infix assignment -> prefix `=`, including a dot target.
 		{"(x = 1)", "((= x 1))"},
 		{"(obj.#field = 1)", "((= obj.#field 1))"},

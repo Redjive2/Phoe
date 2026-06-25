@@ -325,27 +325,24 @@ func TestUnknownExport(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	// An imported package with one capitalized fun and one
-	// uncapitalized helper.
+	// An imported package with one public fun and one '#'-private helper.
 	pkgDir := filepath.Join(dir, "mathx")
 	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(pkgDir, "lib.phl"), []byte(`(fun square (x) (* x x))
-(fun cube (x) (* x (* x x)))
+(fun #cube (x) (* x (* x x)))
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Importer references three names:
-	//   mathx.Square     — real export, no diag
-	//   mathx.Cube       — typo'd version of the lowercase helper; not exported
-	//   mathx.cube       — exists but lowercase, not exported
+	// Importer references two names:
+	//   mathx.square     — public export, no diag
+	//   mathx.#cube      — '#'-private helper, not exported
 	target := filepath.Join(dir, "main.pho")
 	src := []byte(`(import '` + pkgDir + `')
-(mathx.Square 3)
-(mathx.Cube 3)
-(mathx.cube 3)
+(mathx.square 3)
+(mathx.#cube 3)
 `)
 	if err := os.WriteFile(target, src, 0o644); err != nil {
 		t.Fatal(err)
@@ -353,14 +350,11 @@ func TestUnknownExport(t *testing.T) {
 
 	diags := AnalyzeFile(target, src)
 
-	if hasDiagWithName(diags, "unknown-export", "Square") {
-		t.Errorf("did not expect unknown-export on real export Square, got %#v", diags)
+	if hasDiagWithName(diags, "unknown-export", "square") {
+		t.Errorf("did not expect unknown-export on public export square, got %#v", diags)
 	}
-	if !hasDiagWithName(diags, "unknown-export", "Cube") {
-		t.Errorf("expected unknown-export on Cube, got %#v", diags)
-	}
-	if !hasDiagWithName(diags, "unknown-export", "cube") {
-		t.Errorf("expected unknown-export on lowercase 'cube' (not exported), got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-export", "#cube") {
+		t.Errorf("expected unknown-export on '#'-private '#cube' (not exported), got %#v", diags)
 	}
 }
 

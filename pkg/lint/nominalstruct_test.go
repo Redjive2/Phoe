@@ -29,12 +29,12 @@ func TestNominalStructTypes(t *testing.T) {
 		// A struct name in a signature now resolves (was Dynamic → no check).
 		{"wrong struct to struct param", pt + "(struct Other.{ a Number b Number })\n" + sig("Point") + "(let o = Other.{ a 1 b 2 })\n(f o)", true},
 		{"primitive to struct param", pt + sig("Point") + "(f 5)", true},
-		{"struct missing required field", pt + sig("Struct.{ X Number Z Number }") + "(let p = Point.{ x 1 y 2 })\n(f p)", true},
-		{"struct wrong field type", pt + sig("Struct.{ X String }") + "(let p = Point.{ x 1 y 2 })\n(f p)", true},
+		{"struct missing required field", pt + sig("Struct.{ x Number z Number }") + "(let p = Point.{ x 1 y 2 })\n(f p)", true},
+		{"struct wrong field type", pt + sig("Struct.{ x String }") + "(let p = Point.{ x 1 y 2 })\n(f p)", true},
 
 		// Soundness — must stay silent.
 		{"matching struct", pt + sig("Point") + "(let p = Point.{ x 1 y 2 })\n(f p)", false},
-		{"struct satisfies wider record", pt + sig("Struct.{ X Number }") + "(let p = Point.{ x 1 y 2 })\n(f p)", false},
+		{"struct satisfies wider record", pt + sig("Struct.{ x Number }") + "(let p = Point.{ x 1 y 2 })\n(f p)", false},
 		{"same-shape struct is structural", pt + "(struct Twin.{ x Number y Number })\n" + sig("Point") + "(let tw = Twin.{ x 1 y 2 })\n(f tw)", false},
 		{"untyped struct stays coarse", "(struct Plain a b)\n" + sig("Point") + "(let pl = Plain.{ a 1 b 2 })\n(f pl)", false},
 		{"struct satisfies trait", pt + "(method Point.draw (self) self.x)\n(trait Drawable (method self.draw (self)))\n(fun g (Drawable) none)\n(fun g (d) none)\n(let p = Point.{ x 1 y 2 })\n(g p)", false},

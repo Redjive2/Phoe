@@ -1680,7 +1680,7 @@ func arrayDictHint(name string) string {
 	case "slice":
 		return " (arrays are written with brackets: [a b c])"
 	case "map":
-		return " (dicts are written with braces: {k v})"
+		return " (dicts are written with brackets: [k -> v])"
 	}
 	return ""
 }

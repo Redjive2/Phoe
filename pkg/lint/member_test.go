@@ -31,8 +31,8 @@ const pointPrelude = `(struct Point x #y)
 func TestUnknownMemberOnInstance(t *testing.T) {
 	diags := analyze(t, pointPrelude+`(let var q = p.nope)
 `)
-	if !hasDiagWithName(diags, "unknown-member", "Nope") {
-		t.Fatalf("expected unknown-member for p.Nope, got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-member", "nope") {
+		t.Fatalf("expected unknown-member for p.nope, got %#v", diags)
 	}
 }
 
@@ -51,11 +51,11 @@ func TestPrivateMemberOutsideMethod(t *testing.T) {
 	diags := analyze(t, pointPrelude+`(let var a = p.#y)
 (let var b = (p.#tweak 1))
 `)
-	if !hasDiagWithName(diags, "private-member-access", "'y'") {
-		t.Fatalf("expected private-member-access for p.y, got %#v", diags)
+	if !hasDiagWithName(diags, "private-member-access", "'#y'") {
+		t.Fatalf("expected private-member-access for p.#y, got %#v", diags)
 	}
-	if !hasDiagWithName(diags, "private-member-access", "'tweak'") {
-		t.Fatalf("expected private-member-access for p.tweak, got %#v", diags)
+	if !hasDiagWithName(diags, "private-member-access", "'#tweak'") {
+		t.Fatalf("expected private-member-access for p.#tweak, got %#v", diags)
 	}
 }
 
@@ -102,10 +102,10 @@ func TestUnknownMemberViaSiblingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	diags := AnalyzeFile(target, src)
-	if !hasDiagWithName(diags, "unknown-member", "Missing") {
-		t.Fatalf("expected unknown-member for b.Missing via sibling struct, got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-member", "missing") {
+		t.Fatalf("expected unknown-member for b.missing via sibling struct, got %#v", diags)
 	}
-	if hasDiagWithName(diags, "unknown-member", "Content") || hasDiagWithName(diags, "unknown-member", "Open") {
+	if hasDiagWithName(diags, "unknown-member", "content") || hasDiagWithName(diags, "unknown-member", "open") {
 		t.Fatalf("expected no unknown-member on real members, got %#v", diags)
 	}
 }
@@ -122,11 +122,11 @@ func TestReassignmentRetargetsShape(t *testing.T) {
 (let var a = v.length)
 (let var b = v.x)
 `)
-	if !hasDiagWithName(diags, "unknown-member", "'X'") {
-		t.Fatalf("expected unknown-member for v.X after retarget to Line, got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-member", "'x'") {
+		t.Fatalf("expected unknown-member for v.x after retarget to Line, got %#v", diags)
 	}
-	if hasDiagWithName(diags, "unknown-member", "Length") {
-		t.Fatalf("v.Length must be valid after retarget, got %#v", diags)
+	if hasDiagWithName(diags, "unknown-member", "length") {
+		t.Fatalf("v.length must be valid after retarget, got %#v", diags)
 	}
 }
 
@@ -321,24 +321,24 @@ func TestScalarAccess(t *testing.T) {
 func TestWriteUnknownField(t *testing.T) {
 	diags := analyze(t, pointPrelude+`(= p.nope 1)
 `)
-	if !hasDiagWithName(diags, "unknown-member", "Nope") {
-		t.Fatalf("expected unknown-member for write to p.Nope, got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-member", "nope") {
+		t.Fatalf("expected unknown-member for write to p.nope, got %#v", diags)
 	}
 }
 
 func TestWriteToMethod(t *testing.T) {
 	diags := analyze(t, pointPrelude+`(= p.shift 1)
 `)
-	if !hasDiagWithName(diags, "unknown-member", "Shift") {
-		t.Fatalf("expected unknown-member for write to method p.Shift, got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-member", "shift") {
+		t.Fatalf("expected unknown-member for write to method p.shift, got %#v", diags)
 	}
 }
 
 func TestWritePrivateFieldOutside(t *testing.T) {
 	diags := analyze(t, pointPrelude+`(= p.#y 1)
 `)
-	if !hasDiagWithName(diags, "private-member-access", "'y'") {
-		t.Fatalf("expected private-member-access for write to p.y, got %#v", diags)
+	if !hasDiagWithName(diags, "private-member-access", "'#y'") {
+		t.Fatalf("expected private-member-access for write to p.#y, got %#v", diags)
 	}
 }
 
