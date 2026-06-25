@@ -8,7 +8,7 @@ func TestRecase(t *testing.T) {
 		"privateHelper": "#private_helper",
 		"camelVar":      "#camel_var",
 	}
-	types := map[string]bool{"Point": true, "Box": true, "Number": true}
+	types := map[string]bool{"Point": true, "Box": true, "Number": true, "NilT": true}
 	goimports := map[string]bool{"dep": true}
 
 	cases := []struct{ name, in, want string }{
@@ -45,6 +45,8 @@ func TestRecase(t *testing.T) {
 		{"type ref", "(p.Is? Point)", "(p.is? Point)"},
 		// A type head with no args must not panic (len-1 children).
 		{"type call no args", "(Point)", "(Point)"},
+		// A builtin type keeps its exact spelling (not re-split by Title_Snake).
+		{"builtin NilT", "(x.is? NilT)", "(x.is? NilT)"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

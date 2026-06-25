@@ -34,6 +34,9 @@ func recaseLeaf(name string, renames map[string]string, types map[string]bool) s
 		return nn
 	}
 	if types[name] {
+		if builtinTypes[name] {
+			return name // a builtin type (NilT, Number, …) keeps its exact spelling
+		}
 		return toTitleSnake(name)
 	}
 	return toSnakeCase(name)
@@ -48,6 +51,9 @@ func recaseMember(name string, types map[string]bool) string {
 		return name
 	}
 	if types[name] {
+		if builtinTypes[name] {
+			return name
+		}
 		return toTitleSnake(name)
 	}
 	if isCapitalized(name) {
