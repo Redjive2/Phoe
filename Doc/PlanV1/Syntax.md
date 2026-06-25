@@ -248,33 +248,44 @@ recase.go` + `-recase` mode, tested in `recase_test.go`):
   `io.Writer` (snaked to `io.writer` when `io` was absent — confirms the closure
   requirement).
 
-**⚠ Critical remaining gap (blocks migration):** struct-INIT field keys
-(`Process.{ pid 0 }`) and typed-struct-DECL field names become **string
-literals** at parse time (the `.{` sugar quotes them), so `Recase` skips them —
-leaving construction `Process.{ pid 0 }` mismatched against the recased field
-decl `#pid`. Must recase these (a token-level `.{` pass) before any migration,
-or struct construction breaks at runtime. Minor gaps: param/local shadowing of a
-top-level private name; `property`/`static` member-name decls.
+**Gaps fixed (`tooling/snakecase`, all tested):** the struct-init/typed-decl
+field-key pass (`recaseConstruction`), goimport-member skip (`dep.PctlSpawn`
+stays — Go-module exports), `.phl`/`.pho` privacy (`#` only in libraries), and a
+`-migrate` driver + `-go` casing that share ONE package-wide map across `.phl`/
+`.pho` AND Pho embedded in `.go`. Recover-and-skip guards panicking snippets.
 
-**Migration verdict — NOT ready to run on the live tree:**
-1. The struct-init field-key gap above would break struct construction.
-2. The concurrent sibling agent is still editing `pkg/lint` + `*.phl` (tree is
-   red from its `~sig` refactor); a codemod run would collide.
-3. The flip itself (StrictNames on, `{}`→`Brace`, struct-decl reorder, drop old
-   syntax) is not built — casing alone doesn't complete the cutover.
+**Full cutover attempted in an isolated worktree** (branch `syntax-cutover`,
+commit df2acd2; main stays green at the checkpoint): `-migrate` applied **1008
+edits across 108 files** (all `.phl`/`.pho` + the embedded Pho in `*_test.go`)
+and the visibility rule was flipped to pure-`#` (lint `exported()`,
+`member.go`, `completion.go`; runtime `isExportedMember`, `modload/load.go`).
+Pho sources + embedded test Pho migrated cleanly. Result: **155 test failures**,
+two systematic root causes — **the migration is a THREE-surface coupled
+operation, and only two surfaces were migratable by the codemod:**
 
-**Apply surface (when executed):** `script/std/**/*.phl`,
-`pkg/builtins/pho/*.phl`, `testdata/**/*.pho`,
-`tooling/tree-sitter-pho/examples/*`, and the **84 `*_test.go` files** with
-embedded Pho (via `-go`) — the largest surface.
+1. **Go-side Pho-facing name registrations are a third surface.** Methods like
+   `Is?` are registered Go-native in `builtinmod.go` (`AddMethod(…, "Is?", …)`),
+   not in `.phl`. The codemod migrated Pho refs `.Is?`→`.is?`, but the Go
+   string `"Is?"` was untouched → `.is?` resolves to nil, cascading through the
+   universal object model (`<nil>` everywhere). Fix: migrate the Pho-facing
+   name strings in Go runtime code (`builtinmod.go`, `typeval.go`, the
+   `Nil/True/False` rendering in `inspect.go`, builtin name tables) in lockstep.
+2. **Scope-aware shadowing.** A local param that collides with a global private
+   name is wrongly `#`-prefixed: param `type` (in `(method Unknown.to (self
+   type) …)`) became `#type` because `annot.phl` has `(fun type …)` in the
+   global map. Fix: `Recase` must track param/let bindings per scope and never
+   apply the global map to a locally-bound name.
 
-**Blockers before executing the cutover:**
-1. **A concurrent sibling agent** is actively editing `pkg/lint` and
-   `pkg/builtins/pho/*.phl`. A full-tree codemod would collide with in-flight
-   edits. The cutover must wait until the tree is quiet.
-2. The casing reclassification (above) must be solved first.
-3. The flip is all-or-nothing — the suite breaks until every source is migrated,
-   so it needs `StrictNames`-off → migrate → flip done as one reviewed sequence.
+**Verdict:** the codemod cleanly migrates surfaces 1–2 (Pho + embedded test
+Pho); completing the cutover additionally needs (a) migrating the Go-side
+Pho-facing name registrations and (b) scope-aware shadowing in `Recase`, then
+grinding the residual failures. This is a multi-session effort, not a single
+codemod run. The WIP lives on `syntax-cutover` for iteration; main is the clean
+checkpoint.
+
+Annotation-vocabulary caveat (found earlier, still relevant): `annot.phl`'s
+`~doc`/`~flag`/`~sig` functions are lowercase-but-public protocol names — a
+PARTIAL migration breaks them; the cutover must be whole-tree and atomic.
 
 ### Phase 8 — tree-sitter + Zed + LSP
 - `grammar.js`: value-vs-type ident + `#`, `none/true/false`, `->`, `[]`
