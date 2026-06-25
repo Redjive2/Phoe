@@ -116,7 +116,7 @@ func recaseWalk(src string, n ast.PNode, ctx *recaseCtx, edits *[]edit) {
 				// A construction `(Type 'field' val …)` (the `.{}` sugar quotes
 				// the keys). A USER struct type with a string-literal first arg
 				// marks it; built-in connectives (`(Or 'GET' …)`) are excluded.
-				if ctx.types[head.Value] && !builtinTypes[head.Value] {
+				if len(node.Children) >= 2 && ctx.types[head.Value] && !builtinTypes[head.Value] {
 					if _, ok := isStrLit(node.Children[1]); ok {
 						recaseConstruction(src, node, ctx, edits)
 						return

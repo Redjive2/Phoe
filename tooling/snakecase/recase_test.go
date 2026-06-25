@@ -35,6 +35,8 @@ func TestRecase(t *testing.T) {
 
 		// A bare type reference is Title_Snake (no-op for single word).
 		{"type ref", "(p.Is? Point)", "(p.is? Point)"},
+		// A type head with no args must not panic (len-1 children).
+		{"type call no args", "(Point)", "(Point)"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
