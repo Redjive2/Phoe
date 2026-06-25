@@ -184,7 +184,7 @@ func cloneSet(s map[string]bool) map[string]bool {
 // them recase as locals, not via the global private map.
 func recaseFunLike(src string, br *ast.PBranch, ctx *recaseCtx, edits *[]edit) {
 	child := &recaseCtx{ctx.renames, ctx.types, ctx.goimports, cloneSet(ctx.bound)}
-	collectFunLocals(br, child.bound)
+	collectFunLocals(br, ctx.types, child.bound)
 	for i := 1; i < len(br.Children); i++ {
 		recaseWalk(src, br.Children[i], child, edits)
 	}
@@ -193,11 +193,13 @@ func recaseFunLike(src string, br *ast.PBranch, ctx *recaseCtx, edits *[]edit) {
 // collectFunLocals adds a fun/method's parameter names and any body-local
 // let/const/var/foreach binding names (anywhere in the subtree, closures
 // included) to set.
-func collectFunLocals(br *ast.PBranch, set map[string]bool) {
+func collectFunLocals(br *ast.PBranch, types, set map[string]bool) {
 	for i := 1; i < len(br.Children); i++ {
 		if pl, ok := br.Children[i].(*ast.PBranch); ok && pl.Open == "(" {
 			for _, p := range pl.Children {
-				if name := paramName(p); name != "" {
+				// Skip type names: a SIGNATURE `(fun f (Number Number) R)` has a
+				// type-list here, not value params — those stay types, not locals.
+				if name := paramName(p); name != "" && !types[name] {
 					set[name] = true
 				}
 			}
