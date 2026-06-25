@@ -231,7 +231,20 @@ func MigrateGoFile(src string, renames map[string]string, types map[string]bool)
 	return out, changed, nil
 }
 
-func migrateGoLiteral(goLit string, renames map[string]string, types map[string]bool) (string, bool) {
+func migrateGoLiteral(goLit string, renames map[string]string, types map[string]bool) (result string, changed bool) {
+	// Recover-and-skip: a single edge-case snippet that trips the rewriter is
+	// left unchanged (still tolerantly accepted) rather than aborting the whole
+	// migration. The skip is logged so it can be reviewed.
+	defer func() {
+		if r := recover(); r != nil {
+			prefix := goLit
+			if len(prefix) > 50 {
+				prefix = prefix[:50]
+			}
+			fmt.Fprintf(os.Stderr, "  skip (panic %v): %s…\n", r, prefix)
+			result, changed = goLit, false
+		}
+	}()
 	if len(goLit) < 2 {
 		return goLit, false
 	}
