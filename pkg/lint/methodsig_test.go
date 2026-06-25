@@ -18,9 +18,9 @@ func TestMethodSigHarvest(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	src := "(struct Reader buffer)\n" +
-		"(method Reader.Seek (Reader Number) Boolean)\n" +
-		"(method Reader.Seek (self n) do True)\n"
+	src := "(struct Reader #buffer)\n" +
+		"(method Reader.seek (Reader Number) Boolean)\n" +
+		"(method Reader.seek (self n) do true)\n"
 
 	tokens, _ := syntax.LexPos(src)
 	tree, _ := syntax.ParsePos(tokens)
@@ -32,9 +32,9 @@ func TestMethodSigHarvest(t *testing.T) {
 	w.collect(scope, tree)
 	w.harvestMethodSigs(scope, tree)
 
-	sig := w.methodSigFor(scope, "Reader", "Seek")
+	sig := w.methodSigFor(scope, "Reader", "seek")
 	if sig == nil {
-		t.Fatal("expected a harvested signature for Reader.Seek")
+		t.Fatal("expected a harvested signature for Reader.seek")
 	}
 	// The receiver (Reader) is not an argument; params are just [Number].
 	if len(sig.Params) != 1 || sig.Params[0] != core.TypeNumber {

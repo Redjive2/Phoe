@@ -21,7 +21,6 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
-	"unicode"
 
 	"pho/pkg/core"
 	"pho/pkg/diag"
@@ -363,7 +362,7 @@ func loadPackage(path string, allowShadow bool) (*core.Package, error) {
 		// can read `pkg.Name` but cannot assign to it (see the `=` builtin's
 		// package case and the Dot accessor, which reads the live binding).
 		for name, entry := range pkg.Env.Stack[0] {
-			if len(name) == 0 || !unicode.IsUpper(rune(name[0])) {
+			if len(name) == 0 || name[0] == '#' {
 				continue
 			}
 			pkg.Exports[name] = entry.Val

@@ -16,7 +16,7 @@ func TestLetAndAssignDesugar(t *testing.T) {
 		{"(let var a = 1 b = 2)", "((var a 1 b 2))"},
 		// Infix assignment -> prefix `=`, including a dot target.
 		{"(x = 1)", "((= x 1))"},
-		{"(obj.field = 1)", "((= obj.field 1))"},
+		{"(obj.#field = 1)", "((= obj.#field 1))"},
 		// Already-prefix `=` and ordinary calls are left untouched.
 		{"(= x 1)", "((= x 1))"},
 		{"(f x y)", "((f x y))"},

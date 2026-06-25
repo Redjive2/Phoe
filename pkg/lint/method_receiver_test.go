@@ -10,10 +10,10 @@ import "testing"
 // TestScalarAccess.) A method on a real struct still field-checks `self`.
 func TestMethodSelfShapeByReceiverKind(t *testing.T) {
 	clean := []string{
-		"(method Collection.Last (self) self.[(- self.Size 1)])\n", // union receiver: indexable
-		"(method String.Shout (self) self.Size)\n",                 // primitive: built-in member resolves
-		"(method Number.Wat (self) self.Is?)\n",                    // primitive: universal member resolves
-		"(method List.At (self i) self.[i])\n",                     // collection self is indexable
+		"(method Collection.last (self) self.[(- self.size 1)])\n", // union receiver: indexable
+		"(method String.shout (self) self.size)\n",                 // primitive: built-in member resolves
+		"(method Number.wat (self) self.is?)\n",                    // primitive: universal member resolves
+		"(method List.at (self i) self.[i])\n",                     // collection self is indexable
 	}
 	for _, src := range clean {
 		d := AnalyzeFile("t.phl", []byte(src))
@@ -23,7 +23,7 @@ func TestMethodSelfShapeByReceiverKind(t *testing.T) {
 	}
 
 	// A real struct method still flags a bad field on self.
-	d := AnalyzeFile("t.phl", []byte("(struct Point X Y)\n(method Point.Bad (self) self.nope)\n"))
+	d := AnalyzeFile("t.phl", []byte("(struct Point x y)\n(method Point.bad (self) self.#nope)\n"))
 	if !hasDiagWithName(d, "unknown-member", "nope") {
 		t.Errorf("struct method should still flag a bad field on self; got %#v", d)
 	}

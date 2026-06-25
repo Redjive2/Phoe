@@ -23,19 +23,19 @@ import (
 var hardeningCorpus = []string{
 	`(fun add (a b) (+ a b))`,
 	`(fun f ((spread xs) (optional o)) (keyof xs))`,
-	`(method Point.Shift (self d) (+ self.X d))`,
-	`(struct Point X y)`,
-	`(var p Point.{ X 1 y 2 })`,
-	`(const k (mod 10 3))`,
-	`(= p.X 10)`,
+	`(method Point.shift (self d) (+ self.x d))`,
+	`(struct Point x #y)`,
+	`(let var p = Point.{ x 1 #y 2 })`,
+	`(let k = (mod 10 3))`,
+	`(= p.x 10)`,
 	`(= x 5)`,
 	`(if (< n 1) (foo) (bar))`,
-	`(foreach x in [1 2 3] (io.PrintLine x))`,
+	`(foreach x in [1 2 3] (io.print_line x))`,
 	`(while (< i 10) then (identity do (step)))`,
-	`(identity do (var a 1) (+ a 2))`,
+	`(identity do (let var a = 1) (+ a 2))`,
 	`(import 'std/io')`,
 	`(goimport ('mathx' m))`,
-	`(io.PrintLine self.x.y)`,
+	`(io.print_line self.#x.#y)`,
 	`(myMacro! a b c)`,
 	`(return (+ 1 2))`,
 	`'hi %name and %(len items) at %obj.field'`,
@@ -47,12 +47,12 @@ var hardeningCorpus = []string{
 	// Bare special forms — every head reached with a 1-child branch,
 	// the shape that broke `if`. The shape/decl/nav/completion handlers
 	// must all tolerate the missing operands.
-	`(fun)`, `(method)`, `(struct)`, `(var)`, `(const)`, `(=)`,
+	`(fun)`, `(method)`, `(struct)`, `(let var)`, `(let)`, `(=)`,
 	`(if)`, `(foreach)`, `(while)`, `(identity do)`, `(return)`, `(import)`, `(goimport)`,
-	`(block)`, `(method M)`, `(fun x)`, `(= a)`,
+	`(block)`, `(method m)`, `(fun x)`, `(= a)`,
 	// Partial accessors and literals.
 	`obj.`, `a.b.c.d`, `x.[1 : 3]`, `x.[1 :]`, `s.[: 2]`, `{`, `[`, `(`,
-	`{'k'`, `[1 2`, `(io.`, `(a.b.c d)`,
+	`{'k'`, `[1 2`, `(io.`, `(a.#b.#c d)`,
 	// Deep nesting truncated mid-form.
 	`(do (do (do (if (< n 1)`,
 }

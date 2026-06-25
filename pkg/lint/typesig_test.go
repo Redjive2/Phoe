@@ -14,11 +14,11 @@ import (
 // erases the type — the name resolves like any other, and the form lints clean.
 func TestTypedBindingRecognized(t *testing.T) {
 	clean := []string{
-		"(const (Number n) 5)\n(+ n 1)",
-		"(var (String s) 'hi')\ns.Size",
-		"(var (Number a) 1 (Number b) 2)\n(+ a b)",
-		"(const ((Or Number String) u) 5)\nu", // a type-FORM in the type slot
-		"(const x 5)\nx",                      // untyped still clean
+		"(let (Number n) = 5)\n(+ n 1)",
+		"(let var (String s) = 'hi')\ns.size",
+		"(let var (Number a) = 1 (Number b) = 2)\n(+ a b)",
+		"(let ((Or Number String) u) = 5)\nu", // a type-FORM in the type slot
+		"(let x = 5)\nx",                      // untyped still clean
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); len(d) != 0 {
@@ -31,9 +31,9 @@ func TestTypedBindingRecognized(t *testing.T) {
 // type name as if it were the binding is still unresolved.
 func TestTypedBindingNameIsSecond(t *testing.T) {
 	// `n` is the binding; `Nope` is not defined.
-	d := AnalyzeFile("t.pho", []byte("(const (Number n) 5)\n(+ Nope 1)"))
-	if !hasDiagWithName(d, "unresolved-identifier", "Nope") {
-		t.Fatalf("expected Nope unresolved, got %v", d)
+	d := AnalyzeFile("t.pho", []byte("(let (Number n) = 5)\n(+ nope 1)"))
+	if !hasDiagWithName(d, "unresolved-identifier", "nope") {
+		t.Fatalf("expected nope unresolved, got %v", d)
 	}
 }
 
@@ -45,7 +45,7 @@ func TestFunSignatureRecognized(t *testing.T) {
 		"(fun add (Number Number) Number)\n(fun add (a b) (+ a b))\n(add 1 2)",
 		"(fun add (a b) (+ a b))\n(fun add (Number Number) Number)\n(add 1 2)", // impl first
 		"(fun id (Self) Self)\n(fun id (x) x)\n(id 5)",
-		"(fun pick () (Or Number Nil))\n(fun pick () Nil)\n(pick)", // type-form return
+		"(fun pick () (Or Number none))\n(fun pick () none)\n(pick)", // type-form return
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); len(d) != 0 {
@@ -60,9 +60,9 @@ func TestFunSignatureRecognized(t *testing.T) {
 func TestFunImplNotMistakenForSig(t *testing.T) {
 	// `(use)` resolves only if `(fun use () (Helper))` was registered as an impl.
 	clean := []string{
-		"(fun Helper () 1)\n(fun use () (Helper))\n(use)",
-		"(fun ok () True)\n(ok)",
-		"(fun no () Nil)\n(no)",
+		"(fun helper () 1)\n(fun use () (helper))\n(use)",
+		"(fun ok () true)\n(ok)",
+		"(fun no () none)\n(no)",
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); len(d) != 0 {
@@ -75,8 +75,8 @@ func TestFunImplNotMistakenForSig(t *testing.T) {
 // 0) is recognized and erased; the `self`-bodied implementation registers it.
 func TestMethodSignatureRecognized(t *testing.T) {
 	clean := []string{
-		"(struct P X)\n(method P.Show (Self) Number)\n(method P.Show (self) self.X)\n(var p P.{ X 5 })\np.Show",
-		"(struct P X)\n(method P.Show (self) self.X)\n(var p P.{ X 5 })\np.Show", // impl-only
+		"(struct P x)\n(method P.show (Self) Number)\n(method P.show (self) self.x)\n(let var p = P.{ x 5 })\np.show",
+		"(struct P x)\n(method P.show (self) self.x)\n(let var p = P.{ x 5 })\np.show", // impl-only
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); len(d) != 0 {
@@ -92,8 +92,8 @@ func TestMethodSignatureRecognized(t *testing.T) {
 func TestMissingImplementation(t *testing.T) {
 	missing := []string{
 		"(fun add (Number Number) Number)",                // lone fun sig
-		"(struct P X)\n(method P.Show (Self) Number)",     // lone method sig
-		"(fun add (Number Number) Number)\n(const add 5)", // wrong kind (const, not fun)
+		"(struct P x)\n(method P.show (Self) Number)",     // lone method sig
+		"(fun add (Number Number) Number)\n(let add = 5)", // wrong kind (const, not fun)
 	}
 	for _, src := range missing {
 		if d := AnalyzeFile("t.pho", []byte(src)); !hasDiag(d, "missing-implementation") {
@@ -103,7 +103,7 @@ func TestMissingImplementation(t *testing.T) {
 	clean := []string{
 		"(fun add (Number Number) Number)\n(fun add (a b) (+ a b))", // sig then impl
 		"(fun add (a b) (+ a b))\n(fun add (Number Number) Number)", // impl then sig (hoist)
-		"(struct P X)\n(method P.Show (Self) Number)\n(method P.Show (self) self.X)",
+		"(struct P x)\n(method P.show (Self) Number)\n(method P.show (self) self.x)",
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); hasDiag(d, "missing-implementation") {
@@ -116,17 +116,17 @@ func TestMissingImplementation(t *testing.T) {
 // sig with no implementation anywhere is flagged.
 func TestSigImplCrossFile(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"lib/a.phl": "(fun Add (Number Number) Number)\n", // sig
-		"lib/b.phl": "(fun Add (x y) (+ x y))\n",          // impl in sibling
+		"lib/a.phl": "(fun add (Number Number) Number)\n", // sig
+		"lib/b.phl": "(fun add (x y) (+ x y))\n",          // impl in sibling
 	})
 	a := filepath.Join(root, "lib/a.phl")
-	if d := AnalyzeFile(a, []byte("(fun Add (Number Number) Number)\n")); hasDiag(d, "missing-implementation") {
+	if d := AnalyzeFile(a, []byte("(fun add (Number Number) Number)\n")); hasDiag(d, "missing-implementation") {
 		t.Errorf("sibling-file impl should satisfy the sig, got %v", d)
 	}
 
-	root2 := writeTree(t, map[string]string{"lib/c.phl": "(fun Solo (Number) Number)\n"})
+	root2 := writeTree(t, map[string]string{"lib/c.phl": "(fun solo (Number) Number)\n"})
 	c := filepath.Join(root2, "lib/c.phl")
-	if d := AnalyzeFile(c, []byte("(fun Solo (Number) Number)\n")); !hasDiag(d, "missing-implementation") {
+	if d := AnalyzeFile(c, []byte("(fun solo (Number) Number)\n")); !hasDiag(d, "missing-implementation") {
 		t.Errorf("a sig with no impl anywhere should be flagged, got %v", d)
 	}
 }
@@ -141,7 +141,7 @@ func TestCapitalizedParamFlagged(t *testing.T) {
 	clean := []string{
 		"(fun add (a b) (+ a b))",
 		"(fun add (Number Number) Number)\n(fun add (a b) (+ a b))",                 // the sig is skipped, not flagged
-		"(struct C N)\n(static property C.Zero get (method C (Self) Self.{ N 0 }))", // Self ok
+		"(struct C n)\n(static property C.zero get (method C (self) self.{ n 0 }))", // Self ok
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); hasDiag(d, "capitalized-param") {
@@ -178,10 +178,10 @@ func TestInlineFunSigChecks(t *testing.T) {
 
 // An inline typed binding's value is checked against the declared type.
 func TestInlineTypedBindingChecks(t *testing.T) {
-	if !hasDiag(AnalyzeFile("t.pho", []byte("(const (Number n) 'hi')")), "type-mismatch") {
+	if !hasDiag(AnalyzeFile("t.pho", []byte("(let (Number n) = 'hi')")), "type-mismatch") {
 		t.Error("expected type-mismatch for (const (Number n) 'hi')")
 	}
-	if hasDiag(AnalyzeFile("t.pho", []byte("(const (Number n) 5)")), "type-mismatch") {
+	if hasDiag(AnalyzeFile("t.pho", []byte("(let (Number n) = 5)")), "type-mismatch") {
 		t.Error("unexpected type-mismatch for (const (Number n) 5)")
 	}
 }
@@ -189,11 +189,11 @@ func TestInlineTypedBindingChecks(t *testing.T) {
 // An inline method signature checks method-call arguments; param 0 is the
 // receiver type, excluded from the call signature.
 func TestInlineMethodSigChecks(t *testing.T) {
-	base := "(struct P X)\n(method P.Take (Self Number) Number)\n(method P.Take (self n) n)\n(var p P.{ X 1 })\n"
-	if !hasDiag(AnalyzeFile("t.pho", []byte(base+"(p.Take 'hi')")), "type-mismatch") {
+	base := "(struct P x)\n(method P.take (Self Number) Number)\n(method P.take (self n) n)\n(let var p = P.{ x 1 })\n"
+	if !hasDiag(AnalyzeFile("t.pho", []byte(base+"(p.take 'hi')")), "type-mismatch") {
 		t.Error("expected type-mismatch for (p.Take 'hi')")
 	}
-	if hasDiag(AnalyzeFile("t.pho", []byte(base+"(p.Take 5)")), "type-mismatch") {
+	if hasDiag(AnalyzeFile("t.pho", []byte(base+"(p.take 5)")), "type-mismatch") {
 		t.Error("unexpected type-mismatch for (p.Take 5)")
 	}
 }

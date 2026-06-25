@@ -42,7 +42,7 @@ func TestReturnTypeChecking(t *testing.T) {
 		{"tail wrong (literal)", "(fun h (Number) Number)\n(fun h (n) 's')", true},
 		{"both if-arms checked", "(fun k (Number) Number)\n(fun k (n) (if (> n 0) then 1 else 2))", false},
 		{"one if-arm wrong", "(fun k (Number) Number)\n(fun k (n) (if (> n 0) then 1 else 's'))", true},
-		{"union result accepts members", "(fun m (Number) (Or Number Nil))\n(fun m (n) (if (> n 0) then n else Nil))", false},
+		{"union result accepts members", "(fun m (Number) (Or Number none))\n(fun m (n) (if (> n 0) then n else none))", false},
 		{"explicit return wrong", "(fun e (Number) Number)\n(fun e (n) do (return 's') n)", true},
 		{"explicit return ok", "(fun e (Number) Number)\n(fun e (n) do (return 0) n)", false},
 		// Gradual: an un-annotated function isn't return-checked; a Dynamic tail
@@ -50,24 +50,24 @@ func TestReturnTypeChecking(t *testing.T) {
 		{"un-annotated fun", "(fun u (n) 's')", false},
 		{"dynamic tail", "(fun helper (x) x)\n(fun d (Number) Number)\n(fun d (n) (helper n))", false},
 		// A nested function's own return doesn't count against the outer one.
-		{"nested fun return ignored", "(fun o (Number) Number)\n(fun o (n) do (const g (fun (x) 's')) n)", false},
+		{"nested fun return ignored", "(fun o (Number) Number)\n(fun o (n) do (let g = (fun (x) 's')) n)", false},
 	})
 }
 
 // Method-call argument checking: `(x.M args…)` is checked against M's harvested
 // methodsig when x's struct is statically known.
 func TestMethodCallArgChecking(t *testing.T) {
-	const decl = "(struct P X)\n(method P.Add (P Number) Number)\n(method P.Add (self n) n)\n(const p P.{ X 1 })\n"
+	const decl = "(struct P x)\n(method P.add (P Number) Number)\n(method P.add (self n) n)\n(let p = P.{ x 1 })\n"
 	stageE(t, []struct {
 		name    string
 		src     string
 		wantErr bool
 	}{
-		{"arg ok", decl + "(p.Add 5)", false},
-		{"arg wrong", decl + "(p.Add 's')", true},
+		{"arg ok", decl + "(p.add 5)", false},
+		{"arg wrong", decl + "(p.add 's')", true},
 		// Gradual: an un-annotated method, or an unknown receiver, isn't checked.
-		{"un-annotated method", "(struct Q X)\n(method Q.M (self n) n)\n(const q Q.{ X 1 })\n(q.M 's')", false},
-		{"unknown receiver", "(method P.Add (P Number) Number)\n(struct P X)\n(method P.Add (self n) n)\n(z.Add 's')", false},
+		{"un-annotated method", "(struct Q x)\n(method Q.m (self n) n)\n(let q = Q.{ x 1 })\n(q.m 's')", false},
+		{"unknown receiver", "(method P.add (P Number) Number)\n(struct P x)\n(method P.add (self n) n)\n(z.add 's')", false},
 	})
 }
 
@@ -79,11 +79,11 @@ func TestAssignmentChecking(t *testing.T) {
 		src     string
 		wantErr bool
 	}{
-		{"assign ok", "(var (Number x) 5)\n(= x 6)", false},
-		{"assign wrong", "(var (Number x) 5)\n(= x 's')", true},
-		{"un-annotated gradual", "(var y 5)\n(= y 's')", false},
+		{"assign ok", "(let var (Number x) = 5)\n(= x 6)", false},
+		{"assign wrong", "(let var (Number x) = 5)\n(= x 's')", true},
+		{"un-annotated gradual", "(let var y = 5)\n(= y 's')", false},
 		// Reassigning a narrowed union var to the OTHER member is valid (checked
 		// against the DECLARED union, not the narrowed type) — no false positive.
-		{"reassign narrowed union", "(var ((Or Number String) u) 5)\n(if (u.Is? Number) then (= u 's'))", false},
+		{"reassign narrowed union", "(let var ((Or Number String) u) = 5)\n(if (u.is? Number) then (= u 's'))", false},
 	})
 }

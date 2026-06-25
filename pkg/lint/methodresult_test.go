@@ -15,18 +15,18 @@ func TestMethodCallResultType(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	box := "(struct Box.{ N Number })\n(method Box.M (Self) String)\n(method Box.M (self) 's')\n(const b Box.{ N 1 })\n"
-	add := "(struct Box.{ N Number })\n(method Box.Add (Self Number) Number)\n(method Box.Add (self k) k)\n(const b Box.{ N 1 })\n"
-	g := "(fun g (Number) Nil)\n(fun g (n) Nil)\n"
-	gs := "(fun gs (String) Nil)\n(fun gs (s) Nil)\n"
+	box := "(struct Box.{ n Number })\n(method Box.m (Self) String)\n(method Box.m (self) 's')\n(let b = Box.{ n 1 })\n"
+	add := "(struct Box.{ n Number })\n(method Box.add (Self Number) Number)\n(method Box.add (self k) k)\n(let b = Box.{ n 1 })\n"
+	g := "(fun g (Number) none)\n(fun g (n) none)\n"
+	gs := "(fun gs (String) none)\n(fun gs (s) none)\n"
 	cases := []struct {
 		name    string
 		src     string
 		wantErr bool
 	}{
-		{"method result clashes with param", box + g + "(const a (b.M))\n(g a)", true},
-		{"method result matches param", box + gs + "(const a (b.M))\n(gs a)", false},
-		{"method-with-arg result clashes", add + gs + "(const a (b.Add 5))\n(gs a)", true},
+		{"method result clashes with param", box + g + "(let a = (b.m))\n(g a)", true},
+		{"method result matches param", box + gs + "(let a = (b.m))\n(gs a)", false},
+		{"method-with-arg result clashes", add + gs + "(let a = (b.add 5))\n(gs a)", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

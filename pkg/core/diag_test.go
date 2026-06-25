@@ -90,7 +90,7 @@ func TestEmitExpansion(t *testing.T) {
 
 	callSite := Span{StartLine: 9, StartCol: 1, EndLine: 9, EndCol: 13}
 	ctx := Context{Diag: s, At: &callSite}
-	ectx := ctx.WithExpansion("evilMacro", "(fakeFn arg)")
+	ectx := ctx.WithExpansion("evilMacro", "(fake_fn arg)")
 	ectx.Errorf(ErrUnresolved, "operation 'fakeFn' is not defined")
 
 	if len(seen) != 1 {
@@ -103,11 +103,11 @@ func TestEmitExpansion(t *testing.T) {
 	if exp == nil {
 		t.Fatal("Expansion not attached")
 	}
-	if exp.Macro != "evilMacro" || exp.Source != "(fakeFn arg)" {
+	if exp.Macro != "evilMacro" || exp.Source != "(fake_fn arg)" {
 		t.Errorf("expansion = %+v", exp)
 	}
 	// Phase A carets the whole generated form (one line, full width).
-	wantSpan := Span{StartLine: 1, StartCol: 1, EndLine: 1, EndCol: len("(fakeFn arg)") + 1}
+	wantSpan := Span{StartLine: 1, StartCol: 1, EndLine: 1, EndCol: len("(fake_fn arg)") + 1}
 	if exp.Span != wantSpan {
 		t.Errorf("expansion span = %+v, want %+v", exp.Span, wantSpan)
 	}

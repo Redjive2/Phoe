@@ -12,15 +12,15 @@ import (
 // reference INSIDE a default body still resolves (and a typo still flags).
 func TestTraitLintsClean(t *testing.T) {
 	clean := []string{
-		"(type Drawable (Trait () (method Self.Draw (self))))\n",
-		"(type Greet (Trait () (method Self.Hi (self) 'hi')))\n",
-		"(type HasName (Trait () (property Self.Name get)))\n",
-		"(type Mut (Trait () (property Self.X get set)))\n",
-		"(type WithImpl (Trait () (property Self.Area\n  get (method Self (self) 0)\n  set (method Self (self v) Nil))))\n",
+		"(type Drawable (Trait () (method self.draw (self))))\n",
+		"(type Greet (Trait () (method self.hi (self) 'hi')))\n",
+		"(type Has_Name (Trait () (property self.name get)))\n",
+		"(type Mut (Trait () (property self.x get set)))\n",
+		"(type With_Impl (Trait () (property self.area\n  get (method self (self) 0)\n  set (method self (self v) none))))\n",
 		// extends another trait by name.
-		"(type Drawable (Trait () (method Self.Draw (self))))\n(type Shape (Trait (Drawable) (method Self.Area (self))))\n",
+		"(type Drawable (Trait () (method self.draw (self))))\n(type Shape (Trait (Drawable) (method self.area (self))))\n",
 		// a default body's references resolve (self + params are bound).
-		"(type Add (Trait () (method Self.Inc (self n) (+ n 1))))\n",
+		"(type Add (Trait () (method self.inc (self n) (+ n 1))))\n",
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.phl", []byte(src)); len(d) != 0 {
@@ -29,11 +29,11 @@ func TestTraitLintsClean(t *testing.T) {
 	}
 
 	// A genuine unresolved reference in a default body still fires.
-	if d := AnalyzeFile("t.phl", []byte("(type Bad (Trait () (method Self.Hi (self) (nope))))\n")); !hasDiagWithName(d, "unresolved-identifier", "nope") {
+	if d := AnalyzeFile("t.phl", []byte("(type Bad (Trait () (method self.hi (self) (nope))))\n")); !hasDiagWithName(d, "unresolved-identifier", "nope") {
 		t.Errorf("a typo in a trait default body should flag; got %#v", d)
 	}
 	// An unknown extended trait still flags as unresolved.
-	if d := AnalyzeFile("t.phl", []byte("(type Shape (Trait (Nonexistent) (method Self.Area (self))))\n")); !hasDiagWithName(d, "unresolved-identifier", "Nonexistent") {
+	if d := AnalyzeFile("t.phl", []byte("(type Shape (Trait (nonexistent) (method self.area (self))))\n")); !hasDiagWithName(d, "unresolved-identifier", "nonexistent") {
 		t.Errorf("an unknown extended trait should flag; got %#v", d)
 	}
 }
@@ -49,22 +49,22 @@ func TestTraitStaticChecking(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	draw := "(type Drawable (Trait () (method Self.Draw (self))))\n(fun f (Drawable) Nil)\n(fun f (p) Nil)\n"
+	draw := "(type Drawable (Trait () (method self.draw (self))))\n(fun f (Drawable) none)\n(fun f (p) none)\n"
 	cases := []struct {
 		name    string
 		src     string
 		wantErr bool
 	}{
-		{"struct satisfies", draw + "(struct P X)\n(method P.Draw (self) 1)\n(f P.{ X 1 })", false},
-		{"struct missing method", draw + "(struct Q X)\n(f Q.{ X 1 })", true},
+		{"struct satisfies", draw + "(struct P x)\n(method P.draw (self) 1)\n(f P.{ x 1 })", false},
+		{"struct missing method", draw + "(struct Q x)\n(f Q.{ x 1 })", true},
 		{"non-struct never satisfies", draw + "(f 5)", true},
-		{"property by field", "(type HasName (Trait () (property Self.Name get)))\n(fun g (HasName) Nil)\n(fun g (x) Nil)\n(struct R Name)\n(g R.{ Name 'x' })", false},
-		{"property by field missing", "(type HasName (Trait () (property Self.Name get)))\n(fun g (HasName) Nil)\n(fun g (x) Nil)\n(struct S X)\n(g S.{ X 1 })", true},
-		{"extends: needs both", "(type Drawable (Trait () (method Self.Draw (self))))\n" +
-			"(type Shape (Trait (Drawable) (method Self.Area (self))))\n(fun h (Shape) Nil)\n(fun h (s) Nil)\n" +
-			"(struct C X)\n(method C.Area (self) 1)\n(h C.{ X 1 })", true}, // missing Draw (inherited)
-		{"var annotated satisfies", "(type Drawable (Trait () (method Self.Draw (self))))\n(struct P X)\n(method P.Draw (self) 1)\n(var (Drawable p) P.{ X 1 })", false},
-		{"var annotated missing", "(type Drawable (Trait () (method Self.Draw (self))))\n(struct Q X)\n(var (Drawable q) Q.{ X 1 })", true},
+		{"property by field", "(type Has_Name (Trait () (property self.name get)))\n(fun g (Has_Name) none)\n(fun g (x) none)\n(struct R name)\n(g R.{ name 'x' })", false},
+		{"property by field missing", "(type Has_Name (Trait () (property self.name get)))\n(fun g (Has_Name) none)\n(fun g (x) none)\n(struct S x)\n(g S.{ x 1 })", true},
+		{"extends: needs both", "(type Drawable (Trait () (method self.draw (self))))\n" +
+			"(type Shape (Trait (Drawable) (method self.area (self))))\n(fun h (Shape) none)\n(fun h (s) none)\n" +
+			"(struct C x)\n(method C.area (self) 1)\n(h C.{ x 1 })", true}, // missing Draw (inherited)
+		{"var annotated satisfies", "(type Drawable (Trait () (method self.draw (self))))\n(struct P x)\n(method P.draw (self) 1)\n(let var (Drawable p) = P.{ x 1 })", false},
+		{"var annotated missing", "(type Drawable (Trait () (method self.draw (self))))\n(struct Q x)\n(let var (Drawable q) = Q.{ x 1 })", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

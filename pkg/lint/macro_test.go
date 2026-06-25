@@ -64,7 +64,7 @@ func TestMacroCallSyntaxEnforced(t *testing.T) {
 // A `(macro ~name (params) body)` declaration lints clean and registers the
 // macro so references inside its body and at call sites resolve.
 func TestMacroDeclLintsClean(t *testing.T) {
-	d := AnalyzeFile("test.pho", []byte("(macro ~twice (e) ['+' e e])\n(var n 5)\n(~twice n)"))
+	d := AnalyzeFile("test.pho", []byte("(macro ~twice (e) ['+' e e])\n(let var n = 5)\n(~twice n)"))
 	if hasDiag(d, "unresolved-identifier") || hasDiag(d, "bad-form-shape") {
 		t.Errorf("a well-formed macro declaration + call should lint clean, got %#v", d)
 	}

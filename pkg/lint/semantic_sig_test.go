@@ -33,7 +33,7 @@ func TestSemanticTokensSignatureTypes(t *testing.T) {
 	})
 
 	t.Run("method sig", func(t *testing.T) {
-		src := "(struct R V)\n(method R.Take (R Number) Boolean)\n(method R.Take (self n) True)"
+		src := "(struct R v)\n(method R.take (R Number) Boolean)\n(method R.take (self n) true)"
 		toks := SemanticTokens("t.phl", []byte(src))
 		if nType, nParam := count(toks, 2); nType < 3 || nParam != 0 {
 			t.Errorf("method-sig line: @type=%d @parameter=%d, want >=3/0", nType, nParam)
@@ -41,7 +41,7 @@ func TestSemanticTokensSignatureTypes(t *testing.T) {
 	})
 
 	t.Run("compound typed binding", func(t *testing.T) {
-		src := "(const ((Or Number String) id) 5)"
+		src := "(let ((Or Number String) id) = 5)"
 		if nType, _ := count(SemanticTokens("t.phl", []byte(src)), 1); nType != 3 {
 			t.Errorf("typed-binding: @type=%d, want 3 (Or, Number, String)", nType)
 		}

@@ -20,11 +20,11 @@ func TestEntrypointsRecoverFromPanic(t *testing.T) {
 
 	dir := t.TempDir()
 	// A sibling library forces PackageScope to call the (panicking) reader.
-	if err := os.WriteFile(filepath.Join(dir, "sib.phl"), []byte("(fun Helper () 1)\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "sib.phl"), []byte("(fun helper () 1)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "main.phl")
-	src := []byte("(fun Use () (Helper))\n")
+	src := []byte("(fun use () (helper))\n")
 
 	// None of these may panic; each must return its zero value.
 	if site, ok := DefinitionAt(path, src, 1, 17); ok || site != (DefSite{}) {

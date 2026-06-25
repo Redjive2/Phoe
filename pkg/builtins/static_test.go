@@ -18,23 +18,23 @@ func staticEq(t *testing.T, src, want string) {
 }
 
 func TestStaticMethod(t *testing.T) {
-	base := "(struct Point.{ X Number Y Number })\n(static method Point.At (x y) Self.{ X x Y y })\n"
-	staticEq(t, base+"(const p (Point.At 1 2)) p.X", "1")
-	staticEq(t, base+"(const p (Point.At 7 9)) p.Y", "9")
+	base := "(struct Point.{ x Number y Number })\n(static method Point.at (x y) self.{ x x y y })\n"
+	staticEq(t, base+"(let p = (Point.at 1 2)) p.x", "1")
+	staticEq(t, base+"(let p = (Point.at 7 9)) p.y", "9")
 }
 
 func TestStaticProperty(t *testing.T) {
-	src := "(struct Counter.{ N Number })\n" +
-		"(static property Counter.Zero get (method Counter (Self) Self.{ N 0 }))\n"
-	staticEq(t, src+"Counter.Zero.N", "0")
+	src := "(struct Counter.{ n Number })\n" +
+		"(static property Counter.zero get (method Counter (self) self.{ n 0 }))\n"
+	staticEq(t, src+"Counter.zero.n", "0")
 }
 
 func TestStaticMethodNotOnInstance(t *testing.T) {
 	// A static member is on the TYPE, not an instance — reaching it through an
 	// instance is an error, not a silent hit.
-	_, diags := evalProgramDiag(t, "(struct Point.{ X Number })\n"+
-		"(static method Point.Origin () Self.{ X 0 })\n"+
-		"(const p Point.{ X 5 })\n(p.Origin)")
+	_, diags := evalProgramDiag(t, "(struct Point.{ x Number })\n"+
+		"(static method Point.origin () self.{ x 0 })\n"+
+		"(let p = Point.{ x 5 })\n(p.origin)")
 	if len(diags) == 0 {
 		t.Fatalf("expected an error reaching a static member through an instance")
 	}

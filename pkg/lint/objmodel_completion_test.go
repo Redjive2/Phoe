@@ -16,7 +16,7 @@ func TestDotCompletionOnPrimitives(t *testing.T) {
 	// `xs.` — list receiver. Dot at col 10, cursor just past it at col 11.
 	src := "(var xs [1 2 3])\n(var q xs.)\n"
 	defs := CompletionsAt("main.pho", []byte(src), 2, 11)
-	for _, want := range []string{"Size", "Keys", "Empty?", "Is?", "In?"} {
+	for _, want := range []string{"size", "keys", "empty?", "is?", "in?"} {
 		if !containsName(defs, want) {
 			t.Fatalf("list completion missing %q, got %v", want, defNames(defs))
 		}
@@ -25,11 +25,11 @@ func TestDotCompletionOnPrimitives(t *testing.T) {
 	// `n.` — a number is not a collection: universal members yes, Size no.
 	nsrc := "(var n 5)\n(var q n.)\n"
 	ndefs := CompletionsAt("main.pho", []byte(nsrc), 2, 10)
-	if !containsName(ndefs, "Is?") || !containsName(ndefs, "In?") {
+	if !containsName(ndefs, "is?") || !containsName(ndefs, "in?") {
 		t.Fatalf("number completion missing universal members, got %v", defNames(ndefs))
 	}
-	if containsName(ndefs, "Size") {
-		t.Fatalf("a number must not offer the collection member Size, got %v", defNames(ndefs))
+	if containsName(ndefs, "size") {
+		t.Fatalf("a number must not offer the collection member size, got %v", defNames(ndefs))
 	}
 }
 
@@ -41,7 +41,7 @@ func TestDotCompletionUserPrimitiveExtension(t *testing.T) {
 	if !containsName(defs, "Double") {
 		t.Fatalf("user primitive extension Double missing from completion, got %v", defNames(defs))
 	}
-	if !containsName(defs, "Is?") {
+	if !containsName(defs, "is?") {
 		t.Fatalf("universal members must still appear alongside user extensions, got %v", defNames(defs))
 	}
 }
@@ -49,9 +49,9 @@ func TestDotCompletionUserPrimitiveExtension(t *testing.T) {
 // Hover and go-to-definition resolve a user-declared method on a primitive
 // type, through the same machinery as struct methods.
 func TestNavOnUserPrimitiveExtension(t *testing.T) {
-	src := "(method Number.Double (self) do (* self 2))\n(var n 5)\n(var q (n.Double))\n"
+	src := "(method Number.double (self) do (* self 2))\n(let var n = 5)\n(let var q = (n.double))\n"
 
-	site, ok := DefinitionAt("main.pho", []byte(src), 3, 12)
+	site, ok := DefinitionAt("main.pho", []byte(src), 3, 17)
 	if !ok {
 		t.Fatalf("expected go-to-definition to resolve n.Double")
 	}
@@ -59,19 +59,19 @@ func TestNavOnUserPrimitiveExtension(t *testing.T) {
 		t.Errorf("expected the (method Number.Double …) decl on line 1, got line %d", site.Span.StartLine)
 	}
 
-	md, _, hok := HoverAt("main.pho", []byte(src), 3, 12)
-	if !hok || !strings.Contains(md, "Double") {
-		t.Errorf("expected hover mentioning Double, got ok=%v md=%q", hok, md)
+	md, _, hok := HoverAt("main.pho", []byte(src), 3, 17)
+	if !hok || !strings.Contains(md, "double") {
+		t.Errorf("expected hover mentioning double, got ok=%v md=%q", hok, md)
 	}
 }
 
 // Hover on a built-in object-model member shows a synthetic description
 // (built-in members have no workspace definition site).
 func TestHoverOnBuiltinMember(t *testing.T) {
-	src := "(var xs [1 2 3])\n(var n xs.Size)\n"
-	md, _, ok := HoverAt("main.pho", []byte(src), 2, 12)
-	if !ok || !strings.Contains(md, "Size") || !strings.Contains(md, "built-in") {
-		t.Fatalf("expected a built-in hover for xs.Size, got ok=%v md=%q", ok, md)
+	src := "(let var xs = [1 2 3])\n(let var n = xs.size)\n"
+	md, _, ok := HoverAt("main.pho", []byte(src), 2, 17)
+	if !ok || !strings.Contains(md, "size") || !strings.Contains(md, "built-in") {
+		t.Fatalf("expected a built-in hover for xs.size, got ok=%v md=%q", ok, md)
 	}
 }
 

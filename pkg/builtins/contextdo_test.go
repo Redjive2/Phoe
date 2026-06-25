@@ -56,8 +56,8 @@ x`
 // A trailing `do` arm with no elif/else still captures to the end, and a
 // single-statement arm works too.
 func TestContextAwareDoTrailing(t *testing.T) {
-	src := `(var x 0)
-(if True then do
+	src := `(let var x = 0)
+(if true then do
     (= x 5)
     (= x (+ x 2)))
 x`
@@ -71,8 +71,8 @@ x`
 func TestContextAwareDoUnless(t *testing.T) {
 	// cond is False, so the `then` arm runs (unless takes the then-arm when
 	// the condition is false). It must run ONLY its two statements.
-	src := `(var x 0)
-(unless False then do
+	src := `(let var x = 0)
+(unless false then do
     (= x 1)
     (= x (+ x 4))
  else do

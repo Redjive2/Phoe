@@ -8,33 +8,33 @@ import (
 )
 
 const navSrc = `-- Adds one to a number.
-(fun AddOne (n) (+ n 1))
-(struct Point X y)
-(method Point.Shift (self d) (+ self.X d))
-(var p Point.{ X 10 y 20 })
-(var total (AddOne p.X))
+(fun add_one (n) (+ n 1))
+(struct Point x #y)
+(method Point.shift (self d) (+ self.x d))
+(let var p = Point.{ x 10 #y 20 })
+(let var total = (add_one p.x))
 (= total 5)
 `
 
 // Cursor on the `AddOne` call site jumps to the fun declaration.
 func TestDefinitionAtFunction(t *testing.T) {
-	// Line 6 `(var 'total (AddOne p.X))` — cursor inside AddOne.
-	site, ok := DefinitionAt("main.pho", []byte(navSrc), 6, 15)
+	// Line 6 `(let var total = (add_one p.x))` — cursor inside add_one.
+	site, ok := DefinitionAt("main.pho", []byte(navSrc), 6, 21)
 	if !ok {
-		t.Fatal("expected a definition for AddOne call")
+		t.Fatal("expected a definition for add_one call")
 	}
 	if site.Span.StartLine != 2 {
-		t.Fatalf("expected AddOne decl on line 2, got %d", site.Span.StartLine)
+		t.Fatalf("expected add_one decl on line 2, got %d", site.Span.StartLine)
 	}
 }
 
 // Cursor on `p.X` member access jumps to the field declaration in the
 // struct.
 func TestDefinitionAtStructField(t *testing.T) {
-	col := strings.Index("(var total (AddOne p.X))", "X)") + 1
+	col := strings.Index("(let var total = (add_one p.x))", "x)") + 1
 	site, ok := DefinitionAt("main.pho", []byte(navSrc), 6, col)
 	if !ok {
-		t.Fatal("expected a definition for p.X member")
+		t.Fatal("expected a definition for p.x member")
 	}
 	if site.Span.StartLine != 3 {
 		t.Fatalf("expected field X decl on line 3 (struct decl), got %d", site.Span.StartLine)
@@ -43,14 +43,14 @@ func TestDefinitionAtStructField(t *testing.T) {
 
 // Cursor on a method call via shape-known instance jumps to the method.
 func TestDefinitionAtMethod(t *testing.T) {
-	src := navSrc + "(var shifted (p.Shift 1))\n"
-	col := strings.Index("(var shifted (p.Shift 1))", "Shift") + 1
+	src := navSrc + "(let var shifted = (p.shift 1))\n"
+	col := strings.Index("(let var shifted = (p.shift 1))", "p.shift") + 3
 	site, ok := DefinitionAt("main.pho", []byte(src), 8, col)
 	if !ok {
-		t.Fatal("expected a definition for p.Shift")
+		t.Fatal("expected a definition for p.shift")
 	}
 	if site.Span.StartLine != 4 {
-		t.Fatalf("expected Shift decl on line 4, got %d", site.Span.StartLine)
+		t.Fatalf("expected shift decl on line 4, got %d", site.Span.StartLine)
 	}
 }
 
@@ -70,16 +70,16 @@ func TestDefinitionAtImportMember(t *testing.T) {
 		t.Fatal(err)
 	}
 	lib := filepath.Join(pkgDir, "lib.phl")
-	if err := os.WriteFile(lib, []byte("(fun Visible () 1)\n"), 0o644); err != nil {
+	if err := os.WriteFile(lib, []byte("(fun visible () 1)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	main := filepath.Join(dir, "main.pho")
-	src := "(import '" + pkgDir + "')\n(var x (mylib.Visible))\n"
+	src := "(import '" + pkgDir + "')\n(let var x = (mylib.visible))\n"
 	if err := os.WriteFile(main, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	col := strings.Index("(var x (mylib.Visible))", "Visible") + 1
+	col := strings.Index("(let var x = (mylib.visible))", "visible") + 2
 	site, ok := DefinitionAt(main, []byte(src), 2, col)
 	if !ok {
 		t.Fatal("expected cross-file definition for mylib.Visible")
@@ -94,11 +94,11 @@ func TestDefinitionAtImportMember(t *testing.T) {
 
 // Hover on a fun renders its signature and the doc comment above it.
 func TestHoverAtFunction(t *testing.T) {
-	md, _, ok := HoverAt("main.pho", []byte(navSrc), 6, 15)
+	md, _, ok := HoverAt("main.pho", []byte(navSrc), 6, 19)
 	if !ok {
-		t.Fatal("expected hover for AddOne")
+		t.Fatal("expected hover for add_one")
 	}
-	if !strings.Contains(md, "(fun AddOne (n) ...)") {
+	if !strings.Contains(md, "(fun add_one (n) ...)") {
 		t.Fatalf("expected signature in hover, got %q", md)
 	}
 	if !strings.Contains(md, "Adds one to a number.") {
@@ -127,19 +127,19 @@ func TestHoverStructExcludesSwallowedForms(t *testing.T) {
 
 // A valid multi-line struct still renders all its fields.
 func TestHoverStructValidFields(t *testing.T) {
-	src := "(struct Point \n    x\n    y\n    z\n)\n"
+	src := "(struct Point \n    #x\n    #y\n    #z\n)\n"
 	md, _, ok := HoverAt("p.phl", []byte(src), 1, 10)
 	if !ok {
 		t.Fatal("expected hover on the struct name")
 	}
-	if !strings.Contains(md, "(struct Point x y z)") {
+	if !strings.Contains(md, "(struct Point #x #y #z)") {
 		t.Fatalf("expected all fields in header, got %q", md)
 	}
 }
 
 // Hover on a shaped var names the struct it holds.
 func TestHoverAtShapedVar(t *testing.T) {
-	col := strings.Index("(var total (AddOne p.X))", "p.X") + 1
+	col := strings.Index("(let var total = (add_one p.x))", "p.x") + 1
 	md, _, ok := HoverAt("main.pho", []byte(navSrc), 6, col)
 	if !ok {
 		t.Fatal("expected hover for p")
@@ -152,7 +152,7 @@ func TestHoverAtShapedVar(t *testing.T) {
 // References on a var finds the declaration, reads, and assignment.
 func TestReferencesAtVar(t *testing.T) {
 	// Cursor on `total` in its declaration (line 6).
-	sites := ReferencesAt("", "main.pho", []byte(navSrc), 6, 7)
+	sites := ReferencesAt("", "main.pho", []byte(navSrc), 6, 10)
 	if len(sites) != 2 {
 		t.Fatalf("expected 2 reference sites for total (decl + assignment), got %#v", sites)
 	}
@@ -164,8 +164,8 @@ func TestReferencesAtVar(t *testing.T) {
 
 // References on a struct member finds dot accesses plus the decl.
 func TestReferencesAtMember(t *testing.T) {
-	src := navSrc + "(var more p.X)\n"
-	col := strings.Index("(var total (AddOne p.X))", "X)") + 1
+	src := navSrc + "(let var more = p.x)\n"
+	col := strings.Index("(let var total = (add_one p.x))", "x)") + 1
 	sites := ReferencesAt("", "main.pho", []byte(src), 6, col)
 	// self.X (line 4), p.X (line 6), p.X (line 8), decl X (line 3).
 	if len(sites) != 4 {
@@ -187,7 +187,7 @@ func TestDocumentSymbols(t *testing.T) {
 			point = &syms[i]
 		}
 	}
-	for _, want := range []string{"AddOne", "Point", "p", "total"} {
+	for _, want := range []string{"add_one", "Point", "p", "total"} {
 		found := false
 		for _, n := range names {
 			if n == want {
@@ -205,7 +205,7 @@ func TestDocumentSymbols(t *testing.T) {
 	for _, c := range point.Children {
 		childNames = append(childNames, c.Name)
 	}
-	wantChildren := map[string]bool{"X": false, "y": false, "Shift": false}
+	wantChildren := map[string]bool{"x": false, "#y": false, "shift": false}
 	for _, n := range childNames {
 		if _, ok := wantChildren[n]; ok {
 			wantChildren[n] = true

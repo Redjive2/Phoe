@@ -150,20 +150,21 @@ func Inspect(code ttnode) string {
 			return result[:len(result)-1] + "]"
 		}
 
-		// Dict literals lower to (Map k v ...); render them back as {k v}
-		// so Inspect mirrors the surface syntax the way the slice case does.
+		// Dict literals lower to (Map k v ...); render them back as the new
+		// `[k -> v]` form (Syntax.md Phase 4b) so Inspect mirrors the surface
+		// syntax the way the slice case does. Args alternate key, value; an
+		// empty map renders `[]` (distinct from `{}`, which is no longer used).
 		if branch[0] == ttleaf(Map) {
 			if len(branch) == 1 {
-				return "{}"
+				return "[]"
 			}
 
-			result := "{"
-
-			for _, elem := range branch[1:] {
-				result += Inspect(elem) + " "
+			pairs := make([]string, 0, (len(branch)-1)/2)
+			for i := 1; i+1 < len(branch); i += 2 {
+				pairs = append(pairs, Inspect(branch[i])+" -> "+Inspect(branch[i+1]))
 			}
 
-			return result[:len(result)-1] + "}"
+			return "[" + strings.Join(pairs, " ") + "]"
 		}
 
 		// (core.Do …) is `do` notation. Render the mangled head as the
@@ -268,7 +269,28 @@ func synthBranch(b *strings.Builder, branch ttbranch) ttbranch {
 		return out
 	}
 
-	// Bracket / brace literals: [..] / {..}.
+	// Map literals: (Map k v …) → `[k -> v …]` (Syntax.md Phase 4b). The head
+	// stays the mangled leaf for dispatch; the text writes `[`, each key/value
+	// pair joined by ` -> ` with pairs space-separated, then `]`. Empty map → `[]`.
+	if branch[0] == ttleaf(Map) {
+		out := make(ttbranch, len(branch))
+		out[0] = branch[0]
+		b.WriteByte('[')
+		for i := 1; i < len(branch); i++ {
+			if i > 1 {
+				if i%2 == 1 {
+					b.WriteByte(' ') // boundary between pairs
+				} else {
+					b.WriteString(" -> ") // key → value within a pair
+				}
+			}
+			out[i] = synth(b, branch[i])
+		}
+		b.WriteByte(']')
+		return out
+	}
+
+	// Bracket literals: [..] (lists).
 	if open, close, ok := bracketLiteral(branch[0]); ok {
 		out := make(ttbranch, len(branch))
 		out[0] = branch[0]
@@ -327,14 +349,14 @@ func synthBranch(b *strings.Builder, branch ttbranch) ttbranch {
 	return out
 }
 
-// bracketLiteral maps the mangled array / dict heads (core.Slice / core.Map)
-// to their surface brackets, mirroring Inspect.
+// bracketLiteral maps the mangled array head (core.Slice) to its surface
+// brackets, mirroring Inspect. Maps (core.Map) are handled separately in
+// synthBranch — they use `[k -> v]` form (Syntax.md Phase 4b), not bare
+// brackets — so they are intentionally not listed here.
 func bracketLiteral(head ttnode) (open, close string, ok bool) {
 	switch head {
 	case ttleaf(Slice):
 		return "[", "]", true
-	case ttleaf(Map):
-		return "{", "}", true
 	}
 	return "", "", false
 }

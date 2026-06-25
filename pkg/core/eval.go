@@ -12,7 +12,7 @@ var (
 	charPattern   = regexp.MustCompile("^`.`$")
 	// A leading letter, no trailing underscore, and an optional single
 	// trailing '?' (the Lisp/Ruby predicate convention, e.g. `atom?`).
-	identPattern = regexp.MustCompile("^[a-zA-Z](([a-zA-Z0-9]*)|([a-zA-Z0-9_]*[a-zA-Z0-9]))\\??$")
+	identPattern = regexp.MustCompile("^#?[a-zA-Z](([a-zA-Z0-9]*)|([a-zA-Z0-9_]*[a-zA-Z0-9]))\\??$")
 	// An atom body is a valid identifier or an all-digit run (digits keep
 	// leading zeros, so `:01` and `:1` are distinct atoms).
 	atomDigitsPattern = regexp.MustCompile("^[0-9]+$")

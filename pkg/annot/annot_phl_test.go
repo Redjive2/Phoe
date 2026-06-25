@@ -116,7 +116,7 @@ func TestAnnotPhlMacros(t *testing.T) {
 	t.Run("type is inert (disconnected, Phase 4)", func(t *testing.T) {
 		// ~type is disconnected (TypeSignatures.md Phase 4): the macro is kept in
 		// annot.phl but harvests nothing — inline typed bindings carry the type now.
-		res := ev.Evaluate(`(~type Str)`, parseForm(t, `(~type Str)`))
+		res := ev.Evaluate(`(~type str)`, parseForm(t, `(~type str)`))
 		if len(res.Diags) != 0 {
 			t.Fatalf("unexpected diags: %v", diagMsgs(res))
 		}
@@ -206,7 +206,7 @@ func TestAnnotPhlMacros(t *testing.T) {
 		// ~sig is disconnected (TypeSignatures.md Phase 4): the macro is kept in
 		// annot.phl but harvests nothing — inline fun/method signatures carry the
 		// type now. Both the function form and the no-params form harvest nothing.
-		for _, body := range []string{`(~sig (Num Num) Num)`, `(~sig () Str)`} {
+		for _, body := range []string{`(~sig (num num) num)`, `(~sig () str)`} {
 			res := ev.Evaluate(body, parseForm(t, body))
 			if len(res.Diags) != 0 {
 				t.Fatalf("%s: unexpected diags: %v", body, diagMsgs(res))

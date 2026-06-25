@@ -2,61 +2,61 @@
 (goimport ('stdDependencies' dep))
 
 (struct File
-    id
-    path
-    perm
-    mode
+    #id
+    #path
+    #perm
+    #mode
 )
 
-(fun Cwd ()
+(fun cwd ()
     (dep.OsGetCwd)
 )
 
-(fun Chdir (path)
+(fun chdir (path)
     (dep.OsChdir path)
 )
 
 -- Open opens a file at path, accepting a permission string (which can contain `r` and `w` for read and write access), and an optional mode
 -- the mode is either left unfilled (Nil - means standard, overwrite the file content) or set to 'append to add onto the file. Only matters with `w` perm.
-(fun Open (path perm (optional mode)) do
-    (const explicitMode (if (mode.Is? Nil) 
+(fun open (path perm (optional mode)) do
+    (let explicit_mode = (if (mode.is? none) 
         then :overwrite 
         else mode))
-    (const id (dep.OsOpen path perm explicitMode))
+    (let id = (dep.OsOpen path perm explicit_mode))
     
     File.{
-        id id
-        path path
-        perm perm
-        mode explicitMode
+        #id id
+        #path path
+        #perm perm
+        #mode explicit_mode
     }
 )
 
-(method File.Close (self)
-    (dep.OsClose self.id)
+(method File.close (self)
+    (dep.OsClose self.#id)
 )
 
-(method File.ReadLine (self prompt)
-    (dep.IoReadLine self.id prompt)
+(method File.read_line (self prompt)
+    (dep.IoReadLine self.#id prompt)
 )
 
-(method File.Read (self n) 
-    (dep.IoRead self.id n)
+(method File.read (self n) 
+    (dep.IoRead self.#id n)
 )
 
-(method File.ReadUntil (self stop)
-    (dep.IoReadUntil self.id stop)
+(method File.read_until (self stop)
+    (dep.IoReadUntil self.#id stop)
 )
 
-(method File.Write (self content)
-    (dep.IoWrite self.id content)
+(method File.write (self content)
+    (dep.IoWrite self.#id content)
 )
 
-(method File.CanRead? (self) 
-    (`r`.In? self.perm)
+(method File.can_read? (self) 
+    (`r`.in? self.#perm)
 )
 
-(method File.CanWrite? (self)
-    (`w`.In? self.perm)
+(method File.can_write? (self)
+    (`w`.in? self.#perm)
 )
 

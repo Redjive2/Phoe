@@ -35,14 +35,14 @@ func TestRecordMembershipAndSubtype(t *testing.T) {
 
 	// Subtyping: width + covariant depth.
 	if !Subtype(recXY, recX) {
-		t.Error("{x N y N} <: {x N} (width)")
+		t.Error("[x -> n y -> n] <: [x -> n] (width)")
 	}
 	if Subtype(recX, recXY) {
 		t.Error("{x N} ⊄ {x N y N} (missing field)")
 	}
 	recX5 := RecordType(map[string]*PhoType{"x": NumSingleton(5)})
 	if !Subtype(recX5, recX) {
-		t.Error("{x 5} <: {x Number} (depth)")
+		t.Error("[x -> 5] <: [x -> Number] (depth)")
 	}
 	if Subtype(recX, recX5) {
 		t.Error("{x Number} ⊄ {x 5}")
@@ -71,10 +71,10 @@ func TestRecordAlgebra(t *testing.T) {
 	// Optional record: (Or {x Number} Nil).
 	opt := recX.Or(TypeNil)
 	if !opt.Contains(inst) || !opt.Contains(TvNil) {
-		t.Error("(Or record Nil) contains the struct and Nil")
+		t.Error("(Or record none) contains the struct and none")
 	}
 	if opt.Contains(TvNum(7)) {
-		t.Error("(Or record Nil) excludes a number")
+		t.Error("(Or record none) excludes a number")
 	}
 
 	// (Or record Number) resolves both arms.
@@ -91,7 +91,7 @@ func TestRecordAlgebra(t *testing.T) {
 	}
 
 	// Rendering and interning.
-	if got := RecordType(map[string]*PhoType{"x": TypeNumber, "y": TypeString}).Name(); got != "{x Number y String}" {
+	if got := RecordType(map[string]*PhoType{"x": TypeNumber, "y": TypeString}).Name(); got != "[x -> Number y -> String]" {
 		t.Errorf("render = %q", got)
 	}
 	if RecordType(map[string]*PhoType{"x": TypeNumber}) != recX {

@@ -63,7 +63,7 @@ func TestNoAnnotationsNoEval(t *testing.T) {
 	annot.SetDefault(annot.New(nil))
 	defer annot.SetDefault(annot.New(nil))
 
-	d := AnalyzeFile("test.pho", []byte("(const x 1)\n(const y (+ x 1))"))
+	d := AnalyzeFile("test.pho", []byte("(let x = 1)\n(let y = (+ x 1))"))
 	for _, dg := range d {
 		if dg.Code == "unresolved" {
 			t.Fatalf("plain file should not produce annotation diagnostics, got %#v", dg)

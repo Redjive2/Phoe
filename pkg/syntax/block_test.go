@@ -14,7 +14,7 @@ func TestNormalizeAmpDo(t *testing.T) {
 	}{
 		{
 			"&do captures the rest of the form",
-			`(list.Map &do (const p (+ it 1)) (* p 2))`,
+			`(list.Map &do (let p = (+ it 1)) (* p 2))`,
 			`(list.Map &(do (const p (+ it 1)) (* p 2)))`,
 		},
 		{
@@ -34,8 +34,8 @@ func TestNormalizeAmpDo(t *testing.T) {
 		},
 		{
 			"&literal is untouched",
-			`(f &Nil)`,
-			`(f &Nil)`,
+			`(f &none)`,
+			`(f &none)`,
 		},
 	}
 	for _, tc := range cases {

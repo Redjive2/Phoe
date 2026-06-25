@@ -12,21 +12,21 @@ import (
 // in scope while T evaluates).
 func TestTypeDeclaration(t *testing.T) {
 	// A named enum over literal singletons.
-	wantBool(t, "(type Status (Or 200 404 500))\n(200.Is? Status)", true)
-	wantBool(t, "(type Status (Or 200 404 500))\n(403.Is? Status)", false)
-	wantBool(t, `(type Method (Or 'GET' 'POST'))`+"\n"+`('GET'.Is? Method)`, true)
-	wantBool(t, `(type Method (Or 'GET' 'POST'))`+"\n"+`('DELETE'.Is? Method)`, false)
+	wantBool(t, "(type Status (Or 200 404 500))\n(200.is? Status)", true)
+	wantBool(t, "(type Status (Or 200 404 500))\n(403.is? Status)", false)
+	wantBool(t, `(type Method (Or 'GET' 'POST'))`+"\n"+`('GET'.is? Method)`, true)
+	wantBool(t, `(type Method (Or 'GET' 'POST'))`+"\n"+`('DELETE'.is? Method)`, false)
 
 	// A named alias of a builtin/composite, and a literal alias.
-	wantBool(t, "(type Num Number)\n(5.Is? Num)", true)
-	wantBool(t, "(type Five 5)\n(5.Is? Five)", true)
-	wantBool(t, "(type Five 5)\n(6.Is? Five)", false)
+	wantBool(t, "(type num Number)\n(5.is? num)", true)
+	wantBool(t, "(type Five 5)\n(5.is? Five)", true)
+	wantBool(t, "(type Five 5)\n(6.is? Five)", false)
 
 	// Aliases compose: a later alias may reference an earlier one.
-	const opt = "(type Status (Or 200 404))\n(type MaybeStatus (Or Status Nil))\n"
-	wantBool(t, opt+"(200.Is? MaybeStatus)", true)
-	wantBool(t, opt+"(Nil.Is? MaybeStatus)", true)
-	wantBool(t, opt+"(500.Is? MaybeStatus)", false)
+	const opt = "(type Status (Or 200 404))\n(type Maybe_Status (Or Status none))\n"
+	wantBool(t, opt+"(200.is? Maybe_Status)", true)
+	wantBool(t, opt+"(none.is? Maybe_Status)", true)
+	wantBool(t, opt+"(500.is? Maybe_Status)", false)
 
 	// subtype? over named types.
 	wantBool(t, "(type Status (Or 200 404))\n(subtype? Status Number)", true)

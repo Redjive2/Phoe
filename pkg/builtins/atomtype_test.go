@@ -10,18 +10,18 @@ func TestAtomSingletonRuntime(t *testing.T) {
 	// `:ok` as a type: membership is exact, not "any atom". The idiomatic
 	// surface is the dot form `value.Is? type` (the universal Unknown.Is?
 	// method), which delegates to the Is? membership builtin.
-	wantBool(t, "(:ok.Is? :ok)", true)
-	wantBool(t, "(:ok.Is? :error)", false)
-	wantBool(t, "(:ok.Is? Atom)", true) // still a subtype of bare Atom
+	wantBool(t, "(:ok.is? :ok)", true)
+	wantBool(t, "(:ok.is? :error)", false)
+	wantBool(t, "(:ok.is? Atom)", true) // still a subtype of bare Atom
 
 	// (Or :ok :error) — a tagged union over singletons.
-	wantBool(t, "(:ok.Is? (Or :ok :error))", true)
-	wantBool(t, "(:error.Is? (Or :ok :error))", true)
-	wantBool(t, "(:other.Is? (Or :ok :error))", false)
+	wantBool(t, "(:ok.is? (Or :ok :error))", true)
+	wantBool(t, "(:error.is? (Or :ok :error))", true)
+	wantBool(t, "(:other.is? (Or :ok :error))", false)
 
 	// A non-atom never inhabits an atom singleton; the string "ok" ≠ atom :ok.
-	wantBool(t, "(5.Is? :ok)", false)
-	wantBool(t, `('ok'.Is? :ok)`, false)
+	wantBool(t, "(5.is? :ok)", false)
+	wantBool(t, `('ok'.is? :ok)`, false)
 
 	// subtype? over singletons: exact set relations.
 	wantBool(t, "(subtype? :ok (Or :ok :error))", true)
@@ -31,7 +31,7 @@ func TestAtomSingletonRuntime(t *testing.T) {
 	wantBool(t, "(subtype? (Or :ok :error) :ok)", false)
 
 	// An enum mixed with a primitive resolves both arms.
-	wantBool(t, "(:ok.Is? (Or :ok Number))", true)
-	wantBool(t, "(5.Is? (Or :ok Number))", true)
-	wantBool(t, `('x'.Is? (Or :ok Number))`, false)
+	wantBool(t, "(:ok.is? (Or :ok Number))", true)
+	wantBool(t, "(5.is? (Or :ok Number))", true)
+	wantBool(t, `('x'.is? (Or :ok Number))`, false)
 }

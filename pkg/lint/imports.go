@@ -350,7 +350,9 @@ func collectExportedDecls(out map[string]Definition, form ast.PNode, file string
 		return
 	}
 	exported := func(name string) bool {
-		return name != "" && unicode.IsUpper(rune(name[0]))
+		// Visibility is the `#` prefix (Doc/PlanV1/Syntax.md): every name
+		// without a leading `#` is public.
+		return name != "" && name[0] != '#'
 	}
 	switch d.Head {
 	case "fun":

@@ -15,7 +15,7 @@ func TestLetAndReassignRuntime(t *testing.T) {
 		{"let binds a constant", "(let x = 5)\nx", "5"},
 		{"let var binds mutable state", "(let var c = 1)\nc", "1"},
 		{"reassign a let var with infix =", "(let var c = 1)\n(c = 2)\nc", "2"},
-		{"infix = mutates an existing var", "(var n 0)\n(n = 7)\nn", "7"},
+		{"infix = mutates an existing var", "(let var n = 0)\n(n = 7)\nn", "7"},
 	}
 	for _, tc := range cases {
 		if got := core.Stringify(evalProgram(t, tc.src)); got != tc.want {

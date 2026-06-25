@@ -11,13 +11,13 @@ import (
 // property name @property and the get/set keywords @keyword.
 func TestPropertyEditorFeatures(t *testing.T) {
 	lines := []string{
-		"(struct Temp celsius)",                                           // 1
+		"(struct Temp #celsius)",                                           // 1
 		"(property Temp.Fahrenheit",                                         // 2
 		"    get (method Temp (self) (+ self.celsius 32))",                  // 3
 		"    set (method Temp (self f) (= self.celsius f)))",                // 4
-		"(var backing 0)",                                                   // 5
-		"(property Tally get (fun () backing) set (fun (v) (= backing v)))", // 6
-		"(var t Temp.{ celsius 0 })",                                     // 7
+		"(let var backing = 0)",                                                   // 5
+		"(property tally get (fun () backing) set (fun (v) (= backing v)))", // 6
+		"(let var t = Temp.{ #celsius 0 })",                                     // 7
 		"(var x t.)",                                                        // 8
 	}
 	src := []byte(strings.Join(lines, "\n") + "\n")

@@ -26,18 +26,18 @@ func containsName(defs []Definition, name string) bool {
 
 // `p.` on a struct instance completes public fields and methods only.
 func TestDotCompletionOnInstance(t *testing.T) {
-	src := `(struct Point X y)
-(method Point.Shift (self d) (+ self.X d))
-(method Point.tweak (self d) (+ self.y d))
-(var p Point.{ X 10 y 20 })
-(var q p.)
+	src := `(struct Point x #y)
+(method Point.Shift (self d) (+ self.x d))
+(method Point.#tweak (self d) (+ self.#y d))
+(let var p = Point.{ x 10 #y 20 })
+(let var q = p.)
 `
-	// Cursor right after "p." on line 5 (col 10 = just past the dot).
-	defs := CompletionsAt("main.pho", []byte(src), 5, 10)
-	if !containsName(defs, "X") || !containsName(defs, "Shift") {
-		t.Fatalf("expected X and Shift in completions, got %v", defNames(defs))
+	// Cursor right after "p." on line 5 (col 16 = just past the dot).
+	defs := CompletionsAt("main.pho", []byte(src), 5, 16)
+	if !containsName(defs, "x") || !containsName(defs, "Shift") {
+		t.Fatalf("expected x and Shift in completions, got %v", defNames(defs))
 	}
-	if containsName(defs, "y") || containsName(defs, "tweak") {
+	if containsName(defs, "#y") || containsName(defs, "#tweak") {
 		t.Fatalf("private members must be filtered outside methods, got %v", defNames(defs))
 	}
 }
@@ -56,14 +56,14 @@ func TestDotCompletionOnSelf(t *testing.T) {
 
 // Partial member already typed: `p.Sh` still completes members.
 func TestDotCompletionPartialMember(t *testing.T) {
-	src := `(struct Point X y)
-(method Point.Shift (self d) (+ self.X d))
-(var p Point.{ X 10 y 20 })
-(var q p.Sh)
+	src := `(struct Point x #y)
+(method Point.shift (self d) (+ self.x d))
+(let var p = Point.{ x 10 #y 20 })
+(let var q = p.sh)
 `
-	defs := CompletionsAt("main.pho", []byte(src), 4, 12)
-	if !containsName(defs, "Shift") {
-		t.Fatalf("expected Shift for partial member, got %v", defNames(defs))
+	defs := CompletionsAt("main.pho", []byte(src), 4, 18)
+	if !containsName(defs, "shift") {
+		t.Fatalf("expected shift for partial member, got %v", defNames(defs))
 	}
 }
 
@@ -86,9 +86,9 @@ func TestDotCompletionOnImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	lib := filepath.Join(pkgDir, "lib.phl")
-	if err := os.WriteFile(lib, []byte(`(fun Visible () 1)
-(fun hidden () 2)
-(struct Thing Part)
+	if err := os.WriteFile(lib, []byte(`(fun visible () 1)
+(fun #hidden () 2)
+(struct Thing part)
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -101,18 +101,18 @@ func TestDotCompletionOnImport(t *testing.T) {
 
 	col := len("(var x mylib.") + 1
 	defs := CompletionsAt(main, []byte(src), 2, col)
-	if !containsName(defs, "Visible") || !containsName(defs, "Thing") {
+	if !containsName(defs, "visible") || !containsName(defs, "Thing") {
 		t.Fatalf("expected exports in completions, got %v", defNames(defs))
 	}
-	if containsName(defs, "hidden") {
-		t.Fatalf("lowercase decls aren't exported, got %v", defNames(defs))
+	if containsName(defs, "#hidden") {
+		t.Fatalf("private (#-prefixed) decls aren't exported, got %v", defNames(defs))
 	}
 }
 
 // Without a dot context, completion falls back to scope names.
 func TestPlainCompletionStillWorks(t *testing.T) {
-	src := `(var value 1)
-(var x )
+	src := `(let var value = 1)
+(let var x )
 `
 	defs := CompletionsAt("main.pho", []byte(src), 2, 9)
 	if !containsName(defs, "value") {

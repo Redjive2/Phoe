@@ -10,13 +10,13 @@ import "testing"
 // the classification and spans must not shift.
 func TestSemanticTokensGolden(t *testing.T) {
 	src := "(import 'std/io')\n" +
-		"(struct Point X y)\n" +
-		"(method Point.Shift (self n) (+ self.X n))\n" +
+		"(struct Point x #y)\n" +
+		"(method Point.shift (self n) (+ self.x n))\n" +
 		"(fun main (a) (identity do\n" +
-		"\t(var p Point.{ X 1 y 2 })\n" +
-		"\t(foreach i in (range a) (io.PrintLine i))\n" +
+		"\t(let var p = Point.{ x 1 #y 2 })\n" +
+		"\t(foreach i in (range a) (io.print_line i))\n" +
 		"))\n" +
-		"(const PI 3)\n"
+		"(let pi = 3)\n"
 
 	type tok struct {
 		line, startCol, endCol int
@@ -41,18 +41,18 @@ func TestSemanticTokensGolden(t *testing.T) {
 		{4, 16, 24, SemTokFunction},  // identity
 		{4, 25, 27, SemTokKeyword},   // do
 		{5, 3, 6, SemTokKeyword},     // var
-		{5, 7, 8, SemTokVariable},    // p
-		{5, 9, 14, SemTokType},       // Point (constructor call)
+		{5, 11, 12, SemTokVariable},  // p (now preceded by `let var`)
+		{5, 15, 20, SemTokType},      // Point (constructor call)
 		{6, 3, 10, SemTokKeyword},    // foreach
 		{6, 11, 12, SemTokVariable},  // i (loop var)
 		{6, 13, 15, SemTokKeyword},   // in
 		{6, 17, 22, SemTokFunction},  // range (builtin)
 		{6, 23, 24, SemTokParameter}, // a
 		{6, 27, 29, SemTokNamespace}, // io
-		{6, 30, 39, SemTokProperty},  // PrintLine
-		{6, 40, 41, SemTokVariable},  // i
-		{8, 2, 7, SemTokKeyword},     // const
-		{8, 8, 10, SemTokVariable},   // PI
+		{6, 30, 40, SemTokProperty},  // print_line
+		{6, 41, 42, SemTokVariable},  // i
+		{8, 2, 5, SemTokKeyword},     // let
+		{8, 6, 8, SemTokVariable},    // pi
 	}
 
 	got := SemanticTokens("golden.phl", []byte(src))
@@ -78,7 +78,7 @@ func TestSemanticTokensGolden(t *testing.T) {
 func TestSemanticTokensInterpolation(t *testing.T) {
 	// One line, so columns are easy to verify. `who` is a parameter;
 	// `range` is a builtin; `p` a parameter, `X` a property via dot.
-	src := "(fun f (who p) (io.Print 'hi %who n=%(range who) d=%p.X'))\n"
+	src := "(fun f (who p) (io.print 'hi %who n=%(range who) d=%p.X'))\n"
 
 	got := SemanticTokens("interp.phl", []byte(src))
 

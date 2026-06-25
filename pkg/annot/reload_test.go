@@ -51,11 +51,11 @@ func TestReloadRecoversFromBrokenLibrary(t *testing.T) {
 	// 3. ReloadDefault invalidates the cache and loads the fixed library, so
 	//    the macro now resolves and attaches its metadata cleanly.
 	ReloadDefault(dir)
-	res := Default().Evaluate(`(~type Foo)`, parseForm(t, `(~type Foo)`))
+	res := Default().Evaluate(`(~type foo)`, parseForm(t, `(~type foo)`))
 	if len(res.Diags) != 0 {
 		t.Fatalf("after reload the macro should resolve cleanly, got diags: %v", diagMsgs(res))
 	}
-	if got := entryString(t, res, "type"); got != "Foo" {
-		t.Fatalf("type entry = %q, want Foo", got)
+	if got := entryString(t, res, "type"); got != "foo" {
+		t.Fatalf("type entry = %q, want foo", got)
 	}
 }

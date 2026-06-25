@@ -19,7 +19,7 @@ func TestNominalStructTypes(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	pt := "(struct Point.{ X Number Y Number })\n"
+	pt := "(struct Point.{ x Number y Number })\n"
 	sig := func(p string) string { return "(fun f (" + p + ") Nil)\n(fun f (x) Nil)\n" }
 	cases := []struct {
 		name    string
@@ -27,18 +27,18 @@ func TestNominalStructTypes(t *testing.T) {
 		wantErr bool
 	}{
 		// A struct name in a signature now resolves (was Dynamic → no check).
-		{"wrong struct to struct param", pt + "(struct Other.{ A Number B Number })\n" + sig("Point") + "(const o Other.{ A 1 B 2 })\n(f o)", true},
+		{"wrong struct to struct param", pt + "(struct Other.{ a Number b Number })\n" + sig("Point") + "(let o = Other.{ a 1 b 2 })\n(f o)", true},
 		{"primitive to struct param", pt + sig("Point") + "(f 5)", true},
-		{"struct missing required field", pt + sig("Struct.{ X Number Z Number }") + "(const p Point.{ X 1 Y 2 })\n(f p)", true},
-		{"struct wrong field type", pt + sig("Struct.{ X String }") + "(const p Point.{ X 1 Y 2 })\n(f p)", true},
+		{"struct missing required field", pt + sig("Struct.{ x Number z Number }") + "(let p = Point.{ x 1 y 2 })\n(f p)", true},
+		{"struct wrong field type", pt + sig("Struct.{ x String }") + "(let p = Point.{ x 1 y 2 })\n(f p)", true},
 
 		// Soundness — must stay silent.
-		{"matching struct", pt + sig("Point") + "(const p Point.{ X 1 Y 2 })\n(f p)", false},
-		{"struct satisfies wider record", pt + sig("Struct.{ X Number }") + "(const p Point.{ X 1 Y 2 })\n(f p)", false},
-		{"same-shape struct is structural", pt + "(struct Twin.{ X Number Y Number })\n" + sig("Point") + "(const tw Twin.{ X 1 Y 2 })\n(f tw)", false},
-		{"untyped struct stays coarse", "(struct Plain A B)\n" + sig("Point") + "(const pl Plain.{ A 1 B 2 })\n(f pl)", false},
-		{"struct satisfies trait", pt + "(method Point.Draw (self) self.X)\n(trait Drawable (method Self.Draw (self)))\n(fun g (Drawable) Nil)\n(fun g (d) Nil)\n(const p Point.{ X 1 Y 2 })\n(g p)", false},
-		{"return struct vs trait result", pt + "(method Point.Draw (self) self.X)\n(trait Drawable (method Self.Draw (self)))\n(const p Point.{ X 1 Y 2 })\n(fun h () Drawable)\n(fun h () p)", false},
+		{"matching struct", pt + sig("Point") + "(let p = Point.{ x 1 y 2 })\n(f p)", false},
+		{"struct satisfies wider record", pt + sig("Struct.{ x Number }") + "(let p = Point.{ x 1 y 2 })\n(f p)", false},
+		{"same-shape struct is structural", pt + "(struct Twin.{ x Number y Number })\n" + sig("Point") + "(let tw = Twin.{ x 1 y 2 })\n(f tw)", false},
+		{"untyped struct stays coarse", "(struct Plain a b)\n" + sig("Point") + "(let pl = Plain.{ a 1 b 2 })\n(f pl)", false},
+		{"struct satisfies trait", pt + "(method Point.draw (self) self.x)\n(trait Drawable (method self.draw (self)))\n(fun g (Drawable) none)\n(fun g (d) none)\n(let p = Point.{ x 1 y 2 })\n(g p)", false},
+		{"return struct vs trait result", pt + "(method Point.draw (self) self.x)\n(trait Drawable (method self.draw (self)))\n(let p = Point.{ x 1 y 2 })\n(fun h () Drawable)\n(fun h () p)", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

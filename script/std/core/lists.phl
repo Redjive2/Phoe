@@ -3,10 +3,10 @@
 
 -- Concatenates any given lists (or strings) into a new list (or string).
 -- Called as follows: `([1 2].Concat [3 4] [5 6])` becoming `[1 2 3 4 5 6]`
-(method List.Concat (self (spread lists)) do
-    (var joined [(spread self)])
+(method List.concat (self (spread lists)) do
+    (let var joined = [(spread self)])
     
-    (foreach item in (lists.Flatten) do
+    (foreach item in (lists.flatten) do
         (= joined (append joined item))
     )
     
@@ -15,16 +15,16 @@
 
 -- Puts the contents of each immediately nested list into the top list, respecting position, and returning the result in a new list.
 -- Called as follows: `([1 [2] [3 [4] 5] 6].Flatten)` becoming `[1 2 3 [4] 5 6]`
-(method List.Flatten (self) do
-    (var flat [])
+(method List.flatten (self) do
+    (let var flat = [])
     
-    (foreach subList in self
+    (foreach sub_list in self
         -- Splice a nested list's elements one level; keep a scalar as-is.
-        (if (subList.Is? List) 
-            then (foreach item in subList
+        (if (sub_list.is? List) 
+            then (foreach item in sub_list
                 (= flat (append flat item))
             )
-            else (= flat (append flat subList))
+            else (= flat (append flat sub_list))
         )
     )
 
@@ -34,41 +34,41 @@
 -- Replaces all `list.[i]` with `(transform list.[i])`, returning the result in a new list.
 -- Called as follows: `([1 2 3].Map &(+ it 1))`
 (method List.Map (self transform) do
-    (var newList [])
+    (let var new_list = [])
     
     (foreach item in self 
-        (= newList (append newList (transform item)))
+        (= new_list (append new_list (transform item)))
     )
     
-    newList
+    new_list
 )
 
 -- Removes all elements that fail the predicate from the list, returning the result.
 -- Called as follows: `([1 2 3].Where &(> it 1))`
-(method List.Where (self predicate) do
-    (var newList [])
+(method List.where (self predicate) do
+    (let var new_list = [])
 
     (foreach item in self
         (if (predicate item) 
-            then (= newList (append newList item))
+            then (= new_list (append new_list item))
         )
     )
     
-    newList
+    new_list
 )
 
-(method List.Append (self (spread elements))
+(method List.append (self (spread elements))
     [(spread self) (spread elements)]
 )
 
-(method List.Prepend (self (spread elements)) do
+(method List.prepend (self (spread elements)) do
     [(spread elements) (spread self)]
 )
 
 
 -- Folds a list into a single value. Called as follows: `([1 2 3].Fold 0 +)`
-(method Collection.Fold (self initial function) do
-    (var acc initial)
+(method Collection.fold (self initial function) do
+    (let var acc = initial)
 
     (foreach item in self
         (= acc (function acc item))
@@ -79,40 +79,40 @@
 
 -- Checks if a list (or string) includes a sublist (or substring).
 -- Called as follows: `("abcdef".HasWindow? "cde")`
-(method Collection.HasWindow? (self sublist) do
-    (var maxI (- self.Size sublist.Size)) -- highest window start; the window list.[maxI : maxI + len(sublist)] ends exactly at len(list)
+(method Collection.has_window? (self sublist) do
+    (let var max_i = (- self.size sublist.size)) -- highest window start; the window list.[maxI : maxI + len(sublist)] ends exactly at len(list)
 
-    (if (< maxI 0)
-        then (return False)
+    (if (< max_i 0)
+        then (return false)
     )
 
-    (foreach i in (range (+ maxI 1)) do
-        (if (== self.[i : (+ i sublist.Size)] sublist) then 
-            (return True)
+    (foreach i in (range (+ max_i 1)) do
+        (if (== self.[i : (+ i sublist.size)] sublist) then 
+            (return true)
         )
     )
 
-    False
+    false
 )
 
 -- Splits a list (or string) into pieces of size `size`. If mode is provided, it must either be :strict (no piece less than `size` at the end) or, when not provided, :loose (remainder passed back)
 -- Called as follows: ("abcdefghijk".Split 3 :strict)
 --@ (~flag mode (default :loose) :strict)
-(method Collection.Split (self size (optional mode)) do
-    (const isStrict (== mode :strict))
+(method Collection.split (self size (optional mode)) do
+    (let is_strict = (== mode :strict))
 
     -- One piece per whole `size` window; (range ...) truncates the float
     -- count to the number of COMPLETE pieces.
-    (var pieces (
-        (range (/ self.Size) size)
+    (let var pieces = (
+        (range (/ self.size) size)
         .Map &self.[(* size it) : (* size (+ it 1))]
     ))
 
     -- Loose mode passes back the leftover (the bytes after the last whole
     -- piece), when there is one; strict mode drops it.
-    (const rest self.[(- self.Size (mod self.Size size)) :])
-    (if (and (not isStrict) (> rest.Size 0))
-        then (= pieces (pieces.Append rest))
+    (let rest = self.[(- self.size (mod self.size size)) :])
+    (if (and (not is_strict) (> rest.size 0))
+        then (= pieces (pieces.append rest))
     )
 
     pieces

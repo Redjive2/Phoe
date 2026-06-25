@@ -10,7 +10,7 @@ import (
 // prefix. Its body receives the QUOTED arguments and returns code as data,
 // which the call site resumes — so (~twice n) expands to (+ n n).
 func TestMacroDeclareAndCall(t *testing.T) {
-	src := "(macro ~twice (e) ['+' e e])\n(var n 5)\n(~twice n)"
+	src := "(macro ~twice (e) ['+' e e])\n(let var n = 5)\n(~twice n)"
 	v := evalProgram(t, src)
 	if v.Kind != core.KindNum || v.Val.(float64) != 10 {
 		t.Fatalf("(~twice n) = %v (kind %s), want 10", v.Val, v.Kind)

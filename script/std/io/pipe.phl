@@ -1,9 +1,9 @@
 (goimport ('stdDependencies' dep))
 
-(fun Pipe () do
-    (const id (dep.IoNewPipe))
+(fun pipe () do
+    (let id = (dep.IoNewPipe))
     [
-        Reader.{ id id }
-        Writer.{ id id }
+        Reader.{ #id id }
+        Writer.{ #id id }
     ]
 )

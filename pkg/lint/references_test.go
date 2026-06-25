@@ -34,21 +34,21 @@ func sitesByFile(sites []DefSite) map[string]int {
 // found from both sides.
 func TestReferencesAcrossSiblings(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"lib/a.phl": "(fun Helper () 1)\n(fun UseLocal () (Helper))\n",
-		"lib/b.phl": "(fun UseRemote () (Helper))\n",
+		"lib/a.phl": "(fun helper () 1)\n(fun use_local () (helper))\n",
+		"lib/b.phl": "(fun use_remote () (helper))\n",
 	})
 	a := filepath.Join(root, "lib/a.phl")
 	b := filepath.Join(root, "lib/b.phl")
 
 	// From the declaration in a.phl.
-	sites := refsFromFile(t, root, a, 1, "(fun Helper () 1)", "Helper")
+	sites := refsFromFile(t, root, a, 1, "(fun helper () 1)", "helper")
 	got := sitesByFile(sites)
 	if got[a] != 2 || got[b] != 1 {
 		t.Fatalf("expected 2 sites in a.phl (decl + local use) and 1 in b.phl, got %#v", sites)
 	}
 
 	// From the use site in b.phl — same answer.
-	sites = refsFromFile(t, root, b, 1, "(fun UseRemote () (Helper))", "Helper")
+	sites = refsFromFile(t, root, b, 1, "(fun use_remote () (helper))", "helper")
 	got = sitesByFile(sites)
 	if got[a] != 2 || got[b] != 1 {
 		t.Fatalf("expected identical results from the b.phl side, got %#v", sites)
@@ -59,20 +59,20 @@ func TestReferencesAcrossSiblings(t *testing.T) {
 // program is found from the declaration, and vice versa.
 func TestReferencesAcrossImporters(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"lib/lib.phl": "(fun Visible () 1)\n",
-		"app.pho":     "(import 'lib')\n(var x (lib.Visible))\n",
+		"lib/lib.phl": "(fun visible () 1)\n",
+		"app.pho":     "(import 'lib')\n(let var x = (lib.visible))\n",
 	})
 	lib := filepath.Join(root, "lib/lib.phl")
 	app := filepath.Join(root, "app.pho")
 
-	sites := refsFromFile(t, root, lib, 1, "(fun Visible () 1)", "Visible")
+	sites := refsFromFile(t, root, lib, 1, "(fun visible () 1)", "visible")
 	got := sitesByFile(sites)
 	if got[lib] != 1 || got[app] != 1 {
 		t.Fatalf("expected decl in lib + use in app, got %#v", sites)
 	}
 
 	// From the importer side.
-	sites = refsFromFile(t, root, app, 2, "(var x (lib.Visible))", "Visible")
+	sites = refsFromFile(t, root, app, 2, "(let var x = (lib.visible))", "visible")
 	got = sitesByFile(sites)
 	if got[lib] != 1 || got[app] != 1 {
 		t.Fatalf("expected identical results from the app side, got %#v", sites)
@@ -83,14 +83,14 @@ func TestReferencesAcrossImporters(t *testing.T) {
 // instances constructed via (pkg.Struct ...) in an importer.
 func TestReferencesMemberAcrossImporters(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"lib/lib.phl": "(struct Thing Part)\n(method Thing.Grow (self) self.Part)\n",
-		"app.pho":     "(import 'lib')\n(var t lib.Thing.{ Part 1 })\n(var a (t.Grow))\n(var b t.Part)\n",
+		"lib/lib.phl": "(struct Thing part)\n(method Thing.grow (self) self.part)\n",
+		"app.pho":     "(import 'lib')\n(let var t = lib.Thing.{ Part 1 })\n(let var a = (t.grow))\n(let var b = t.part)\n",
 	})
 	lib := filepath.Join(root, "lib/lib.phl")
 	app := filepath.Join(root, "app.pho")
 
 	// Method: decl in lib + call in app.
-	sites := refsFromFile(t, root, lib, 2, "(method Thing.Grow (self) self.Part)", "Grow")
+	sites := refsFromFile(t, root, lib, 2, "(method Thing.grow (self) self.part)", "grow")
 	got := sitesByFile(sites)
 	if got[lib] != 1 || got[app] != 1 {
 		t.Fatalf("expected Grow decl + app call, got %#v", sites)
@@ -99,7 +99,7 @@ func TestReferencesMemberAcrossImporters(t *testing.T) {
 	// Field, from its declaration inside the struct form: decl +
 	// self.Part in lib, t.Part in app (the dict key in the constructor
 	// is not a field reference).
-	sites = refsFromFile(t, root, lib, 1, "(struct Thing Part)", "Part")
+	sites = refsFromFile(t, root, lib, 1, "(struct Thing part)", "part")
 	got = sitesByFile(sites)
 	if got[lib] != 2 || got[app] != 1 {
 		t.Fatalf("expected field decl + self read in lib, read in app, got %#v", sites)
@@ -110,13 +110,13 @@ func TestReferencesMemberAcrossImporters(t *testing.T) {
 // through an ancestor-resolved "std/…" import.
 func TestReferencesStdStyleLayout(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"script/std/io/io.phl":     "(fun Visible () 1)\n",
-		"script/std/pctl/pctl.phl": "(import 'std/io')\n(fun Use () (io.Visible))\n",
+		"script/std/io/io.phl":     "(fun visible () 1)\n",
+		"script/std/pctl/pctl.phl": "(import 'std/io')\n(fun use () (io.visible))\n",
 	})
 	io := filepath.Join(root, "script/std/io/io.phl")
 	pctl := filepath.Join(root, "script/std/pctl/pctl.phl")
 
-	sites := refsFromFile(t, root, io, 1, "(fun Visible () 1)", "Visible")
+	sites := refsFromFile(t, root, io, 1, "(fun visible () 1)", "visible")
 	got := sitesByFile(sites)
 	if got[io] != 1 || got[pctl] != 1 {
 		t.Fatalf("expected decl in io + use in pctl, got %#v", sites)
@@ -127,8 +127,8 @@ func TestReferencesStdStyleLayout(t *testing.T) {
 // cross-file reads happen at all for them.
 func TestReferencesLocalityNoScan(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"lib/a.phl": "(import 'lib')\n(fun F (count) (+ count 1))\n",
-		"lib/b.phl": "(fun G (count) (+ count 2))\n",
+		"lib/a.phl": "(import 'lib')\n(fun f (count) (+ count 1))\n",
+		"lib/b.phl": "(fun g (count) (+ count 2))\n",
 	})
 	a := filepath.Join(root, "lib/a.phl")
 	src, _ := os.ReadFile(a)
@@ -141,7 +141,7 @@ func TestReferencesLocalityNoScan(t *testing.T) {
 	defer SetSourceReader(nil)
 
 	// Param `count` in F: line 2.
-	col := strings.Index("(fun F (count) (+ count 1))", "count")
+	col := strings.Index("(fun f (count) (+ count 1))", "count")
 	sites := ReferencesAt(root, a, src, 2, col+1)
 	for _, s := range sites {
 		if s.File != a {
@@ -163,13 +163,13 @@ func TestReferencesLocalityNoScan(t *testing.T) {
 // SetSourceReader) is what gets searched — not what's on disk.
 func TestReferencesSeeOverlay(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"lib/lib.phl": "(fun Visible () 1)\n",
+		"lib/lib.phl": "(fun visible () 1)\n",
 		"app.pho":     "(import 'lib')\n",
 	})
 	lib := filepath.Join(root, "lib/lib.phl")
 	app := filepath.Join(root, "app.pho")
 
-	edited := "(import 'lib')\n(var x (lib.Visible))\n(var y (lib.Visible))\n"
+	edited := "(import 'lib')\n(let var x = (lib.visible))\n(let var y = (lib.visible))\n"
 	SetSourceReader(func(path string) ([]byte, error) {
 		if path == app {
 			return []byte(edited), nil
@@ -178,7 +178,7 @@ func TestReferencesSeeOverlay(t *testing.T) {
 	})
 	defer SetSourceReader(nil)
 
-	sites := refsFromFile(t, root, lib, 1, "(fun Visible () 1)", "Visible")
+	sites := refsFromFile(t, root, lib, 1, "(fun visible () 1)", "visible")
 	got := sitesByFile(sites)
 	if got[app] != 2 {
 		t.Fatalf("expected 2 app sites from the edited buffer, got %#v", sites)
@@ -189,11 +189,11 @@ func TestReferencesSeeOverlay(t *testing.T) {
 // in-file even with a workspace root.
 func TestReferencesProgramDeclsAreLocal(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"main.pho":  "(fun Helper () 1)\n(var x (Helper))\n",
-		"other.pho": "(fun Helper () 2)\n",
+		"main.pho":  "(fun helper () 1)\n(let var x = (helper))\n",
+		"other.pho": "(fun helper () 2)\n",
 	})
 	main := filepath.Join(root, "main.pho")
-	sites := refsFromFile(t, root, main, 1, "(fun Helper () 1)", "Helper")
+	sites := refsFromFile(t, root, main, 1, "(fun helper () 1)", "helper")
 	for _, s := range sites {
 		if s.File != main {
 			t.Fatalf("program decls must stay in-file, got %#v", sites)

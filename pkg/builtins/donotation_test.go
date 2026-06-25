@@ -14,7 +14,7 @@ import (
 func TestDoNotationSequencesAndReturnsLast(t *testing.T) {
 	// All three tail expressions run, in order, in the enclosing scope
 	// (do introduces no frame), and the value is the last expression's.
-	v := evalProgram(t, "(var x 0)\n(do (= x 5) (= x (+ x 1)) x)")
+	v := evalProgram(t, "(let var x = 0)\n(do (= x 5) (= x (+ x 1)) x)")
 	if v.Kind != core.KindNum || v.Val.(float64) != 6 {
 		t.Fatalf("do-notation result = %v (kind %s), want 6", v.Val, v.Kind)
 	}
@@ -23,10 +23,10 @@ func TestDoNotationSequencesAndReturnsLast(t *testing.T) {
 // A multi-statement function body uses (identity do …) to sequence its
 // forms and yield the last; bodies are bare expressions post-cutover.
 func TestDoNotationInFunBody(t *testing.T) {
-	src := "(fun addWithLog (a b) (identity do\n" +
+	src := "(fun add_with_log (a b) (identity do\n" +
 		"  (+ a 0)\n" +
 		"  (+ a b)))\n" +
-		"(addWithLog 3 4)"
+		"(add_with_log 3 4)"
 	if v := evalProgram(t, src); v.Kind != core.KindNum || v.Val.(float64) != 7 {
 		t.Fatalf("addWithLog 3 4 = %v (kind %s), want 7", v.Val, v.Kind)
 	}

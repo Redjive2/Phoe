@@ -38,32 +38,32 @@ func TestStructSyntaxFieldResolution(t *testing.T) {
 	}{
 		{
 			"bare fields resolve on member access",
-			"(struct Point X Y)\n(var p Point.{ X 1 Y 2 })\n(var s p.X)",
+			"(struct Point x y)\n(let var p = Point.{ x 1 y 2 })\n(let var s = p.x)",
 			true, "",
 		},
 		{
 			"unknown member is flagged",
-			"(struct Point X Y)\n(var p Point.{ X 1 Y 2 })\n(var s p.Z)",
+			"(struct Point x y)\n(let var p = Point.{ x 1 y 2 })\n(let var s = p.z)",
 			false, "unknown-member",
 		},
 		{
 			"self.field resolves inside a method",
-			"(struct Point X Y)\n(method Point.Sum (self) (+ self.X self.Y))",
+			"(struct Point x y)\n(method Point.sum (self) (+ self.x self.y))",
 			true, "",
 		},
 		{
 			"self.unknown is flagged inside a method",
-			"(struct Point X Y)\n(method Point.Bad (self) self.Q)",
+			"(struct Point x y)\n(method Point.bad (self) self.q)",
 			false, "unknown-member",
 		},
 		{
 			"multi-line struct definition resolves",
-			"(struct Box\n    Width\n    Height)\n(var b Box.{ Width 3 Height 4 })\n(var w b.Width)",
+			"(struct Box\n    width\n    height)\n(let var b = Box.{ width 3 height 4 })\n(let var w = b.width)",
 			true, "",
 		},
 		{
 			"fieldless struct is valid and its instance has no fields",
-			"(struct Empty)\n(var e Empty.{ })\n(var x e.Nope)",
+			"(struct Empty)\n(let var e = Empty.{ })\n(let var x = e.nope)",
 			false, "unknown-member",
 		},
 	}
@@ -84,23 +84,23 @@ func TestStructSyntaxFieldResolution(t *testing.T) {
 }
 
 func TestStructSyntaxPropertyDetection(t *testing.T) {
-	prelude := "(struct Temp celsius)\n" +
-		"(property Temp.Fahrenheit\n" +
-		"    get (method Temp (self) (+ self.celsius 32)))\n" +
-		"(var t Temp.{ celsius 0 })\n"
+	prelude := "(struct Temp #celsius)\n" +
+		"(property Temp.fahrenheit\n" +
+		"    get (method Temp (self) (+ self.#celsius 32)))\n" +
+		"(let var t = Temp.{ #celsius 0 })\n"
 
 	// The attached property is detected as a member of the struct.
-	if cs := codes("t.pho", prelude+"(var f t.Fahrenheit)"); len(cs) != 0 {
+	if cs := codes("t.pho", prelude+"(let var f = t.fahrenheit)"); len(cs) != 0 {
 		t.Errorf("property access should be clean, got %v", cs)
 	}
 	// A non-member is still flagged (proving detection is specific, not blanket).
-	if cs := codes("t.pho", prelude+"(var f t.Nope)"); !hasCode2(cs, "unknown-member") {
+	if cs := codes("t.pho", prelude+"(let var f = t.nope)"); !hasCode2(cs, "unknown-member") {
 		t.Errorf("unknown member should be flagged, got %v", cs)
 	}
 	// A free-standing property resolves as a bare name.
-	free := "(var backing 0)\n" +
-		"(property Tally get (fun () backing) set (fun (v) (= backing v)))\n" +
-		"(var x Tally)"
+	free := "(let var backing = 0)\n" +
+		"(property tally get (fun () backing) set (fun (v) (= backing v)))\n" +
+		"(let var x = tally)"
 	if cs := codes("t.pho", free); len(cs) != 0 {
 		t.Errorf("free-standing property should be clean, got %v", cs)
 	}
@@ -112,22 +112,22 @@ func TestStructSyntaxCrossPackage(t *testing.T) {
 	if err := os.MkdirAll(pkg, 0755); err != nil {
 		t.Fatal(err)
 	}
-	lib := "(struct Circle Radius Center)\n" +
-		"(property Circle.Area get (method Circle (self) (* self.Radius self.Radius)))\n"
+	lib := "(struct Circle radius center)\n" +
+		"(property Circle.area get (method Circle (self) (* self.radius self.radius)))\n"
 	if err := os.WriteFile(filepath.Join(pkg, "shapes.phl"), []byte(lib), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	main := filepath.Join(dir, "main.pho")
 	src := "(import 'shapes')\n" +
-		"(var c shapes.Circle.{ Radius 2 Center 0 })\n" +
-		"(var r c.Radius)\n" + // imported struct field
-		"(var a c.Area)" // imported attached property
+		"(let var c = shapes.Circle.{ radius 2 center 0 })\n" +
+		"(let var r = c.radius)\n" + // imported struct field
+		"(let var a = c.area)" // imported attached property
 	if cs := codes(main, src); len(cs) != 0 {
 		t.Errorf("imported field + property should resolve clean, got %v", cs)
 	}
 
-	bad := src + "\n(var x c.Nope)"
+	bad := src + "\n(let var x = c.nope)"
 	if !hasCode2(codes(main, bad), "unknown-member") {
 		t.Errorf("unknown imported member should be flagged")
 	}

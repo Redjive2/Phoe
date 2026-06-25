@@ -3,7 +3,6 @@ package builtins
 import (
 	"fmt"
 	"slices"
-	"unicode"
 
 	"pho/pkg/core"
 	"pho/pkg/syntax"
@@ -133,7 +132,7 @@ func methodTarget(ctx core.Context, node core.Node) (recv core.Node, name string
 // isExportedMember reports whether a member name is exported (capitalized) and
 // therefore visible to importers of the declaring module.
 func isExportedMember(name string) bool {
-	return len(name) > 0 && unicode.IsUpper(rune(name[0]))
+	return len(name) > 0 && name[0] != '#'
 }
 
 // structDeclShape reads a struct declaration's name and field names, accepting
@@ -230,9 +229,9 @@ func staticMethod(ctx core.Context, argv []core.Node) core.Value {
 	if !ok {
 		return core.TvNil
 	}
-	// Prepend `Self` as the receiver parameter — bound from the instance stack
-	// (the dot access pushes the type value), so `Self` in the body is the type.
-	argList := append([]string{"Self"}, params...)
+	// Prepend `self` as the receiver parameter — bound from the instance stack
+	// (the dot access pushes the type value), so `self` in the body is the type.
+	argList := append([]string{"self"}, params...)
 	sdata.StaticMethods[name] = core.BindMethod(recvType.Name()+"."+name, argv[2], argList, ctx)
 	return core.TvNil
 }
@@ -707,7 +706,7 @@ func declBuiltins() map[string]core.StackEntry {
 				// A computed field (property): assigning calls its setter (an
 				// anonymous method) with the instance as self.
 				if prop, found := instance.Struct.Properties[field]; found {
-					if unicode.IsLower(rune(field[0])) && !instance.Privileged {
+					if field[0] == '#' && !instance.Privileged {
 						return ctx.Errorf(core.ErrField, "cannot set private property '%s' from outside the struct's methods", field)
 					}
 					if !prop.HasSetter {
@@ -724,9 +723,9 @@ func declBuiltins() map[string]core.StackEntry {
 					return ctx.Errorf(core.ErrField, "struct instance has no field '%s'", field)
 				}
 
-				// Mirror the read path's privacy rule: lowercase fields are
+				// Mirror the read path's privacy rule: `#`-prefixed fields are
 				// only writable from inside the instance's own methods.
-				if unicode.IsLower(rune(field[0])) && !instance.Privileged {
+				if field[0] == '#' && !instance.Privileged {
 					return ctx.Errorf(core.ErrField, "cannot set private field '%s' from outside the struct's methods", field)
 				}
 

@@ -143,8 +143,8 @@ func TestCLIDiagnostics(t *testing.T) {
 		}
 		for _, want := range []string{
 			"error[unresolved]: operation 'fakeFunctionName' is not defined",
-			"4 | (~evilMacro)", // the call site, as normal
-			"= expanded from macro 'evilMacro':",
+			"4 | (~evil_macro)", // the call site, as normal
+			"= expanded from macro 'evil_macro':",
 			"1 | (fakeFunctionName fakeArgumentName)", // the generated code
 		} {
 			if !strings.Contains(stderr, want) {

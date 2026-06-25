@@ -20,11 +20,11 @@ func TestTypeSigErasedAtRuntime(t *testing.T) {
 		}
 	}
 	// Typed binding: name bound, type erased.
-	num("(const (Number n) 5)\nn", 5)
+	num("(let (Number n) = 5)\nn", 5)
 	// fun signature no-ops; the impl binds and runs.
 	num("(fun add (Number Number) Number)\n(fun add (a b) (+ a b))\n(add 3 4)", 7)
 	// method signature no-ops; the impl binds and runs.
-	num("(struct P X)\n(method P.Show (Self) Number)\n(method P.Show (self) (* self.X 2))\n(var p P.{ X 5 })\n(p.Show)", 10)
+	num("(struct P x)\n(method P.show (self) Number)\n(method P.show (self) (* self.x 2))\n(let var p = P.{ x 5 })\n(p.show)", 10)
 }
 
 // A lone signature with no implementation binds nothing — calling it is

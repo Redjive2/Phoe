@@ -12,13 +12,13 @@ func TestUnlessLint(t *testing.T) {
 	}
 
 	// A var declared in an arm hoists into the enclosing scope, like if.
-	hoist := "(fun g (a) do\n  (unless (> a 0) then (var x 5) else (var x 9))\n  (+ x 1))\n"
+	hoist := "(fun g (a) do\n  (unless (> a 0) then (let var x = 5) else (let var x = 9))\n  (+ x 1))\n"
 	if d := AnalyzeFile("t.phl", []byte(hoist)); hasDiag(d, "unresolved-identifier") {
 		t.Errorf("unless arm var should hoist, got %#v", d)
 	}
 
 	// `elif` is not supported.
-	bad := "(unless True then 1 elif False then 2)"
+	bad := "(unless true then 1 elif false then 2)"
 	if !hasDiagWithName(AnalyzeFile("t.pho", []byte(bad)), "bad-form-shape", "elif") {
 		t.Errorf("unless + elif should be a bad-form-shape mentioning elif, got %#v", AnalyzeFile("t.pho", []byte(bad)))
 	}

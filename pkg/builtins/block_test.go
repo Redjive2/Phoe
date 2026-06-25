@@ -32,7 +32,7 @@ func TestBlockItMapper(t *testing.T) {
 func TestBlockLiteralIgnoresIt(t *testing.T) {
 	// &Nil is a block; called with an argument it still yields Nil. Called with
 	// no argument the optional `it` is Nil — either way the body is the literal.
-	if v := evalProgram(t, "(fun apply (x f) (f x))\n(apply 99 &Nil)"); v.Kind != core.KindNil {
+	if v := evalProgram(t, "(fun apply (x f) (f x))\n(apply 99 &none)"); v.Kind != core.KindNil {
 		t.Fatalf("&Nil applied = %v (%s), want Nil", v.Val, v.Kind)
 	}
 	if v := evalProgram(t, "(fun call0 (f) (f))\n(call0 &42)"); v.Kind != core.KindNum || v.Val.(float64) != 42 {
@@ -44,7 +44,7 @@ func TestBlockDoBodyCapturesRestOfForm(t *testing.T) {
 	// &do sequences the rest of the form as the body; `it` is the argument.
 	src := "(fun apply (x f) (f x))\n" +
 		"(apply 3 &do\n" +
-		"  (const y (+ it 1))\n" +
+		"  (let y = (+ it 1))\n" +
 		"  (* y 10))"
 	if v := evalProgram(t, src); v.Kind != core.KindNum || v.Val.(float64) != 40 {
 		t.Fatalf("&do block = %v (%s), want 40", v.Val, v.Kind)

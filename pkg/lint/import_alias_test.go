@@ -8,7 +8,7 @@ import "testing"
 func TestImportAliasBareForm(t *testing.T) {
 	// Used alias: registered, so no false unresolved/unused, and the
 	// malformed-path checker stays quiet on the paren pair.
-	used := []byte("(import ('std/io' myio))\n(myio.PrintLine 1)\n")
+	used := []byte("(import ('std/io' myio))\n(myio.print_line 1)\n")
 	for _, d := range AnalyzeFile("test.pho", used) {
 		switch d.Code {
 		case "non-string-import-path", "unused-import", "unresolved-identifier":

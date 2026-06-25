@@ -186,7 +186,7 @@ var builtinNames = []string{
 	// is an unresolved call, not a builtin.)
 	"get", "has", "append", "drop", "range", "list?",
 	// Atoms.
-	"atom?", "atom", "atomName",
+	"atom?", "atom", "atom_name",
 	// Meta / code-as-data.
 	"inspect", "identity", "spread", "optional",
 	// Module imports.
