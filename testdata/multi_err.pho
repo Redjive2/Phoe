@@ -1,5 +1,5 @@
 -- three independent runtime errors (arithmetic type errors the
 -- linter cannot catch statically), one per top-level form
-(- "a" 1)
-(- "b" 2)
-(- "c" 3)
+(- 'a' 1)
+(- 'b' 2)
+(- 'c' 3)

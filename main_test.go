@@ -70,7 +70,7 @@ func TestCLIDiagnostics(t *testing.T) {
 		for _, want := range []string{
 			"error[type-mismatch]: '-' expected a 'num' argument, got 'str'",
 			"--> runtime_err.pho:4:1",
-			"4 | (- \"a\" 1)",
+			"4 | (- 'a' 1)",
 		} {
 			if !strings.Contains(stderr, want) {
 				t.Errorf("stderr missing %q; got:\n%s", want, stderr)
@@ -127,7 +127,7 @@ func TestCLIDiagnostics(t *testing.T) {
 		}
 		for _, want := range []string{
 			"--> body_span.pho:3:15",
-			"3 | (fun half (n) (/ n \"x\"))",
+			"3 | (fun half (n) (/ n 'x'))",
 			"  |               ^^^^^^^^^",
 		} {
 			if !strings.Contains(stderr, want) {
@@ -143,7 +143,7 @@ func TestCLIDiagnostics(t *testing.T) {
 		}
 		for _, want := range []string{
 			"error[unresolved]: operation 'fakeFunctionName' is not defined",
-			"4 | (evilMacro!)", // the call site, as normal
+			"4 | (~evilMacro)", // the call site, as normal
 			"= expanded from macro 'evilMacro':",
 			"1 | (fakeFunctionName fakeArgumentName)", // the generated code
 		} {
@@ -278,8 +278,8 @@ func TestCLIDiagnostics(t *testing.T) {
 		}
 		for _, want := range []string{
 			"error[parse-error]: ",
-			"--> parse_err.pho:2:16",
-			"2 | (const 'best 3))",
+			"--> parse_err.pho:2:15",
+			"2 | (const best 3))",
 		} {
 			if !strings.Contains(stderr, want) {
 				t.Errorf("stderr missing %q; got:\n%s", want, stderr)

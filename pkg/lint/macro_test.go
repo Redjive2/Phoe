@@ -10,7 +10,7 @@ import (
 // classification — keyword, @macro, @parameter, @macro — so editors paint
 // macros distinctly from functions.
 func TestSemanticTokensMacro(t *testing.T) {
-	src := "(macro twice! (e) (+ e e))\n(twice! 5)\n"
+	src := "(macro ~twice (e) (+ e e))\n(~twice 5)\n"
 	got := SemanticTokens("m.phl", []byte(src))
 	lines := strings.Split(src, "\n")
 	has := func(text string, typ SemanticTokenType, line int) bool {
@@ -43,28 +43,28 @@ func TestSemanticTokensMacro(t *testing.T) {
 // must be invoked with `!`, and a function must not be.
 func TestMacroCallSyntaxEnforced(t *testing.T) {
 	// A macro called WITHOUT `!` is flagged.
-	d := AnalyzeFile("test.pho", []byte("(macro m! (e) e)\n(m 1)"))
-	if !hasDiag(d, "macro-needs-bang") {
+	d := AnalyzeFile("test.pho", []byte("(macro ~m (e) e)\n(m 1)"))
+	if !hasDiag(d, "macro-needs-prefix") {
 		t.Errorf("calling a macro without '!' should be flagged, got %#v", d)
 	}
 
 	// A function called WITH `!` is flagged.
-	d = AnalyzeFile("test.pho", []byte("(fun f (e) e)\n(f! 1)"))
+	d = AnalyzeFile("test.pho", []byte("(fun f (e) e)\n(~f 1)"))
 	if !hasDiag(d, "not-a-macro") {
 		t.Errorf("calling a function with '!' should be flagged, got %#v", d)
 	}
 
 	// Correct usage — macro with `!`, function without — is clean.
-	d = AnalyzeFile("test.pho", []byte("(macro m! (e) e)\n(fun f (e) e)\n(m! 1)\n(f 1)"))
-	if hasDiag(d, "macro-needs-bang") || hasDiag(d, "not-a-macro") {
+	d = AnalyzeFile("test.pho", []byte("(macro ~m (e) e)\n(fun f (e) e)\n(~m 1)\n(f 1)"))
+	if hasDiag(d, "macro-needs-prefix") || hasDiag(d, "not-a-macro") {
 		t.Errorf("correct macro/function call syntax should be clean, got %#v", d)
 	}
 }
 
-// A `(macro name! (params) body)` declaration lints clean and registers the
+// A `(macro ~name (params) body)` declaration lints clean and registers the
 // macro so references inside its body and at call sites resolve.
 func TestMacroDeclLintsClean(t *testing.T) {
-	d := AnalyzeFile("test.pho", []byte("(macro twice! (e) (slice '+ e e))\n(var n 5)\n(twice! n)"))
+	d := AnalyzeFile("test.pho", []byte("(macro ~twice (e) ['+' e e])\n(var n 5)\n(~twice n)"))
 	if hasDiag(d, "unresolved-identifier") || hasDiag(d, "bad-form-shape") {
 		t.Errorf("a well-formed macro declaration + call should lint clean, got %#v", d)
 	}

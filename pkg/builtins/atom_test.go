@@ -24,23 +24,23 @@ func wantBool(t *testing.T, src string, want bool) {
 func TestAtomEquality(t *testing.T) {
 	wantBool(t, "(== :foo :foo)", true)
 	wantBool(t, "(== :foo :bar)", false)
-	wantBool(t, `(== :foo "foo")`, false) // distinct kinds
+	wantBool(t, `(== :foo 'foo')`, false) // distinct kinds
 	wantBool(t, "(== :01 :1)", false)     // leading zeros are significant
 	wantBool(t, "(== :123 :123)", true)
 	// (atom "foo") and a literal of the same name intern to one *Atom, so
 	// they are pointer-equal.
-	wantBool(t, `(== (atom "foo") :foo)`, true)
+	wantBool(t, `(== (atom 'foo') :foo)`, true)
 }
 
 func TestAtomPredicateAndConversions(t *testing.T) {
 	wantBool(t, "(atom? :fast)", true)
-	wantBool(t, `(atom? "fast")`, false)
+	wantBool(t, `(atom? 'fast')`, false)
 	wantBool(t, "(atom? 5)", false)
 
 	if v := evalProgram(t, "(atomName :fast)"); v.Kind != core.KindStr || v.Val.(string) != "fast" {
 		t.Errorf("(atomName :fast) = %q (%v), want str \"fast\"", v.Kind, v.Val)
 	}
-	if v := evalProgram(t, `(atom "fast")`); v.Kind != core.KindAtom || v.Val.(*core.Atom).Name() != "fast" {
+	if v := evalProgram(t, `(atom 'fast')`); v.Kind != core.KindAtom || v.Val.(*core.Atom).Name() != "fast" {
 		t.Errorf("(atom \"fast\") = %q (%v), want atom :fast", v.Kind, v.Val)
 	}
 }
@@ -63,16 +63,9 @@ func TestTrailingQuestionIdentifier(t *testing.T) {
 
 // Spaced slices keep working unchanged.
 func TestSpacedSliceStillWorks(t *testing.T) {
-	if v := evalProgram(t, `"abcdef".[1 : 3]`); v.Kind != core.KindStr || v.Val.(string) != "bc" {
+	if v := evalProgram(t, `'abcdef'.[1 : 3]`); v.Kind != core.KindStr || v.Val.(string) != "bc" {
 		t.Errorf(`"abcdef".[1 : 3] = %q (%v), want "bc"`, v.Kind, v.Val)
 	}
-}
-
-// Atoms inside a quoted form survive listify → derepr → resume, and the
-// interned identity holds across the round-trip (so equality still works).
-func TestAtomQuoteRoundTrip(t *testing.T) {
-	wantBool(t, "(resume '(== :foo :foo))", true)
-	wantBool(t, "(resume '(== :foo :bar))", false)
 }
 
 func TestAtomErrors(t *testing.T) {
@@ -81,7 +74,7 @@ func TestAtomErrors(t *testing.T) {
 		t.Errorf("`:12abc` should raise %q; got %v", core.ErrBadLiteral, codes)
 	}
 	// (atom ...) validates the string is a legal atom form.
-	if _, codes := evalProgramDiag(t, `(atom "not ok")`); !hasCode(codes, core.ErrBadLiteral) {
+	if _, codes := evalProgramDiag(t, `(atom 'not ok')`); !hasCode(codes, core.ErrBadLiteral) {
 		t.Errorf("(atom ...) of a non-atom string should raise %q; got %v", core.ErrBadLiteral, codes)
 	}
 	// (atom ...) requires a string argument.

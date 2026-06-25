@@ -1,4 +1,4 @@
 -- exercises a runtime diagnostic: a type error the linter can't catch
 -- statically (arithmetic operand types aren't part of shape inference),
 -- so the program passes lint, runs, and the runtime reports it.
-(- "a" 1)
+(- 'a' 1)

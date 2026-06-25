@@ -69,11 +69,11 @@ func TestDotCompletionPartialMember(t *testing.T) {
 
 // Dict receivers complete their known keys as bracket-index forms.
 func TestDotCompletionOnDict(t *testing.T) {
-	src := `(var d {"alpha" 1 'beta 2})
+	src := `(var d {'alpha' 1 'beta' 2})
 (var x d.)
 `
 	defs := CompletionsAt("main.pho", []byte(src), 2, 10)
-	if !containsName(defs, `["alpha"]`) || !containsName(defs, `["beta"]`) {
+	if !containsName(defs, `['alpha']`) || !containsName(defs, `['beta']`) {
 		t.Fatalf("expected bracket-index key suggestions, got %v", defNames(defs))
 	}
 }
@@ -94,7 +94,7 @@ func TestDotCompletionOnImport(t *testing.T) {
 	}
 
 	main := filepath.Join(dir, "main.pho")
-	src := "(import \"" + pkgDir + "\")\n(var x mylib.)\n"
+	src := "(import '" + pkgDir + "')\n(var x mylib.)\n"
 	if err := os.WriteFile(main, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}

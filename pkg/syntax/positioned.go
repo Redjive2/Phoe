@@ -80,6 +80,20 @@ func LexPos(src string) ([]Token, []ParseError) {
 	var errs []ParseError
 	line, col := 1, 1
 	i := 0
+
+	// emitIdent appends an identifier token, enforcing the snake_case /
+	// Title_Snake_Case naming rule when StrictNames is on. The token is still
+	// emitted on a violation so the parser can keep making progress; the
+	// ParseError is what fails the read.
+	emitIdent := func(val string, sp span.Span) {
+		if StrictNames && classifyIdent(val) == IdentInvalid {
+			errs = append(errs, ParseError{
+				Span:    sp,
+				Message: fmt.Sprintf("non-conforming name %q — values use snake_case, types use Title_Snake_Case", val),
+			})
+		}
+		tokens = append(tokens, Token{Value: val, Span: sp})
+	}
 	for i < len(src) {
 		ch := src[i]
 
@@ -147,8 +161,8 @@ func LexPos(src string) ([]Token, []ParseError) {
 		//      outer string. Inner strings can in turn contain
 		//      `%(...)`, which makes scanString and scanInterpExpr
 		//      mutually recursive (see helpers below).
-		if ch == '"' {
-			j, cline, ccol, terminated := scanString(src, i, line, col)
+		if ch == '\'' {
+			j, cline, ccol, terminated := scanString(src, i, line, col, ch)
 			if !terminated {
 				errs = append(errs, ParseError{
 					Span:    mkSpan(startLine, startCol, cline, ccol),
@@ -252,6 +266,33 @@ func LexPos(src string) ([]Token, []ParseError) {
 			continue
 		}
 
+		// Private identifier: '#' glued to an identifier body, e.g. `#secret`
+		// or `#Secret_Type`. The '#' marks a private binding/member and is part
+		// of the name token. A lone '#' (not followed by an identifier start)
+		// is malformed.
+		if ch == '#' {
+			if i+1 < len(src) && isIdentStart(src[i+1]) {
+				j := i + 1
+				for j < len(src) && isIdentCont(src[j]) {
+					j++
+				}
+				if j < len(src) && src[j] == '?' {
+					j++
+				}
+				emitIdent(src[i:j], mkSpan(startLine, startCol, line, col+(j-i)))
+				col += j - i
+				i = j
+				continue
+			}
+			errs = append(errs, ParseError{
+				Span:    mkSpan(startLine, startCol, line, col+1),
+				Message: "stray '#' — '#' must prefix a private name like #secret",
+			})
+			i++
+			col++
+			continue
+		}
+
 		// Identifier or word-like operator. A single optional trailing '?'
 		// is part of the identifier (the predicate convention, e.g. `atom?`).
 		if isIdentStart(ch) {
@@ -262,19 +303,17 @@ func LexPos(src string) ([]Token, []ParseError) {
 			if j < len(src) && src[j] == '?' {
 				j++
 			}
-			tokens = append(tokens, Token{
-				Value: src[i:j],
-				Span:  mkSpan(startLine, startCol, line, col+(j-i)),
-			})
+			emitIdent(src[i:j], mkSpan(startLine, startCol, line, col+(j-i)))
 			col += j - i
 			i = j
 			continue
 		}
 
-		// Multi-char operators (==, ~=, <=, >=). Try two-char match first.
+		// Multi-char operators (==, ~=, <=, >=, ->). Try two-char match first.
+		// `->` is the map-literal key/value separator: `[k -> v]`.
 		if i+1 < len(src) {
 			two := src[i : i+2]
-			if two == "==" || two == "~=" || two == "<=" || two == ">=" {
+			if two == "==" || two == "~=" || two == "<=" || two == ">=" || two == "->" {
 				tokens = append(tokens, Token{
 					Value: two,
 					Span:  mkSpan(startLine, startCol, line, col+2),
@@ -313,7 +352,7 @@ func LexPos(src string) ([]Token, []ParseError) {
 // character that doesn't combine with adjacent characters.
 func isStructural(ch byte) bool {
 	switch ch {
-	case '(', ')', '[', ']', '{', '}', '\'', '&', '!', '.', ':':
+	case '(', ')', '[', ']', '{', '}', '&', '.', ':':
 		return true
 	}
 	return false
@@ -330,7 +369,36 @@ func isIdentCont(ch byte) bool {
 // which brace keys get quoted into field-name string literals during
 // construction parsing; non-identifier keys (already a string, a quoted
 // symbol, or a computed form) pass through untouched.
+// structInitHasEq reports whether a `LHS.{ … }` brace body uses the new
+// `field = value` triple form (an `=` marker in the second slot) rather than
+// the old `field value` pair form.
+func structInitHasEq(children []ast.PNode) bool {
+	if len(children) < 2 {
+		return false
+	}
+	lf, ok := children[1].(*ast.PLeaf)
+	return ok && lf.Value == "="
+}
+
+// quoteFieldKey turns a bare field-name leaf (including a private `#field`)
+// into a string literal so the struct constructor reads it as a field name;
+// any non-bare-word node passes through unchanged.
+func quoteFieldKey(n ast.PNode) ast.PNode {
+	if lf, ok := n.(*ast.PLeaf); ok && isBareWord(lf.Value) {
+		return &ast.PLeaf{Value: `'` + lf.Value + `'`, Span: lf.Span}
+	}
+	return n
+}
+
 func isBareWord(s string) bool {
+	if s == "" {
+		return false
+	}
+	// A private member name `#field` is a bare word too: the leading '#' is
+	// part of the name token (Doc/PlanV1/Syntax.md).
+	if s[0] == '#' {
+		s = s[1:]
+	}
 	if s == "" || !isIdentStart(s[0]) {
 		return false
 	}
@@ -603,17 +671,20 @@ func (p *posParser) parseExpr() ast.PNode {
 		if br, ok := rhs.(*ast.PBranch); ok && br.Open == "{" {
 			children := make([]ast.PNode, 0, len(br.Children)+1)
 			children = append(children, expr)
-			for i, c := range br.Children {
-				if i%2 == 0 {
-					if lf, ok := c.(*ast.PLeaf); ok && isBareWord(lf.Value) {
-						children = append(children, &ast.PLeaf{
-							Value: `"` + lf.Value + `"`,
-							Span:  lf.Span,
-						})
-						continue
+			if structInitHasEq(br.Children) {
+				// New `{ field = value … }`: name/value triples, drop the `=`.
+				for i := 0; i+2 < len(br.Children); i += 3 {
+					children = append(children, quoteFieldKey(br.Children[i]), br.Children[i+2])
+				}
+			} else {
+				// Old `{ field value … }`: name/value pairs.
+				for i, c := range br.Children {
+					if i%2 == 0 {
+						children = append(children, quoteFieldKey(c))
+					} else {
+						children = append(children, c)
 					}
 				}
-				children = append(children, c)
 			}
 			expr = &ast.PBranch{
 				Open:     "(",
@@ -656,12 +727,12 @@ func (p *posParser) parsePrimary() ast.PNode {
 	t := p.peek()
 	switch t.Value {
 	case "(":
-		return foldMacroCall(p.parseGrouping("(", ")"))
+		return rewriteLet(rewriteInfixAssign(foldMacroCall(p.parseGrouping("(", ")"))))
 	case "[":
 		return p.parseGrouping("[", "]")
 	case "{":
 		return p.parseGrouping("{", "}")
-	case "'", "&":
+	case "&":
 		return p.parseSigil(t.Value)
 	case ".":
 		// A leading `.` can't start a primary — it's only meaningful as
@@ -677,6 +748,75 @@ func (p *posParser) parsePrimary() ast.PNode {
 	return &ast.PLeaf{Value: tok.Value, Span: tok.Span}
 }
 
+// rewriteInfixAssign normalizes the infix assignment form `(lhs = rhs)` into
+// the prefix `(= lhs rhs)` that the runtime `=` builtin and the linter already
+// understand. It fires only for a parenthesized call whose SECOND element is a
+// bare `=` leaf, so `(x = 5)` and `(obj.f = 5)` are rewritten while `(= x 5)`
+// (already prefix) and `(let x = 5)` (the `=` sits third) are left untouched.
+func rewriteInfixAssign(n ast.PNode) ast.PNode {
+	br, ok := n.(*ast.PBranch)
+	if !ok || br.Open != "(" || len(br.Children) < 2 {
+		return n
+	}
+	eq, ok := br.Children[1].(*ast.PLeaf)
+	if !ok || eq.Value != "=" {
+		return n
+	}
+	reordered := make([]ast.PNode, 0, len(br.Children))
+	reordered = append(reordered, br.Children[1]) // the "=" leaf becomes the head
+	reordered = append(reordered, br.Children[0]) // lhs (assignment target)
+	reordered = append(reordered, br.Children[2:]...)
+	return &ast.PBranch{
+		Open:     br.Open,
+		Close:    br.Close,
+		Children: reordered,
+		Span:     br.Span,
+	}
+}
+
+// rewriteLet normalizes the new declaration form `(let [var] name = value …)`
+// into the existing `(const name value …)` / `(var name value …)` shape that
+// the runtime builtins and the whole linter already understand. `let` binds a
+// constant; `let var` binds mutable state. The optional `var` modifier and the
+// `=` markers are stripped, leaving alternating name/value pairs. This is a
+// transitional sugar: at the hard cutover `let` becomes first-class and
+// const/var are removed (Doc/PlanV1/Syntax.md).
+func rewriteLet(n ast.PNode) ast.PNode {
+	br, ok := n.(*ast.PBranch)
+	if !ok || br.Open != "(" || len(br.Children) < 1 {
+		return n
+	}
+	head, ok := br.Children[0].(*ast.PLeaf)
+	if !ok || head.Value != "let" {
+		return n
+	}
+	i := 1
+	target := "const"
+	if i < len(br.Children) {
+		if mod, ok := br.Children[i].(*ast.PLeaf); ok && mod.Value == "var" {
+			target = "var"
+			i++
+		}
+	}
+	out := make([]ast.PNode, 0, len(br.Children))
+	out = append(out, &ast.PLeaf{Value: target, Span: head.Span})
+	for i < len(br.Children) {
+		// Expect a `name = value` triple. If the `=` marker is absent or the
+		// value is missing, splice the remainder through unchanged so the
+		// const/var arity check reports a malformed binding list.
+		if i+2 < len(br.Children) {
+			if eq, ok := br.Children[i+1].(*ast.PLeaf); ok && eq.Value == "=" {
+				out = append(out, br.Children[i], br.Children[i+2])
+				i += 3
+				continue
+			}
+		}
+		out = append(out, br.Children[i:]...)
+		break
+	}
+	return &ast.PBranch{Open: br.Open, Close: br.Close, Children: out, Span: br.Span}
+}
+
 // parseSigil consumes the sigil and recursively parses the next
 // expression. The Sigil's span runs from the sigil character through
 // the inner expression's end. A sigil with no following expression is
@@ -684,9 +824,9 @@ func (p *posParser) parsePrimary() ast.PNode {
 func (p *posParser) parseSigil(sigil string) ast.PNode {
 	sigilTok := p.advance()
 	// Recover cleanly when the sigil hits a boundary that can't start an
-	// expression: EOF, any closer, or the macro-stop `!`. Without this,
-	// `'` followed by `)` would consume the closer as the sigil's body
-	// and then unbalance the surrounding form.
+	// expression: EOF or any closer. Without this, `&` followed by `)`
+	// would consume the closer as the sigil's body and then unbalance the
+	// surrounding form.
 	if p.atEnd() {
 		p.errs = append(p.errs, ParseError{
 			Span:    sigilTok.Span,
@@ -695,7 +835,7 @@ func (p *posParser) parseSigil(sigil string) ast.PNode {
 		return &ast.PLeaf{Value: sigil, Span: sigilTok.Span}
 	}
 	switch p.peek().Value {
-	case ")", "]", "}", "!":
+	case ")", "]", "}":
 		p.errs = append(p.errs, ParseError{
 			Span:    sigilTok.Span,
 			Message: fmt.Sprintf("missing expression after %q sigil", sigil),
@@ -709,26 +849,26 @@ func (p *posParser) parseSigil(sigil string) ast.PNode {
 	return &ast.PSigil{Sigil: sigil, Inner: inner, Span: span}
 }
 
-// foldMacroCall recognizes the `(name! arg1 arg2 ...)` shape coming
+// foldMacroCall recognizes the `(~name arg1 arg2 ...)` shape coming
 // out of parseGrouping and returns it as a PMacroCall instead. The
-// `!` token is dropped from the args list — its position is kept on
-// PMacroCall.BangSpan. Only `(`-form branches with `!` in second
-// position fold; anything else passes through unchanged.
+// leading `~` prefix sigil is dropped from the children — its position
+// is kept on PMacroCall.SigilSpan. Only `(`-form branches led by `~`
+// fold; anything else passes through unchanged.
 func foldMacroCall(br *ast.PBranch) ast.PNode {
 	if br.Open != "(" || len(br.Children) < 2 {
 		return br
 	}
-	bang, ok := br.Children[1].(*ast.PLeaf)
-	if !ok || bang.Value != "!" {
+	tilde, ok := br.Children[0].(*ast.PLeaf)
+	if !ok || tilde.Value != "~" {
 		return br
 	}
 	args := make([]ast.PNode, 0, len(br.Children)-2)
 	args = append(args, br.Children[2:]...)
 	return &ast.PMacroCall{
-		Head:     br.Children[0],
-		Args:     args,
-		BangSpan: bang.Span,
-		Span:     br.Span,
+		Head:      br.Children[1],
+		Args:      args,
+		SigilSpan: tilde.Span,
+		Span:      br.Span,
 	}
 }
 
@@ -840,11 +980,11 @@ func missingCloser(open, close string, openSpan, lastSpan span.Span) ParseError 
 	}
 }
 
-// scanString skips past a `"..."` string body starting at i (which
-// points at the opening quote), returning the byte position right
-// after the closing quote, the updated line/col, and whether the
-// closing quote was actually found. Honors the three skip rules
-// documented at the `if ch == '"'` site in LexPos:
+// scanString skips past a string body delimited by `quote` (either `'` or
+// `"`) starting at i (which points at the opening quote), returning the byte
+// position right after the closing quote, the updated line/col, and whether
+// the closing quote was actually found. Honors the three skip rules
+// documented at the string site in LexPos:
 //   - “ `X “ backtick passthrough
 //   - `\X` backslash escape (eval translates it later)
 //   - `%(...)` interpolation expression (delegates to scanInterpExpr)
@@ -853,10 +993,10 @@ func missingCloser(open, close string, openSpan, lastSpan span.Span) ParseError 
 // string inside `%(...)` is scanned by another call to scanString,
 // and a `%(...)` inside that inner string is in turn scanned by
 // scanInterpExpr. The recursion is bounded by source length.
-func scanString(src string, i, line, col int) (end, endLine, endCol int, terminated bool) {
+func scanString(src string, i, line, col int, quote byte) (end, endLine, endCol int, terminated bool) {
 	j := i + 1
 	cline, ccol := line, col+1
-	for j < len(src) && src[j] != '"' {
+	for j < len(src) && src[j] != quote {
 		c := src[j]
 		if (c == '`' || c == '\\') && j+1 < len(src) {
 			if src[j+1] == '\n' {
@@ -912,9 +1052,9 @@ func scanInterpExpr(src string, start, line, col int) (end, endLine, endCol int)
 	for j < len(src) && depth > 0 {
 		c := src[j]
 		switch {
-		case c == '"':
+		case c == '\'':
 			var terminated bool
-			j, cline, ccol, terminated = scanString(src, j, cline, ccol)
+			j, cline, ccol, terminated = scanString(src, j, cline, ccol, c)
 			if !terminated {
 				return j, cline, ccol
 			}

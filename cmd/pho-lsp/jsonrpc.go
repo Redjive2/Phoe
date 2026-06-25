@@ -51,8 +51,12 @@ type rpcError struct {
 }
 
 // transport reads/writes JSON-RPC messages on a pair of streams.
-// Writes are serialized through writeMu so notifications fired from
-// goroutines don't interleave bytes mid-message.
+//
+// writeMu serializes writes. The server is single-threaded today — run() reads,
+// dispatches, and replies on one goroutine and spawns none — so it never
+// actually contends; it's kept as a guard for a future design where a
+// background goroutine emits notifications, which would otherwise interleave
+// bytes mid-message.
 type transport struct {
 	in      *bufio.Reader
 	out     io.Writer
@@ -68,10 +72,22 @@ func newTransport(in io.Reader, out io.Writer) *transport {
 // protocol violation.
 func (t *transport) readMessage() (*rawMessage, error) {
 	contentLength := -1
+	// Bound the header block the same way the body is bounded: a peer that
+	// streams header bytes without ever sending the blank separator line (or
+	// floods short header lines) must not grow our buffer without limit. Real
+	// LSP headers are a couple of short lines.
+	const maxHeaderBytes = 8 << 10
+	const maxHeaderLines = 64
+	headerBytes, headerLines := 0, 0
 	for {
 		line, err := t.in.ReadString('\n')
 		if err != nil {
 			return nil, err
+		}
+		headerBytes += len(line)
+		headerLines++
+		if headerBytes > maxHeaderBytes || headerLines > maxHeaderLines {
+			return nil, fmt.Errorf("header block too large (%d bytes, %d lines)", headerBytes, headerLines)
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
@@ -84,6 +100,12 @@ func (t *transport) readMessage() (*rawMessage, error) {
 			n, err := strconv.Atoi(strings.TrimSpace(value))
 			if err != nil {
 				return nil, fmt.Errorf("malformed Content-Length: %q", line)
+			}
+			// A negative length is malformed, not "missing": reject it here so
+			// it never reaches the `< 0` sentinel check below (which means "no
+			// Content-Length header was seen at all").
+			if n < 0 {
+				return nil, fmt.Errorf("negative Content-Length: %q", line)
 			}
 			contentLength = n
 		}
@@ -170,10 +192,11 @@ func (t *transport) reply(id json.RawMessage, result any) error {
 
 // JSON-RPC 2.0 error codes used by this server.
 const (
-	codeParseError     = -32700
-	codeInvalidRequest = -32600
-	codeMethodNotFound = -32601
-	codeInternalError  = -32603
+	codeParseError           = -32700
+	codeInvalidRequest       = -32600
+	codeMethodNotFound       = -32601
+	codeInternalError        = -32603
+	codeServerNotInitialized = -32002
 )
 
 // replyError sends an error response to a request, e.g. when a handler

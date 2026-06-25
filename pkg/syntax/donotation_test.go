@@ -44,11 +44,12 @@ func TestDoNotationDesugar(t *testing.T) {
 }
 
 // The sugar fires inside quotes too, so a quoted body carries the (Do …)
-// structure as data — this is what makes `'(identity do …)` work as a fun
-// body once it is Derepr'd and evaluated.
+// structure as data — this is what makes do-notation work inside a fun body
+// once it is Derepr'd and evaluated. (`&body` routes its inner form through
+// the same quote machinery as a fun/method body.)
 func TestDoNotationDesugarsInsideQuote(t *testing.T) {
-	got := lowerInspect("'(identity do x y)")
-	if !strings.Contains(got, `"do!"`) {
+	got := lowerInspect("&(identity do x y)")
+	if !strings.Contains(got, `'do!'`) {
 		t.Fatalf("quoted do-notation did not carry the (Do …) head as data: %s", got)
 	}
 }

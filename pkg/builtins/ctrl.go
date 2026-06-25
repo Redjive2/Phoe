@@ -58,14 +58,14 @@ func parseCondLoop(ctx core.Context, argv []core.Node, caller string) (cond core
 }
 
 // ctrlBuiltins returns control-flow and boolean builtins:
-// if, foreach, while, until, do, return, break, continue, and, or, ~ (not).
+// if, foreach, while, until, do, return, break, continue, and, or, not.
 func ctrlBuiltins() map[string]core.StackEntry {
 	return map[string]core.StackEntry{
-		"~": global(func(ctx core.Context, argv []core.Node) core.Value {
+		"not": global(func(ctx core.Context, argv []core.Node) core.Value {
 			if len(argv) != 1 {
-				return ctx.Errorf(core.ErrArity, "'~' requires exactly 1 argument; got %d", len(argv))
+				return ctx.Errorf(core.ErrArity, "'not' requires exactly 1 argument; got %d", len(argv))
 			}
-			b, ok := asBool(ctx, argv[0].Evaluate(ctx), "~")
+			b, ok := asBool(ctx, argv[0].Evaluate(ctx), "not")
 			if !ok {
 				return core.TvNil
 			}

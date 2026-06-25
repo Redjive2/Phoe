@@ -39,6 +39,7 @@ type hit struct {
 	SI         *structInfo // struct member access...
 	Member     string      // ...member name
 	MemberKind DefKind     // ...DefField or DefMethod
+	Note       string      // ready-rendered hover for a synthetic target (a built-in object-model member); no jumpable definition
 
 	IsDecl bool // the site IS the declaration (quoted decl name)
 }
@@ -60,6 +61,9 @@ func collectHits(path string, src []byte) []hit {
 	}
 	w.onMemberResolve = func(span span.Span, si *structInfo, member string, kind DefKind) {
 		hits = append(hits, hit{Span: span, SI: si, Member: member, MemberKind: kind})
+	}
+	w.onBuiltinMember = func(span span.Span, hoverMD string) {
+		hits = append(hits, hit{Span: span, Note: hoverMD})
 	}
 	w.onDefine = func(span span.Span, def Definition) {
 		hits = append(hits, hit{Span: span, Def: def, IsDecl: true})
@@ -148,6 +152,12 @@ func HoverAt(path string, src []byte, line, col int) (md string, sp span.Span, o
 	h, ok := hitAt(collectHits(path, src), line, col)
 	if !ok {
 		return "", span.Span{}, false
+	}
+
+	// A built-in object-model member: hover markdown is pre-rendered (no
+	// workspace definition site).
+	if h.Note != "" {
+		return h.Note, h.Span, true
 	}
 
 	if h.SI != nil {
@@ -344,9 +354,9 @@ func renderDeclHeader(br *ast.PBranch) string {
 			return fmt.Sprintf("(fun %s ...)", pnodeText(br.Children[1]))
 		}
 	case "macro":
-		// (macro name! (params) body) — name@1, `!`@2, params@3.
+		// (macro ~name (params) body) — `~`@1, name@2, params@3.
 		if len(br.Children) >= 4 {
-			return fmt.Sprintf("(macro %s! %s ...)", pnodeText(br.Children[1]), pnodeText(br.Children[3]))
+			return fmt.Sprintf("(macro ~%s %s ...)", pnodeText(br.Children[2]), pnodeText(br.Children[3]))
 		}
 	case "method":
 		if len(br.Children) >= 3 {
@@ -381,23 +391,29 @@ func renderDeclHeader(br *ast.PBranch) string {
 // Falls back to the raw reconstruction only when the name isn't a plain
 // quoted identifier (nothing better to show).
 func renderStructHeader(br *ast.PBranch) string {
-	name := ""
-	if len(br.Children) >= 2 {
-		if n, _, ok := declIdent(br.Children[1]); ok {
-			name = n
-		}
-	}
-	if name == "" {
+	d, ok := declOf(br)
+	if !ok || d.Name == "" {
 		return pnodeText(br)
 	}
-	var fields []string
-	for _, lf := range structFieldLeaves(br) {
-		fields = append(fields, lf.Value)
+	if len(d.Fields) == 0 {
+		return fmt.Sprintf("(struct %s)", d.Name)
 	}
-	if len(fields) == 0 {
-		return fmt.Sprintf("(struct %s)", name)
+	typed := false
+	parts := make([]string, 0, len(d.Fields))
+	for _, f := range d.Fields {
+		if f.Type != nil {
+			typed = true
+			parts = append(parts, f.Name+" "+pnodeText(f.Type))
+		} else {
+			parts = append(parts, f.Name)
+		}
 	}
-	return fmt.Sprintf("(struct %s %s)", name, strings.Join(fields, " "))
+	// Render the typed-field form `(struct Name.{ F T … })` when any field
+	// carries a type, else the bare `(struct Name f …)`.
+	if typed {
+		return fmt.Sprintf("(struct %s.{ %s })", d.Name, strings.Join(parts, " "))
+	}
+	return fmt.Sprintf("(struct %s %s)", d.Name, strings.Join(parts, " "))
 }
 
 // pnodeText reconstructs approximate source text for a node. Used for
@@ -421,7 +437,7 @@ func pnodeText(n ast.PNode) string {
 		for _, a := range node.Args {
 			parts = append(parts, pnodeText(a))
 		}
-		out := "(" + pnodeText(node.Head) + "!"
+		out := "(~" + pnodeText(node.Head)
 		if len(parts) > 0 {
 			out += " " + strings.Join(parts, " ")
 		}
@@ -668,25 +684,25 @@ func DocumentSymbols(path string, src []byte) (syms []Symbol) {
 				}
 			}
 		case "macro":
-			// (macro name! (params) body) — the name is child 1.
-			if len(br.Children) >= 2 {
-				if name, span, ok := declIdent(br.Children[1]); ok {
+			// (macro ~name (params) body) — `~`@1, the name is child 2.
+			if len(br.Children) >= 3 {
+				if name, span, ok := declIdent(br.Children[2]); ok {
 					out = append(out, Symbol{Name: name, Kind: DefMacro, Span: br.Span, SelectionSpan: span})
 				}
 			}
 		case "struct":
-			if len(br.Children) >= 2 {
-				if name, span, ok := declIdent(br.Children[1]); ok {
-					sym := Symbol{Name: name, Kind: DefStruct, Span: br.Span, SelectionSpan: span}
-					for _, leaf := range structFieldLeaves(br) {
-						sym.Children = append(sym.Children, Symbol{
-							Name: leaf.Value, Kind: DefField,
-							Span: leaf.Span, SelectionSpan: leaf.Span,
-						})
-					}
-					structIdx[name] = len(out)
-					out = append(out, sym)
+			// declOf reads both the bare `(struct Name f …)` and the typed-field
+			// `(struct Name.{ F T … })` forms, so the outline covers either.
+			if d, ok := declOf(br); ok && d.Name != "" {
+				sym := Symbol{Name: d.Name, Kind: DefStruct, Span: br.Span, SelectionSpan: d.NameSpan}
+				for _, f := range d.Fields {
+					sym.Children = append(sym.Children, Symbol{
+						Name: f.Name, Kind: DefField,
+						Span: f.Span, SelectionSpan: f.Span,
+					})
 				}
+				structIdx[d.Name] = len(out)
+				out = append(out, sym)
 			}
 		case "method":
 			// (method Receiver.Name (args) body) — owner/name are the LHS/RHS

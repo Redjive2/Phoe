@@ -4,6 +4,7 @@ import (
 	"regexp"
 
 	"pho/pkg/ast"
+	"pho/pkg/core"
 	"pho/pkg/span"
 )
 
@@ -25,6 +26,9 @@ const (
 	// bindable names. It exists so dot-completion and hover can label
 	// struct-field results distinctly from variables.
 	DefField
+	// DefType is a named type alias `(type Name T)` — a constant KindType
+	// binding, but labelled distinctly so hover/diagnostics say "type".
+	DefType
 )
 
 func (k DefKind) String() string {
@@ -49,6 +53,8 @@ func (k DefKind) String() string {
 		return "parameter"
 	case DefField:
 		return "field"
+	case DefType:
+		return "type"
 	}
 	return "unknown"
 }
@@ -170,25 +176,31 @@ var builtinNames = []string{
 	"+", "-", "*", "/", "mod",
 	"==", "~=", "<=", ">=", "<", ">",
 	// Boolean.
-	"~", "and", "or",
+	"not", "and", "or",
 	// Control flow.
 	"if", "unless", "foreach", "while", "until", "do", "return", "break", "continue",
 	// Declarations / bindings.
-	"fun", "macro", "method", "struct", "property", "var", "const", "=", "block",
-	// Collections.
-	"slice", "map", "get", "has", "len", "append", "drop", "range", "keyof", "list?",
+	"fun", "macro", "method", "struct", "property", "static", "trait", "var", "const", "type", "=", "block",
+	// Collections. (slice/map are intentionally absent: they are mangled —
+	// `[…]`/`{…}` are the only surface forms — so a bare `(slice …)`/`(map …)`
+	// is an unresolved call, not a builtin.)
+	"get", "has", "append", "drop", "range", "list?",
 	// Atoms.
 	"atom?", "atom", "atomName",
 	// Meta / code-as-data.
-	"pause", "resume", "inspect", "identity", "spread", "optional",
+	"inspect", "identity", "spread", "optional",
 	// Module imports.
 	"import", "goimport",
 	// Type system: first-class type values + runtime type operations.
-	"Number", "String", "List", "Dict", "Boolean", "Char", "Atom", "Function",
-	"NilT", "Type", "Unknown", "None",
-	"typeof", "Is?", "subtype?",
+	"Number", "String", "List", "Map", "Boolean", "Char", "Atom", "Function",
+	"NilT", "Type", "Unknown", "None", "Collection", "Dynamic",
+	// NB: no "Is?" — membership is the universal method (x.Is? T) only,
+	// resolved via the type-member surface (typemembers.go), not a builtin.
+	"subtype?", "Or", "And", "Not", "Diff", "Fun", "Struct", "Trait",
 	// Atoms recognized by the leaf evaluator.
 	"True", "False", "Nil",
+	// New spellings; capitalized forms accepted during the migration.
+	"none", "true", "false",
 	// Soft keyword: `self` is the conventional method-receiver name.
 	// The runtime doesn't bind `self` specially — it's whatever the
 	// first parameter of a method happens to be called — but treating
@@ -214,8 +226,9 @@ func newBuiltinScope() *Scope {
 // identRe matches the same identifier syntax the runtime's leaf
 // evaluator recognizes. We use it to distinguish "this leaf names
 // something" from "this leaf is punctuation / an operator / a literal".
-// A single optional trailing '?' is allowed (the predicate convention).
-var identRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\??$`)
+// A single optional leading '#' (the private marker) and trailing '?' (the
+// predicate convention) are allowed (Doc/PlanV1/Syntax.md).
+var identRe = regexp.MustCompile(`^#?[A-Za-z][A-Za-z0-9_]*\??$`)
 
 // looksLikeIdentifier reports whether a leaf value should be treated as
 // a name for resolution purposes. Operators are reachable via Resolve
@@ -225,8 +238,10 @@ func looksLikeIdentifier(v string) bool {
 		return true
 	}
 	// Symbol operators — present in the builtin scope, treated as refs.
+	// `~` is absent: it is no longer an operator but the macro-call prefix
+	// sigil; `~=` (not-equal) stays.
 	for _, op := range []string{
-		"+", "-", "*", "/", "==", "~=", "<=", ">=", "<", ">", "~", "=",
+		"+", "-", "*", "/", "==", "~=", "<=", ">=", "<", ">", "=",
 	} {
 		if v == op {
 			return true
@@ -238,9 +253,8 @@ func looksLikeIdentifier(v string) bool {
 // declIdent returns the identifier in a declaration NAME position —
 // fun/method/struct name, var/const name, for loop variable, = target.
 // Post-cutover these are bare leaves: `(fun add …)`, never `(fun 'add …)`.
-// A non-leaf (a quote, a list, a computed expression) returns ok=false; the
-// shape checker reports it. Distinct from quotedIdent, which stays for the
-// VALUE positions that still carry a quote (member keys, import aliases).
+// A non-leaf (a list or a computed expression) returns ok=false; the shape
+// checker reports it.
 func declIdent(n ast.PNode) (string, span.Span, bool) {
 	leaf, ok := n.(*ast.PLeaf)
 	if !ok || !looksLikeIdentifier(leaf.Value) {
@@ -249,60 +263,11 @@ func declIdent(n ast.PNode) (string, span.Span, bool) {
 	return leaf.Value, leaf.Span, true
 }
 
-// unquoteForm strips a single leading `'` quote and returns the inner node.
-// It bridges the de-sigiling migration: a fun/method parameter list or body
-// may still be written in the legacy quoted style `'(...)`. The quote is only
-// syntax — the runtime unwraps it and runs the body as code either way — so
-// the analysis call sites (param collection, body walking) unquote it to
-// resolve the names inside. The shape checker is deliberately NOT one of them:
-// it sees the raw form so it can still flag the un-migrated quote. A
-// non-quoted node is returned unchanged.
-func unquoteForm(n ast.PNode) ast.PNode {
-	if sig, ok := n.(*ast.PSigil); ok && sig.Sigil == "'" {
-		return sig.Inner
-	}
-	return n
-}
-
 // declList returns the children of a bare parameter or field list `(a b …)`,
-// or nil if n isn't a bare parenthesized form. It deliberately rejects the
-// legacy quoted form `'(a b …)`: the shape checker (expectQuotedList) relies
-// on that rejection to flag an un-migrated decl with bad-form-shape. Call
-// sites that need to ANALYZE an old-style list (resolving its names rather
-// than judging its shape) unquote it first with unquoteForm.
+// or nil if n isn't a bare parenthesized form. A non-list (e.g. a bare leaf
+// where a list is expected) is rejected so the shape checker can flag it.
 func declList(n ast.PNode) ([]ast.PNode, bool) {
 	br, ok := n.(*ast.PBranch)
-	if !ok || br.Open != "(" {
-		return nil, false
-	}
-	return br.Children, true
-}
-
-// quotedIdent returns the identifier wrapped by `'name`, or "" if the
-// node isn't a quote of a bare identifier.
-func quotedIdent(n ast.PNode) (string, span.Span, bool) {
-	sig, ok := n.(*ast.PSigil)
-	if !ok || sig.Sigil != "'" {
-		return "", span.Span{}, false
-	}
-	leaf, ok := sig.Inner.(*ast.PLeaf)
-	if !ok {
-		return "", span.Span{}, false
-	}
-	if !looksLikeIdentifier(leaf.Value) {
-		return "", span.Span{}, false
-	}
-	return leaf.Value, leaf.Span, true
-}
-
-// quotedList returns the children inside `'(...)`, or nil if n isn't a
-// quoted parenthesized form.
-func quotedList(n ast.PNode) ([]ast.PNode, bool) {
-	sig, ok := n.(*ast.PSigil)
-	if !ok || sig.Sigil != "'" {
-		return nil, false
-	}
-	br, ok := sig.Inner.(*ast.PBranch)
 	if !ok || br.Open != "(" {
 		return nil, false
 	}
@@ -317,8 +282,8 @@ func stringLiteral(n ast.PNode) (string, bool) {
 		return "", false
 	}
 	v := leaf.Value
-	if len(v) < 2 || v[0] != '"' || v[len(v)-1] != '"' {
+	if !core.IsStrLit(v) {
 		return "", false
 	}
-	return v[1 : len(v)-1], true
+	return core.StrLitBody(v), true
 }

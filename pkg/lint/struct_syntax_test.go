@@ -33,17 +33,17 @@ func TestStructSyntaxFieldResolution(t *testing.T) {
 	cases := []struct {
 		name      string
 		src       string
-		wantClean bool          // no diagnostics at all
-		wantCode  string        // if non-clean, this code must appear
+		wantClean bool   // no diagnostics at all
+		wantCode  string // if non-clean, this code must appear
 	}{
 		{
 			"bare fields resolve on member access",
-			"(struct Point X Y)\n(var p Point.{ 'X 1 'Y 2 })\n(var s p.X)",
+			"(struct Point X Y)\n(var p Point.{ X 1 Y 2 })\n(var s p.X)",
 			true, "",
 		},
 		{
 			"unknown member is flagged",
-			"(struct Point X Y)\n(var p Point.{ 'X 1 'Y 2 })\n(var s p.Z)",
+			"(struct Point X Y)\n(var p Point.{ X 1 Y 2 })\n(var s p.Z)",
 			false, "unknown-member",
 		},
 		{
@@ -58,7 +58,7 @@ func TestStructSyntaxFieldResolution(t *testing.T) {
 		},
 		{
 			"multi-line struct definition resolves",
-			"(struct Box\n    Width\n    Height)\n(var b Box.{ 'Width 3 'Height 4 })\n(var w b.Width)",
+			"(struct Box\n    Width\n    Height)\n(var b Box.{ Width 3 Height 4 })\n(var w b.Width)",
 			true, "",
 		},
 		{
@@ -87,7 +87,7 @@ func TestStructSyntaxPropertyDetection(t *testing.T) {
 	prelude := "(struct Temp celsius)\n" +
 		"(property Temp.Fahrenheit\n" +
 		"    get (method Temp (self) (+ self.celsius 32)))\n" +
-		"(var t Temp.{ 'celsius 0 })\n"
+		"(var t Temp.{ celsius 0 })\n"
 
 	// The attached property is detected as a member of the struct.
 	if cs := codes("t.pho", prelude+"(var f t.Fahrenheit)"); len(cs) != 0 {
@@ -119,8 +119,8 @@ func TestStructSyntaxCrossPackage(t *testing.T) {
 	}
 
 	main := filepath.Join(dir, "main.pho")
-	src := "(import \"shapes\")\n" +
-		"(var c shapes.Circle.{ 'Radius 2 'Center 0 })\n" +
+	src := "(import 'shapes')\n" +
+		"(var c shapes.Circle.{ Radius 2 Center 0 })\n" +
 		"(var r c.Radius)\n" + // imported struct field
 		"(var a c.Area)" // imported attached property
 	if cs := codes(main, src); len(cs) != 0 {

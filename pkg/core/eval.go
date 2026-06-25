@@ -164,8 +164,8 @@ func (br ttbranch) Evaluate(ctx Context) Tval {
 		case KindFun:
 			return fn.Val.(tfun)(ctx, args)
 		case KindType:
-			if ctor, ok := ConstructorOf(fn.Val.(*PhoType)); ok {
-				return ctor(ctx, args)
+			if v, ok := buildFromType(ctx, fn.Val.(*PhoType), args); ok {
+				return v
 			}
 			return ctx.Errorf(ErrNotCallable, "type '%s' is not constructible (only struct types can be called)", fn.Val.(*PhoType).Name())
 		default:
@@ -204,17 +204,19 @@ func (lf ttleaf) Evaluate(ctx Context) Tval {
 
 		return ctx.Errorf(ErrBadLiteral, "value '%s' could not be parsed as a number", s)
 		// match strings
-	} else if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-		return TvStr(unescapeStringLit(s[1 : len(s)-1]))
+	} else if IsStrLit(s) {
+		return TvStr(unescapeStringLit(StrLitBody(s)))
 		// match chars
 	} else if charPattern.MatchString(s) {
 		return TvChr(rune(s[1]))
-		// match nil
-	} else if s == "Nil" {
+		// match nil — `none` is the new spelling; `Nil` is accepted during the
+		// syntax migration and dropped at the hard cutover (Doc/PlanV1/Syntax.md).
+	} else if s == "Nil" || s == "none" {
 		return TvNil
-		// match bools
-	} else if s == "True" || s == "False" {
-		return TvBool(s == "True")
+		// match bools — `true`/`false` are the new spellings; `True`/`False`
+		// are likewise accepted transitionally.
+	} else if s == "True" || s == "False" || s == "true" || s == "false" {
+		return TvBool(s == "True" || s == "true")
 		// match atoms (`:name` / `:123`); the lexer already glued the colon
 		// to an identifier/digit run, so validate the body and intern it.
 	} else if len(s) >= 2 && s[0] == ':' {
@@ -257,6 +259,52 @@ func (lf ttleaf) Evaluate(ctx Context) Tval {
 // the lexer-eval contract loose: anything the lexer accepted gets a
 // reasonable interpretation, and users adding their own escape habits
 // don't get a hard failure for typos.
+// UnescapeStringLit unescapes the BODY of a string literal (the text between
+// the quotes) exactly as the evaluator does, so other packages (the linter's
+// string-literal singleton types) parse string values identically.
+func UnescapeStringLit(body string) string { return unescapeStringLit(body) }
+
+// IsStrLit reports whether a leaf value s is a string literal — its text
+// wrapped in the `'` string delimiter (the opening and closing `'` must both
+// be present).
+func IsStrLit(s string) bool {
+	return len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\''
+}
+
+// StrLitBody returns the body of a string-literal leaf (the text between the
+// delimiters). Callers must have confirmed IsStrLit(s) first.
+func StrLitBody(s string) string { return s[1 : len(s)-1] }
+
+// QuoteStrLit renders s as a Pho single-quoted string literal — the inverse of
+// UnescapeStringLit(StrLitBody(...)). The delimiter and control bytes are
+// escaped (a literal `'` becomes `\'`; a `"` needs no escape) so the result
+// re-parses back to s.
+func QuoteStrLit(s string) string {
+	q := strconv.Quote(s) // "..." with Go's control/quote escaping
+	body := q[1 : len(q)-1]
+	out := make([]byte, 0, len(body)+2)
+	out = append(out, '\'')
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if c == '\\' && i+1 < len(body) {
+			if body[i+1] == '"' {
+				out = append(out, '"') // \" -> " (no escape needed in '...')
+			} else {
+				out = append(out, '\\', body[i+1])
+			}
+			i++
+			continue
+		}
+		if c == '\'' {
+			out = append(out, '\\', '\'') // ' -> \'
+			continue
+		}
+		out = append(out, c)
+	}
+	out = append(out, '\'')
+	return string(out)
+}
+
 func unescapeStringLit(body string) string {
 	if !needsUnescape(body) {
 		return body
@@ -278,6 +326,8 @@ func unescapeStringLit(body string) string {
 			out = append(out, '\\')
 		case '"':
 			out = append(out, '"')
+		case '\'':
+			out = append(out, '\'')
 		case '%':
 			// `\%` escapes a literal % so the interpolation pass
 			// doesn't see it. Decoded back to a bare % at eval time.

@@ -37,18 +37,6 @@ func TestLowerBlockSigil(t *testing.T) {
 	}
 }
 
-// Quote sugar — `'leaf` lowers to "leaf"; `'(...)` lowers to (slice ...).
-func TestLowerQuoteSigil(t *testing.T) {
-	got := dumpTree(lower("'x"))
-	if !strings.Contains(got, "\"x\"") {
-		t.Fatalf("expected 'x to contain \"x\", got: %s", got)
-	}
-	got = dumpTree(lower("'(a b c)"))
-	if !strings.Contains(got, "slice") {
-		t.Fatalf("expected '(...) to wrap with slice, got: %s", got)
-	}
-}
-
 // Dot accessor — `a.b.c` lowers to nested core.Dot calls.
 func TestLowerDotChain(t *testing.T) {
 	got := dumpTree(lower("(io.PrintLine self.x)"))
@@ -65,7 +53,7 @@ func TestLowerDotChain(t *testing.T) {
 // retired `(LHS { … })` construction form.
 func TestLowerDotBraceConstruction(t *testing.T) {
 	got := dumpTree(lower(`Point.{ X 10 y 20 }`))
-	want := dumpTree(lower(`(Point "X" 10 "y" 20)`))
+	want := dumpTree(lower(`(Point 'X' 10 'y' 20)`))
 	if got != want {
 		t.Fatalf("Point.{...} should lower to (Point \"X\" 10 \"y\" 20)\n  got:  %s\n  want: %s", got, want)
 	}
@@ -77,38 +65,27 @@ func TestLowerDotBraceConstruction(t *testing.T) {
 	}
 }
 
-// A quoted key is still accepted in a construction brace — it lowers to the
-// same field-name string as the bare key — so migrating `.{ 'X v }` to
-// `.{ X v }` is behaviour-preserving.
-func TestLowerDotBraceQuotedKeyMatchesBare(t *testing.T) {
-	bare := dumpTree(lower(`Point.{ X 10 }`))
-	quoted := dumpTree(lower(`Point.{ 'X 10 }`))
-	if bare != quoted {
-		t.Fatalf("bare and quoted construction keys should lower alike\n  bare:   %s\n  quoted: %s", bare, quoted)
-	}
-}
-
 // The construction sugar composes with dot chains on either side: an imported
 // struct (`pkg.Struct.{…}`) builds through the resolved constructor, and field
 // access on the freshly built instance (`Struct.{…}.Field`) reads it back.
 func TestLowerDotBraceChains(t *testing.T) {
 	got := dumpTree(lower(`io.Writer.{ id 3 }`))
-	want := dumpTree(lower(`(io.Writer "id" 3)`))
+	want := dumpTree(lower(`(io.Writer 'id' 3)`))
 	if got != want {
 		t.Fatalf("pkg.Struct.{...} mismatch\n  got:  %s\n  want: %s", got, want)
 	}
 
 	got = dumpTree(lower(`Point.{ X 1 }.X`))
-	want = dumpTree(lower(`(Point "X" 1).X`))
+	want = dumpTree(lower(`(Point 'X' 1).X`))
 	if got != want {
 		t.Fatalf("Struct.{...}.Field mismatch\n  got:  %s\n  want: %s", got, want)
 	}
 }
 
-// Macro call — `(name! a b)` lowers to (Macrocall name 'a 'b), the mangled
+// Macro call — `(~name a b)` lowers to (Macrocall name 'a 'b), the mangled
 // builtin that resolves name to a macro, invokes it, and resumes the result.
 func TestLowerMacroCall(t *testing.T) {
-	got := dumpTree(lower("(my! a b)"))
+	got := dumpTree(lower("(~my a b)"))
 	if !strings.Contains(got, core.Macrocall) {
 		t.Fatalf("expected lowered macro call to contain the Macrocall head, got: %s", got)
 	}
@@ -120,29 +97,29 @@ func TestLowerMacroCall(t *testing.T) {
 // Plain string literals with no `%` markers stay plain leaves — the
 // interpolation path should not allocate or rewrite them.
 func TestLowerStringNoInterp(t *testing.T) {
-	got := dumpTree(lower(`"hello"`))
-	if !strings.Contains(got, `"hello"`) || strings.Contains(got, core.Strinterp) {
+	got := dumpTree(lower(`'hello'`))
+	if !strings.Contains(got, `'hello'`) || strings.Contains(got, core.Strinterp) {
 		t.Errorf("expected plain leaf for non-interpolated string, got %s", got)
 	}
 }
 
 // Single-name interpolation: `"hi %who"` → (Strinterp "hi " (Strcoerce who)).
 func TestLowerInterpName(t *testing.T) {
-	got := dumpTree(lower(`"hi %who"`))
+	got := dumpTree(lower(`'hi %who'`))
 	if !strings.Contains(got, core.Strinterp) {
 		t.Fatalf("expected Strinterp in lowered output, got %s", got)
 	}
 	if !strings.Contains(got, core.Strcoerce+" who") {
 		t.Errorf("expected (Strcoerce who) wrapping the interpolation, got %s", got)
 	}
-	if !strings.Contains(got, `"hi "`) {
+	if !strings.Contains(got, `'hi '`) {
 		t.Errorf("expected literal chunk \"hi \", got %s", got)
 	}
 }
 
 // Dot-chain interpolation: `"%a.b.c"` → (Strinterp (Strcoerce (Dot (Dot a b) c))).
 func TestLowerInterpDotChain(t *testing.T) {
-	got := dumpTree(lower(`"%a.b.c"`))
+	got := dumpTree(lower(`'%a.b.c'`))
 	if !strings.Contains(got, core.Strinterp) {
 		t.Fatalf("expected Strinterp, got %s", got)
 	}
@@ -153,7 +130,7 @@ func TestLowerInterpDotChain(t *testing.T) {
 
 // Paren interpolation: `"%(len items)"` → ... (Strcoerce (len items)).
 func TestLowerInterpParen(t *testing.T) {
-	got := dumpTree(lower(`"%(len items)"`))
+	got := dumpTree(lower(`'%(len items)'`))
 	if !strings.Contains(got, "len items") {
 		t.Fatalf("expected inner (len items) preserved, got %s", got)
 	}
@@ -164,7 +141,7 @@ func TestLowerInterpParen(t *testing.T) {
 
 // `\%` escapes the marker — no Strinterp produced.
 func TestLowerInterpEscape(t *testing.T) {
-	got := dumpTree(lower(`"\%name stays literal"`))
+	got := dumpTree(lower(`'\%name stays literal'`))
 	if strings.Contains(got, core.Strinterp) {
 		t.Errorf("expected no Strinterp for \\%%-escaped string, got %s", got)
 	}
@@ -174,11 +151,11 @@ func TestLowerInterpEscape(t *testing.T) {
 // string at the inner quote — exercises scanInterpExpr's recursive
 // scanString call.
 func TestLowerInterpInnerString(t *testing.T) {
-	got := dumpTree(lower(`"got %(io.Sprint "x") here"`))
+	got := dumpTree(lower(`'got %(io.Sprint 'x') here'`))
 	if !strings.Contains(got, core.Strinterp) {
 		t.Fatalf("expected Strinterp, got %s", got)
 	}
-	if !strings.Contains(got, `"x"`) {
+	if !strings.Contains(got, `'x'`) {
 		t.Errorf("expected inner string literal preserved, got %s", got)
 	}
 	if !strings.Contains(got, "here") {
@@ -212,14 +189,42 @@ func TestEvalStringEscapes(t *testing.T) {
 		src  string
 		want string
 	}{
-		{"newline", `"line1\nline2"`, "line1\nline2"},
-		{"tab", `"a\tb"`, "a\tb"},
-		{"carriage return", `"a\rb"`, "a\rb"},
-		{"escaped quote", `"say \"hi\""`, `say "hi"`},
-		{"escaped backslash", `"a\\b"`, `a\b`},
-		{"mixed run", `"a\n\tb\\c"`, "a\n\tb\\c"},
-		{"null byte", `"x\0y"`, "x\x00y"},
-		{"unknown escape passes through", `"\q"`, `\q`},
+		{"newline", `'line1\nline2'`, "line1\nline2"},
+		{"tab", `'a\tb'`, "a\tb"},
+		{"carriage return", `'a\rb'`, "a\rb"},
+		{"double quote is a literal", `'say "hi"'`, `say "hi"`},
+		{"escaped backslash", `'a\\b'`, `a\b`},
+		{"mixed run", `'a\n\tb\\c'`, "a\n\tb\\c"},
+		{"null byte", `'x\0y'`, "x\x00y"},
+		{"unknown escape passes through", `'\q'`, `\q`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := evalFirst(t, tc.src)
+			if v.Kind != core.KindStr {
+				t.Fatalf("eval(%s): expected str, got kind %q (%v)", tc.src, v.Kind, v.Val)
+			}
+			if got := v.Val.(string); got != tc.want {
+				t.Errorf("eval(%s) = %q, want %q", tc.src, got, tc.want)
+			}
+		})
+	}
+}
+
+// Single-quote `'…'` is the string delimiter (Phase 3). A `'`-delimited
+// literal evaluates to the same string value a `"`-delimited one would, with
+// `\'` escaping a literal quote and an embedded `"` needing no escape.
+func TestEvalSingleQuoteStrings(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"plain", `'hello'`, "hello"},
+		{"escaped single quote", `'it\'s'`, "it's"},
+		{"double quote needs no escape", `'say "hi"'`, `say "hi"`},
+		{"newline still works", `'a\nb'`, "a\nb"},
+		{"empty", `''`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -235,18 +240,18 @@ func TestEvalStringEscapes(t *testing.T) {
 }
 
 // Interpolation must desugar even when the string sits inside a quoted
-// form. Fun/method bodies are quoted (they go through listifyP, not
-// lowerNode), so this is the COMMON case — a regression here means
+// form. Fun/method bodies are quoted internally (they go through listifyP,
+// not lowerNode), so this is the COMMON case — a regression here means
 // `"%x"` inside any function body silently renders as literal text
 // instead of interpolating.
 func TestLowerInterpInsideQuote(t *testing.T) {
-	// String nested inside a quoted (...) body.
-	got := dumpTree(lower(`(fun 'f '(who) '(io.PrintLine "hi %who"))`))
+	// String nested inside a fun body (internally quoted by listifyP).
+	got := dumpTree(lower(`(fun f (who) (io.PrintLine 'hi %who'))`))
 	if !strings.Contains(got, core.Strinterp) {
 		t.Errorf("expected Strinterp for interpolation inside quoted fun body, got %s", got)
 	}
-	// Quoted string used directly as a fun body (debug.phl style).
-	got = dumpTree(lower(`(fun '(arg) '"v=%arg")`))
+	// A bare string used directly as a fun body (debug.phl style).
+	got = dumpTree(lower(`(fun (arg) 'v=%arg')`))
 	if !strings.Contains(got, core.Strinterp) {
 		t.Errorf("expected Strinterp for quoted string body, got %s", got)
 	}
@@ -255,11 +260,11 @@ func TestLowerInterpInsideQuote(t *testing.T) {
 // Bracket / brace literals expand to (slice ...) / (map ...).
 func TestLowerArrayDictLiterals(t *testing.T) {
 	got := dumpTree(lower("[1 2 3]"))
-	if !strings.HasPrefix(got, "((slice 1 2 3))") {
-		t.Fatalf("expected [1 2 3] to lower to (slice 1 2 3), got: %s", got)
+	if !strings.HasPrefix(got, "(("+core.Slice+" 1 2 3))") {
+		t.Fatalf("expected [1 2 3] to lower to (%s 1 2 3), got: %s", core.Slice, got)
 	}
-	got = dumpTree(lower(`{"a" 1}`))
-	if !strings.Contains(got, "map") {
-		t.Fatalf("expected {...} to lower to map, got: %s", got)
+	got = dumpTree(lower(`{'a' 1}`))
+	if !strings.Contains(got, core.Map) {
+		t.Fatalf("expected {...} to lower to %s, got: %s", core.Map, got)
 	}
 }

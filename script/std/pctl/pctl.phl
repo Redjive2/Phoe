@@ -1,8 +1,8 @@
 -- module std/pctl: responsible for all process-related control functions
 
-(goimport ("stdDependencies" dep))
+(goimport ('stdDependencies' dep))
 
-(import "std/io")
+(import 'std/io')
 
 (fun Quit (code message)
     (dep.PctlQuit code message)

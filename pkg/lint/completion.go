@@ -191,44 +191,71 @@ func memberCompletions(w *walker, scope *Scope, recv string) ([]Definition, bool
 	}
 
 	sh := def.Shape
+	var out []Definition
+
 	switch sh.Kind {
 	case ShapeInstance:
-		si, ok := w.resolveStruct(scope, sh)
-		if !ok {
-			return nil, false
-		}
-		visible := func(name string) bool {
-			return sh.Privileged || !startsLower(name)
-		}
-		var out []Definition
-		for name, span := range si.Fields {
-			if visible(name) {
-				out = append(out, Definition{Name: name, Kind: DefField, Span: span, File: si.File})
+		if si, ok := w.resolveStruct(scope, sh); ok {
+			visible := func(name string) bool {
+				return sh.Privileged || (!startsLower(name) && !isHashPrivate(name))
+			}
+			for name, span := range si.Fields {
+				if visible(name) {
+					out = append(out, Definition{Name: name, Kind: DefField, Span: span, File: si.File})
+				}
+			}
+			for name, span := range si.Methods {
+				if visible(name) {
+					out = append(out, Definition{Name: name, Kind: DefMethod, Span: span, File: si.MethodFiles[name]})
+				}
 			}
 		}
-		for name, span := range si.Methods {
-			if visible(name) {
+
+	case ShapeDict:
+		for name, span := range sh.Keys {
+			// Suggest the full bracket-index form — dict lookup is dynamic
+			// indexing (`d.['key']`), not bare field access, so completing
+			// after the dot inserts the brackets and the quoted literal.
+			out = append(out, Definition{Name: `['` + name + `']`, Kind: DefField, Span: span})
+		}
+	}
+
+	// Object-model members: the built-in primitive members for the inferred
+	// type plus the universal (Unknown) members that apply to every value, and
+	// any primitive extensions declared in scope (collected like struct methods
+	// under the type name, so a user method on e.g. Number surfaces here).
+	out = append(out, builtinMemberDefs(sh.Kind)...)
+	if tn := shapeTypeName(sh.Kind); tn != "" {
+		if si, ok := scope.LookupStruct(tn); ok {
+			for name, span := range si.Methods {
 				out = append(out, Definition{Name: name, Kind: DefMethod, Span: span, File: si.MethodFiles[name]})
 			}
 		}
-		sortDefs(out)
-		return out, true
-
-	case ShapeDict:
-		if sh.Keys == nil {
-			return nil, false
-		}
-		out := make([]Definition, 0, len(sh.Keys))
-		for name, span := range sh.Keys {
-			// Suggest the full bracket-index form — dict lookup is dynamic
-			// indexing (`d.["key"]`), not bare field access, so completing
-			// after the dot inserts the brackets and the quoted literal.
-			out = append(out, Definition{Name: `["` + name + `"]`, Kind: DefField, Span: span})
-		}
-		sortDefs(out)
-		return out, true
+		out = append(out, w.importedPrimitiveExtensions(scope, tn)...)
 	}
-	return nil, false
+
+	out = dedupDefsByName(out)
+	if len(out) == 0 {
+		return nil, false
+	}
+	sortDefs(out)
+	return out, true
+}
+
+// dedupDefsByName keeps the first Definition seen for each name, so a struct's
+// own member or a user extension takes precedence over a built-in of the same
+// name.
+func dedupDefsByName(defs []Definition) []Definition {
+	seen := make(map[string]bool, len(defs))
+	out := make([]Definition, 0, len(defs))
+	for _, d := range defs {
+		if seen[d.Name] {
+			continue
+		}
+		seen[d.Name] = true
+		out = append(out, d)
+	}
+	return out
 }
 
 func sortDefs(defs []Definition) {
@@ -237,6 +264,13 @@ func sortDefs(defs []Definition) {
 
 func startsLower(name string) bool {
 	return name != "" && name[0] >= 'a' && name[0] <= 'z'
+}
+
+// isHashPrivate reports whether name carries the new `#` private marker. During
+// the migration this composes with the lowercase rule (both signal private);
+// at the flip `#` becomes the sole visibility marker (Doc/PlanV1/Syntax.md).
+func isHashPrivate(name string) bool {
+	return name != "" && name[0] == '#'
 }
 
 // propertyBodyScope opens the body scope when the cursor sits inside a
@@ -269,7 +303,7 @@ func bodyScopeFor(w *walker, parent *Scope, br *ast.PBranch, isMethod bool, line
 		}
 		argList, body = br.Children[2], br.Children[3]
 	case headIdent(br) == "macro":
-		// (macro name! (params) body) — argList@3, body@4 (skip `!`@2).
+		// (macro ~name (params) body) — argList@3, body@4 (`~`@1, name@2).
 		if len(br.Children) < 5 {
 			return nil
 		}
@@ -320,7 +354,10 @@ func bodyScopeFor(w *walker, parent *Scope, br *ast.PBranch, isMethod bool, line
 		}
 		if looksLikeIdentifier(owner) {
 			if d, ok := bodyScope.Defs["self"]; ok {
-				d.Shape = Shape{Kind: ShapeInstance, Owner: owner, Privileged: true}
+				// Same owner→shape rule the walker uses: a struct receiver is a
+				// privileged instance; a built-in collection/primitive receiver
+				// takes that type's shape so `self.` completes its members.
+				d.Shape = selfShapeForOwner(parent, owner)
 				bodyScope.Defs["self"] = d
 			}
 		}

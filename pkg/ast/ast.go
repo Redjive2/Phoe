@@ -81,17 +81,17 @@ type PDot struct {
 
 func (d *PDot) GetSpan() span.Span { return d.Span }
 
-// PMacroCall is `(name! arg1 arg2 ...)` — at runtime it expands to
-// `(resume (name 'arg1 'arg2 ...))`. Detected at parse time so the `!`
-// isn't a child of a generic PBranch but the shape's identity. Head is
-// the callable (always a leaf in well-formed source, but kept as PNode
-// for tolerance); Args are the unquoted argument nodes; BangSpan is the
-// position of the `!` token.
+// PMacroCall is `(~name arg1 arg2 ...)` — at runtime it lowers to
+// `(core.Macrocall name 'arg1 'arg2 ...)`. Detected at parse time so the
+// `~` prefix sigil isn't a child of a generic PBranch but the shape's
+// identity. Head is the callable (always a leaf in well-formed source, but
+// kept as PNode for tolerance); Args are the unquoted argument nodes;
+// SigilSpan is the position of the `~` token.
 type PMacroCall struct {
-	Head     PNode
-	Args     []PNode
-	BangSpan span.Span
-	Span     span.Span
+	Head      PNode
+	Args      []PNode
+	SigilSpan span.Span
+	Span      span.Span
 }
 
 func (m *PMacroCall) GetSpan() span.Span { return m.Span }

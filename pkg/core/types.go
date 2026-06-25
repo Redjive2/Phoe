@@ -49,6 +49,13 @@ type tenv struct {
 	Structs  map[string]*tstruct // Maps the address of the 'new' function returned by 'struct'
 	// to the struct's underlying representation. Used to add methods.
 	InstStack []Tval // all 'tinstance's
+
+	// AllowShadow lets top-level declarations in THIS env rebind a builtin
+	// global — normally forbidden. It is set only for the annotation macro
+	// library, whose helper funcs (e.g. `type`, backing the `~type` annotation)
+	// are an intentional overlay that shadows same-named builtins in the
+	// isolated annotation env, keeping `~type` and the `type` builtin distinct.
+	AllowShadow bool
 }
 
 type tpackage struct {
@@ -56,6 +63,13 @@ type tpackage struct {
 	Files   map[string]*tfile // filename -> file
 	Exports map[string]Tval   // capitalized identifiers, merged across files
 	Env     *tenv             // package-private env shared across files
+
+	// Methods and Properties are the type EXTENSIONS this package declares on
+	// primitive (or universal "unknown") types, keyed by typeKey then member
+	// name. Resolved import-scoped by the dot accessor (see member.go). Lazily
+	// allocated by AddMethod/AddProperty.
+	Methods    map[string]map[string]methodExt
+	Properties map[string]map[string]propExt
 }
 
 type tfile struct {
@@ -90,7 +104,14 @@ type tstruct struct {
 	// setter (anonymous methods), registered by the `property` builtin. The
 	// Dot accessor and `=` consult this when a plain field lookup misses.
 	Properties map[string]tproperty
-	Origin     *tenv
+	// StaticMethods / StaticProperties are TYPE-level members declared with
+	// `static method`/`static property`: they are reached through the struct's
+	// TYPE value (`Point.At`), not an instance, and their receiver param `Self`
+	// is bound to that type value. Kept per-struct (not in the prim:type
+	// extension table, which every type value would share).
+	StaticMethods    map[string]tfun
+	StaticProperties map[string]tproperty
+	Origin           *tenv
 }
 
 // tproperty is a computed field/variable: reads call Getter, writes call

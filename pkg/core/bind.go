@@ -205,15 +205,20 @@ func BindMethod(name string, repr ttnode, argList []string, defCtx Context) tfun
 			bodyCtx.Env.Stack[0][argName] = tStackEntry{argValue, false}
 		}
 
-		// Grant the receiver private access for the body. Save and restore
-		// the prior value rather than hard-clearing it: the same *tinstance
-		// is shared by pointer, so a nested or recursive method call on the
-		// same receiver must not strip privilege from the still-running
-		// outer call when the inner one returns.
-		inst := bodyCtx.Env.Stack[0][argList[0]].Val.Val.(*tinstance)
-		wasPrivileged := inst.Privileged
-		inst.Privileged = true
-		defer func() { inst.Privileged = wasPrivileged }()
+		// Grant the receiver private access for the body — but only when the
+		// receiver is a struct instance. A primitive (or other non-instance)
+		// receiver, used by methods attached to primitive types, has no private
+		// state and is not a *tinstance, so the privilege dance is skipped (and
+		// the type assertion must not panic). Save and restore the prior value
+		// rather than hard-clearing it: the same *tinstance is shared by
+		// pointer, so a nested or recursive method call on the same receiver
+		// must not strip privilege from the still-running outer call when the
+		// inner one returns.
+		if inst, ok := bodyCtx.Env.Stack[0][argList[0]].Val.Val.(*tinstance); ok {
+			wasPrivileged := inst.Privileged
+			inst.Privileged = true
+			defer func() { inst.Privileged = wasPrivileged }()
+		}
 
 		if callCtx.Diag.Depth() >= maxCallDepth {
 			panic(RecursionSignal{})

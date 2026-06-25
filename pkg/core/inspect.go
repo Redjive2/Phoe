@@ -136,7 +136,7 @@ func Inspect(code ttnode) string {
 			return Inspect(branch[1]) + "." + Inspect(branch[2])
 		}
 
-		if branch[0] == ttleaf("slice") {
+		if branch[0] == ttleaf(Slice) {
 			if len(branch) == 1 {
 				return "[]"
 			}
@@ -150,9 +150,9 @@ func Inspect(code ttnode) string {
 			return result[:len(result)-1] + "]"
 		}
 
-		// Dict literals lower to (map k v ...); render them back as {k v}
+		// Dict literals lower to (Map k v ...); render them back as {k v}
 		// so Inspect mirrors the surface syntax the way the slice case does.
-		if branch[0] == ttleaf("map") {
+		if branch[0] == ttleaf(Map) {
 			if len(branch) == 1 {
 				return "{}"
 			}
@@ -178,11 +178,11 @@ func Inspect(code ttnode) string {
 			return result + ")"
 		}
 
-		// (Macrocall name 'a 'b) is the `(name! a b)` macro-call sugar.
-		// Render the head with its `!` so the mangled name never leaks; the
-		// args are already-quoted code, shown as their data form.
+		// (Macrocall name 'a 'b) is the `(~name a b)` macro-call sugar.
+		// Render the head with its `~` prefix so the mangled name never leaks;
+		// the args are already-quoted code, shown as their data form.
 		if branch[0] == ttleaf(Macrocall) && len(branch) >= 2 {
-			result := "(" + Inspect(branch[1]) + "!"
+			result := "(~" + Inspect(branch[1])
 			for _, elem := range branch[2:] {
 				result += " " + Inspect(elem)
 			}
@@ -283,14 +283,14 @@ func synthBranch(b *strings.Builder, branch ttbranch) ttbranch {
 		return out
 	}
 
-	// Macro-call sugar: (Macrocall name 'a 'b) → (name! a b). The head stays
-	// the mangled leaf for dispatch; the text writes the name then `!`.
+	// Macro-call sugar: (Macrocall name 'a 'b) → (~name a b). The head stays
+	// the mangled leaf for dispatch; the text writes `~` then the name.
 	if branch[0] == ttleaf(Macrocall) && len(branch) >= 2 {
 		out := make(ttbranch, len(branch))
 		out[0] = branch[0]
 		b.WriteByte('(')
+		b.WriteByte('~')
 		out[1] = synth(b, branch[1])
-		b.WriteByte('!')
 		for i := 2; i < len(branch); i++ {
 			b.WriteByte(' ')
 			out[i] = synth(b, branch[i])
@@ -327,13 +327,13 @@ func synthBranch(b *strings.Builder, branch ttbranch) ttbranch {
 	return out
 }
 
-// bracketLiteral maps the synthetic heads "slice"/"map" to their surface
-// brackets, mirroring Inspect.
+// bracketLiteral maps the mangled array / dict heads (core.Slice / core.Map)
+// to their surface brackets, mirroring Inspect.
 func bracketLiteral(head ttnode) (open, close string, ok bool) {
 	switch head {
-	case ttleaf("slice"):
+	case ttleaf(Slice):
 		return "[", "]", true
-	case ttleaf("map"):
+	case ttleaf(Map):
 		return "{", "}", true
 	}
 	return "", "", false

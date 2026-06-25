@@ -18,10 +18,10 @@ func TestListPredicate(t *testing.T) {
 		{"(list? [1 2 3])", true},
 		{"(list? [])", true},
 		{"(list? 5)", false},
-		{"(list? \"ab\")", false},
+		{"(list? 'ab')", false},
 		{"(list? True)", false},
 		{"(list? Nil)", false},
-		{"(list? {\"a\" 1})", false},
+		{"(list? {'a' 1})", false},
 	}
 	for _, c := range cases {
 		v := evalProgram(t, c.src)

@@ -19,7 +19,7 @@ func TestTopLevelPropertyInLibrary(t *testing.T) {
 `
 	root := writeTree(t, map[string]string{
 		"script/std/mylib/lib.phl": lib,
-		"script/app.pho": "(import (\"std/mylib\" m))\n" +
+		"script/app.pho": "(import ('std/mylib' m))\n" +
 			"(var a m.Twice)\n" + // free-standing property export resolves
 			"(var b m.Box.{ V 6 })\n" +
 			"(var c b.Sq)\n" + // attached property member resolves on instance

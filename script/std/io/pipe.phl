@@ -1,4 +1,4 @@
-(goimport ("stdDependencies" dep))
+(goimport ('stdDependencies' dep))
 
 (fun Pipe () do
     (const id (dep.IoNewPipe))

@@ -33,26 +33,26 @@ var hardeningCorpus = []string{
 	`(foreach x in [1 2 3] (io.PrintLine x))`,
 	`(while (< i 10) then (identity do (step)))`,
 	`(identity do (var a 1) (+ a 2))`,
-	`(import "std/io")`,
-	`(goimport ("mathx" m))`,
+	`(import 'std/io')`,
+	`(goimport ('mathx' m))`,
 	`(io.PrintLine self.x.y)`,
 	`(myMacro! a b c)`,
 	`(return (+ 1 2))`,
-	`"hi %name and %(len items) at %obj.field"`,
+	`'hi %name and %(len items) at %obj.field'`,
 	`(+ (mod 10 3) (- 4 (* 2 1)))`,
 	// Multi-form: an incomplete early form must not poison later ones
 	// (the exact shape of the bug this pass follows up on).
 	"(if)\n(fun g (n) (+ n 1))",
-	"(fun 'a '() '(do\n(if (< x 1)\n",
+	"(fun a () (do\n(if (< x 1)\n",
 	// Bare special forms — every head reached with a 1-child branch,
 	// the shape that broke `if`. The shape/decl/nav/completion handlers
 	// must all tolerate the missing operands.
 	`(fun)`, `(method)`, `(struct)`, `(var)`, `(const)`, `(=)`,
 	`(if)`, `(foreach)`, `(while)`, `(identity do)`, `(return)`, `(import)`, `(goimport)`,
-	`(block)`, `(method M)`, `(fun 'x)`, `(= a)`,
+	`(block)`, `(method M)`, `(fun x)`, `(= a)`,
 	// Partial accessors and literals.
 	`obj.`, `a.b.c.d`, `x.[1 : 3]`, `x.[1 :]`, `s.[: 2]`, `{`, `[`, `(`,
-	`{"k"`, `[1 2`, `(io.`, `(a.b.c d)`,
+	`{'k'`, `[1 2`, `(io.`, `(a.b.c d)`,
 	// Deep nesting truncated mid-form.
 	`(do (do (do (if (< n 1)`,
 }

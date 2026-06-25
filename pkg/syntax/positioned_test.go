@@ -24,7 +24,7 @@ func hasMessageContaining(errs []ParseError, sub string) bool {
 
 // #1 — unterminated string is reported, not silently consumed.
 func TestUnterminatedString(t *testing.T) {
-	errs := parseAll(`(print "hello`)
+	errs := parseAll(`(print 'hello`)
 	if !hasMessageContaining(errs, "unterminated string") {
 		t.Fatalf("expected unterminated-string error, got %#v", errs)
 	}
@@ -45,7 +45,7 @@ func TestStrayBacktick(t *testing.T) {
 // #4 — a sigil immediately followed by a closer is recovered cleanly: we
 // emit a missing-expression error and don't swallow the closer.
 func TestSigilHitsCloser(t *testing.T) {
-	errs := parseAll("(' )")
+	errs := parseAll("(& )")
 	if !hasMessageContaining(errs, "missing expression after") {
 		t.Fatalf("expected missing-expression error, got %#v", errs)
 	}
@@ -64,9 +64,9 @@ func TestStrayDot(t *testing.T) {
 	}
 }
 
-// (name! a b) parses to a PMacroCall, not a PBranch with a "!" child.
+// (~name a b) parses to a PMacroCall, not a PBranch with a "~" child.
 func TestMacroCallDetection(t *testing.T) {
-	tokens, _ := LexPos("(my! a b)")
+	tokens, _ := LexPos("(~my a b)")
 	tree, errs := ParsePos(tokens)
 	if len(errs) != 0 {
 		t.Fatalf("expected no errors, got %#v", errs)
@@ -92,7 +92,7 @@ func TestMacroCallDetection(t *testing.T) {
 	}
 }
 
-// `(plain a b)` — no `!` — stays a PBranch.
+// `(plain a b)` — no `~` prefix — stays a PBranch.
 func TestNonMacroStaysBranch(t *testing.T) {
 	tokens, _ := LexPos("(plain a b)")
 	tree, _ := ParsePos(tokens)
@@ -101,35 +101,34 @@ func TestNonMacroStaysBranch(t *testing.T) {
 	}
 }
 
-// Macro detection is paren-only — `[a! b]` stays a PBranch (array
+// Macro detection is paren-only — `[~a b]` stays a PBranch (array
 // literal, not a macro call).
 func TestMacroCallOnlyForParens(t *testing.T) {
-	tokens, _ := LexPos("[a! b]")
+	tokens, _ := LexPos("[~a b]")
 	tree, _ := ParsePos(tokens)
 	if _, ok := tree[0].(*ast.PBranch); !ok {
 		t.Fatalf("expected *ast.PBranch for [...] form, got %T", tree[0])
 	}
 }
 
-// Sanity: well-formed source produces no errors.
 // Backslash escapes inside a string must not terminate the literal:
-// `"a\"b"` is one string, not `"a\"` followed by garbage. The lexer's
+// `'a\'b'` is one string, not `'a\'` followed by garbage. The lexer's
 // job is just "don't end here"; the actual translation happens in
 // core/eval.go's leaf evaluator.
 func TestBackslashEscapeDoesNotTerminate(t *testing.T) {
-	src := `(print "a\"b")`
+	src := `(print 'a\'b')`
 	errs := parseAll(src)
 	if len(errs) != 0 {
-		t.Fatalf("expected no errors with \\\" escape, got %#v", errs)
+		t.Fatalf("expected no errors with \\' escape, got %#v", errs)
 	}
 	tokens, _ := LexPos(src)
 	// Find the string token and confirm its source includes the whole
-	// "a\"b" body.
+	// 'a\'b' body (the escaped quote didn't end it early).
 	var found bool
 	for _, tk := range tokens {
-		if strings.HasPrefix(tk.Value, `"`) && strings.HasSuffix(tk.Value, `"`) {
-			if tk.Value != `"a\"b"` {
-				t.Errorf("expected token \"a\\\"b\", got %q", tk.Value)
+		if strings.HasPrefix(tk.Value, `'`) && strings.HasSuffix(tk.Value, `'`) {
+			if tk.Value != `'a\'b'` {
+				t.Errorf("expected token 'a\\'b', got %q", tk.Value)
 			}
 			found = true
 		}
@@ -140,12 +139,12 @@ func TestBackslashEscapeDoesNotTerminate(t *testing.T) {
 }
 
 func TestNoErrorsOnValidInput(t *testing.T) {
-	src := `(var 'x 5)
+	src := `(var x 5)
 (print x.foo)
-(set 'y [1 2 3])
+(set y [1 2 3])
 (map &(+ x 1) y)
-(var 's "hello")
-(var 'c ` + "`X`" + `)
+(var s 'hello')
+(var c ` + "`X`" + `)
 `
 	errs := parseAll(src)
 	if len(errs) != 0 {
@@ -170,11 +169,11 @@ func parseTree(t *testing.T, src string) ([]ast.PNode, []ParseError) {
 // form: the unclosed form is cut off at the dedented line, and the
 // error points at the inferred close site, not the opener.
 func TestRecoveryMissingCloserMidFile(t *testing.T) {
-	src := `(fun 'f '(x)
-  '(do
+	src := `(fun f (x)
+  (do
     (print x)
 
-(var 'y 5)
+(var y 5)
 `
 	tree, errs := parseTree(t, src)
 	if len(tree) != 2 {
@@ -195,10 +194,10 @@ func TestRecoveryMissingCloserMidFile(t *testing.T) {
 			t.Errorf("expected OpenSpan to point at the opener, got zero span (%s)", e.Message)
 		}
 	}
-	// The trailing (var 'y 5) must have survived as its own form.
+	// The trailing (var y 5) must have survived as its own form.
 	br, ok := tree[1].(*ast.PBranch)
 	if !ok || len(br.Children) == 0 {
-		t.Fatalf("expected (var 'y 5) as second top-level form, got %#v", tree[1])
+		t.Fatalf("expected (var y 5) as second top-level form, got %#v", tree[1])
 	}
 	if head, ok := br.Children[0].(*ast.PLeaf); !ok || head.Value != "var" {
 		t.Fatalf("expected second form to be the var decl, got %#v", tree[1])
@@ -209,7 +208,7 @@ func TestRecoveryMissingCloserMidFile(t *testing.T) {
 // the recovery rule must not fire when the closer exists downstream.
 func TestRecoveryDoesNotFireOnBalancedCode(t *testing.T) {
 	cases := []string{
-		"(print\n\"hello\")",    // continuation at col 1
+		"(print\n'hello')",      // continuation at col 1
 		"(foo (bar\nbaz))",      // dedented child of inner form
 		"  (a x\n)",             // indented top-level, dedented closer
 		"(a\n  (b x\n  y\n)\n)", // dedented closers, child at opener indent
@@ -267,7 +266,7 @@ func TestRecoveryNestedUnclosed(t *testing.T) {
 // A multi-line string inside a form must not trigger recovery: tokens
 // after it inherit indentation state rather than looking line-leading.
 func TestRecoveryMultilineString(t *testing.T) {
-	src := "(print \"line one\nline two\" x)"
+	src := "(print 'line one\nline two' x)"
 	tree, errs := parseTree(t, src)
 	if len(errs) != 0 {
 		t.Fatalf("expected no errors, got %#v", errs)
@@ -319,10 +318,10 @@ func TestParseDepthCapNoOverflow(t *testing.T) {
 	}
 }
 
-// Sigil nesting (`'''…`) routes through parsePrimary too, so it's capped
+// Sigil nesting (`&&…`) routes through parsePrimary too, so it's capped
 // the same way.
 func TestParseDepthCapSigils(t *testing.T) {
-	src := strings.Repeat("'", 200000) + "x"
+	src := strings.Repeat("&", 200000) + "x"
 	tokens, _ := LexPos(src)
 	if _, errs := ParsePos(tokens); !hasMessageContaining(errs, "nested too deeply") {
 		t.Errorf("expected depth-cap error for deep sigil nesting, got %#v", errs)

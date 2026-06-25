@@ -91,22 +91,3 @@ func boolLit(b bool) string {
 	}
 	return "False"
 }
-
-// Context-aware do survives the quote/Derepr round-trip: a quoted if-with-do
-// resumed as code splits its arms at the elif/else boundary too (via
-// splitDoForm in listifyP, with splitDoNode as the macro-data safety net).
-func TestContextAwareDoThroughResume(t *testing.T) {
-	src := `(var x 0)
-(resume '(if True then do
-    (= x 1)
-    (= x (+ x 10))
- elif False then do
-    (= x 100)
- else do
-    (= x 1000)))
-x`
-	v := evalProgram(t, src)
-	if v.Kind != core.KindNum || v.Val.(float64) != 11 {
-		t.Fatalf("resume of context-aware if+do: got kind %q val %v, want 11", v.Kind, v.Val)
-	}
-}

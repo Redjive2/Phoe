@@ -21,13 +21,13 @@ func TestReloadRecoversFromBrokenLibrary(t *testing.T) {
 	dir := t.TempDir()
 	lib := filepath.Join(dir, "annot.phl")
 
-	// A minimal real annotation macro (mirrors std/annot's `type`: quoted
-	// params and a quoted body, attaching via the phoAnnot sink). The broken
-	// variant has an unterminated string — a lex error, so the package fails
-	// to parse.
-	const broken = "(goimport (\"phoAnnot\" meta))\n(fun 'type '(t) \"oops)\n"
-	const good = "(goimport (\"phoAnnot\" meta))\n" +
-		"(fun type (t)\n    (meta.Attach \"type\" t))\n"
+	// A minimal real annotation macro (mirrors std/annot's `type`: bare
+	// params and body, attaching via the phoAnnot sink). The broken variant
+	// has an unterminated string — a lex error, so the package fails to
+	// parse.
+	const broken = "(goimport (\"phoAnnot\" meta))\n(fun type (t) \"oops)\n"
+	const good = "(goimport ('phoAnnot' meta))\n" +
+		"(fun type (t)\n    (meta.Attach 'type' t))\n"
 
 	// 1. A library that doesn't parse: InitDefault fails and leaves Default's
 	//    macros untouched (annotations would degrade to "macro not defined").
@@ -51,7 +51,7 @@ func TestReloadRecoversFromBrokenLibrary(t *testing.T) {
 	// 3. ReloadDefault invalidates the cache and loads the fixed library, so
 	//    the macro now resolves and attaches its metadata cleanly.
 	ReloadDefault(dir)
-	res := Default().Evaluate(`(type! Foo)`, parseForm(t, `(type! Foo)`))
+	res := Default().Evaluate(`(~type Foo)`, parseForm(t, `(~type Foo)`))
 	if len(res.Diags) != 0 {
 		t.Fatalf("after reload the macro should resolve cleanly, got diags: %v", diagMsgs(res))
 	}

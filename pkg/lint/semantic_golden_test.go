@@ -9,7 +9,7 @@ import "testing"
 // dispatch between the diagnostic walker and the semantic-token walker:
 // the classification and spans must not shift.
 func TestSemanticTokensGolden(t *testing.T) {
-	src := "(import \"std/io\")\n" +
+	src := "(import 'std/io')\n" +
 		"(struct Point X y)\n" +
 		"(method Point.Shift (self n) (+ self.X n))\n" +
 		"(fun main (a) (identity do\n" +
@@ -77,8 +77,8 @@ func TestSemanticTokensGolden(t *testing.T) {
 // colored via the editor's base highlighting).
 func TestSemanticTokensInterpolation(t *testing.T) {
 	// One line, so columns are easy to verify. `who` is a parameter;
-	// `len` is a builtin; `p` a parameter, `X` a property via dot.
-	src := "(fun f (who p) (io.Print \"hi %who n=%(len who) d=%p.X\"))\n"
+	// `range` is a builtin; `p` a parameter, `X` a property via dot.
+	src := "(fun f (who p) (io.Print 'hi %who n=%(range who) d=%p.X'))\n"
 
 	got := SemanticTokens("interp.phl", []byte(src))
 
@@ -100,7 +100,7 @@ func TestSemanticTokensInterpolation(t *testing.T) {
 		typ  SemanticTokenType
 	}{
 		{"who", SemTokParameter},
-		{"len", SemTokFunction},
+		{"range", SemTokFunction},
 		{"who", SemTokParameter},
 		{"p", SemTokParameter},
 		{"X", SemTokProperty},

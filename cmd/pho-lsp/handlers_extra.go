@@ -107,11 +107,20 @@ func (s *server) handleCompletion(msg *rawMessage) {
 
 	items := make([]completionItem, 0, len(defs))
 	for _, d := range defs {
-		items = append(items, completionItem{
+		item := completionItem{
 			Label:  d.Name,
 			Kind:   defKindToCompletionKind(d.Kind),
 			Detail: d.Kind.String(),
-		})
+		}
+		// Dict-key completions arrive as the bracket-index form `["key"]` (the
+		// way a dict is actually indexed). That label can't be prefix-filtered
+		// against the bare key the user types, so expose the key as filterText
+		// and insert the bracket form verbatim.
+		if strings.HasPrefix(d.Name, `["`) && strings.HasSuffix(d.Name, `"]`) {
+			item.FilterText = strings.TrimSuffix(strings.TrimPrefix(d.Name, `["`), `"]`)
+			item.InsertText = d.Name
+		}
+		items = append(items, item)
 	}
 	_ = s.t.reply(msg.ID, completionList{Items: items})
 }

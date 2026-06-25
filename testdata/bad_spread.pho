@@ -2,5 +2,5 @@
 -- body is itself a type error (lint can't catch it statically, so the
 -- program runs); if the call were NOT aborted, that second diagnostic
 -- would render too. Its absence proves the spread aborted the call.
-(fun f ((spread rest)) (- "z" 1))
+(fun f ((spread rest)) (- 'z' 1))
 (f (spread 5))

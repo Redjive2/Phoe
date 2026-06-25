@@ -15,9 +15,16 @@ var libraryForms = map[string]bool{
 	"struct":   true,
 	"const":    true,
 	"var":      true,
+	// A named type alias `(type Name T)` is a declaration (a constant KindType
+	// binding), so it is permitted at the top level of a library.
+	"type": true,
 	// A top-level `property` declares a faux variable (free-standing) or a
 	// computed struct member (attached) — both declarations, not side effects.
 	"property": true,
+	// `static method`/`static property` declare type-level members.
+	"static": true,
+	// `(trait Name …)` declares a named trait type.
+	"trait": true,
 }
 
 // checkPhlSideEffects flags any top-level form in a .phl file that

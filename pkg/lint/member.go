@@ -38,6 +38,55 @@ import (
 // shape.
 func (w *walker) checkMemberAccess(scope *Scope, dot *ast.PDot) {
 	sh := w.inferShape(scope, dot.LHS)
+
+	// Object-model member access on a primitive: a bare-identifier RHS.
+	if rhs, ok := dot.RHS.(*ast.PLeaf); ok && looksLikeIdentifier(rhs.Value) {
+		if tn := shapeTypeName(sh.Kind); tn != "" {
+			// A USER-declared extension (collected like a struct method under the
+			// type name) resolves to its source site, so hover/go-to-definition
+			// work like any struct method.
+			localExt := false
+			if si, ok := scope.LookupStruct(tn); ok {
+				if _, isMethod := si.Methods[rhs.Value]; isMethod {
+					localExt = true
+					if w.onMemberResolve != nil {
+						w.onMemberResolve(rhs.Span, si, rhs.Value, DefMethod)
+					}
+				}
+			}
+			switch sources := w.primitiveMemberSources(scope, tn, rhs.Value); {
+			case sources == 0:
+				// Neither a built-in, a universal member, nor an extension in
+				// scope — the object-model analogue of "unknown field/method".
+				w.emitMember(rhs.Span, "unknown-member",
+					fmt.Sprintf("'%s' is not a member of %s", rhs.Value, tn))
+			case sources > 1:
+				// Resolves to more than one definition in scope (e.g. two
+				// imports, or a local/imported redefinition of a built-in) —
+				// ambiguous, mirroring the runtime resolver's clash error.
+				w.emitMember(rhs.Span, "member-clash",
+					fmt.Sprintf("'%s' on %s is defined by more than one module in scope", rhs.Value, tn))
+			case !localExt && w.onBuiltinMember != nil:
+				// A single built-in / universal member: it has no workspace span,
+				// so give it a synthetic hover. (Imported extensions are also
+				// single sources but get no built-in hover — left to completion.)
+				if md, ok := builtinMemberHover(tn, rhs.Value); ok {
+					w.onBuiltinMember(rhs.Span, md)
+				}
+			}
+		} else {
+			// Unknown receiver shape (an untyped parameter, a slice expression,
+			// etc.): the member can't be type-checked here (no false positives on
+			// dynamic shapes — see the file header), but the access may still
+			// resolve at runtime through an imported extension. Mark any import
+			// that exports this member used, so a module imported SOLELY for its
+			// extension methods on an untyped receiver isn't wrongly flagged
+			// unused-import — mirroring primitiveMemberSources, which marks the
+			// import used when the receiver type IS statically known.
+			w.markExtensionImportUse(scope, rhs.Value)
+		}
+	}
+
 	switch sh.Kind {
 	case ShapeInstance:
 		w.checkInstanceMember(scope, dot, sh, false)
@@ -46,17 +95,21 @@ func (w *walker) checkMemberAccess(scope *Scope, dot *ast.PDot) {
 	case ShapeArray, ShapeString:
 		w.checkIndexedAccess(scope, dot, sh)
 	case ShapeNum:
-		// Only the fractional-decimal hack (numeric RHS) is valid.
+		// A bracket RHS would index the number — invalid. A bare-identifier RHS
+		// (1.Double) is a method/property access resolved at runtime via the
+		// object model, and a numeric RHS (1.5) is the fractional-decimal hack;
+		// neither is flagged.
 		if _, ok := bracketRHS(dot.RHS); ok {
 			w.emitMember(dot.RHS.GetSpan(), "invalid-member-access",
 				"cannot index a number")
-		} else if rhs, ok := dot.RHS.(*ast.PLeaf); ok && looksLikeIdentifier(rhs.Value) {
-			w.emitMember(rhs.Span, "invalid-member-access",
-				fmt.Sprintf("cannot access '%s' on a number — only fractional digits can follow '.'", rhs.Value))
 		}
 	case ShapeBool, ShapeNil, ShapeChar, ShapeFun:
-		w.emitMember(dot.RHS.GetSpan(), "invalid-member-access",
-			fmt.Sprintf("cannot dot-access a %s value", sh.Kind))
+		// Indexing these is invalid; a bare-identifier RHS is a method/property
+		// access (e.g. x.Is?), resolved at runtime.
+		if _, ok := bracketRHS(dot.RHS); ok {
+			w.emitMember(dot.RHS.GetSpan(), "invalid-member-access",
+				fmt.Sprintf("cannot index a %s value", sh.Kind))
+		}
 	}
 }
 
@@ -117,9 +170,9 @@ func (w *walker) checkInstanceMember(scope *Scope, dot *ast.PDot, sh Shape, writ
 	// Privacy mirrors the runtime's check order: lowercase members are only
 	// reachable while one of the instance's own methods runs, which
 	// statically means "the receiver traces back to self".
-	if unicode.IsLower(rune(name[0])) && !sh.Privileged {
+	if (unicode.IsLower(rune(name[0])) || name[0] == '#') && !sh.Privileged {
 		w.emitMember(rhs.Span, "private-member-access",
-			fmt.Sprintf("'%s' is private to struct '%s' — lowercase members are only accessible through 'self' inside its methods", name, si.Name))
+			fmt.Sprintf("'%s' is private to struct '%s' — lowercase or '#'-prefixed members are only accessible through 'self' inside its methods", name, si.Name))
 		return
 	}
 
@@ -137,6 +190,12 @@ func (w *walker) checkInstanceMember(scope *Scope, dot *ast.PDot, sh Shape, writ
 	}
 
 	if !isField && !isMethod {
+		// Universal methods (x.Is?, x.In?, …) resolve on EVERY value, including a
+		// struct instance — mirroring the runtime's universal Unknown members
+		// (dot.go falls back to them when an instance lacks the member).
+		if isUniversalMember(name) {
+			return
+		}
 		w.emitMember(rhs.Span, "unknown-member",
 			fmt.Sprintf("'%s' is not a field or method of struct '%s'", name, si.Name))
 	}
@@ -151,8 +210,14 @@ func (w *walker) checkInstanceMember(scope *Scope, dot *ast.PDot, sh Shape, writ
 func (w *walker) checkDictKey(scope *Scope, dot *ast.PDot, sh Shape, write bool) {
 	br, ok := bracketRHS(dot.RHS)
 	if !ok {
+		// A bare IDENTIFIER RHS is a method/property access (object model),
+		// resolved at runtime — not a key lookup, not flagged. A non-identifier
+		// bare RHS (d."x") is neither: steer it to bracket form.
+		if rhs, ok := dot.RHS.(*ast.PLeaf); ok && looksLikeIdentifier(rhs.Value) {
+			return
+		}
 		w.emitMember(dot.RHS.GetSpan(), "invalid-member-access",
-			fmt.Sprintf("dict access uses bracket indexing: write 'coll.[%s]', not 'coll.%s'", memberText(dot.RHS), memberText(dot.RHS)))
+			fmt.Sprintf("dict key lookup uses brackets: write 'coll.[%s]', not 'coll.%s'", memberText(dot.RHS), memberText(dot.RHS)))
 		return
 	}
 
@@ -187,10 +252,16 @@ func (w *walker) checkDictKey(scope *Scope, dot *ast.PDot, sh Shape, write bool)
 // contents are scope-checked by the walker's normal traversal.
 func (w *walker) checkIndexedAccess(scope *Scope, dot *ast.PDot, sh Shape) {
 	if _, ok := bracketRHS(dot.RHS); ok {
+		return // a bracket RHS is a valid index/slice (contents checked elsewhere)
+	}
+	// A bare IDENTIFIER RHS is a method/property access (object model),
+	// resolved at runtime — not flagged. A non-identifier bare RHS (e.g.
+	// arr.0) is neither a member nor a valid index: steer it to bracket form.
+	if rhs, ok := dot.RHS.(*ast.PLeaf); ok && looksLikeIdentifier(rhs.Value) {
 		return
 	}
 	w.emitMember(dot.RHS.GetSpan(), "invalid-member-access",
-		fmt.Sprintf("%s access uses bracket indexing: write 'coll.[%s]', not 'coll.%s'", sh.Kind, memberText(dot.RHS), memberText(dot.RHS)))
+		fmt.Sprintf("%s indexing uses brackets: write 'coll.[%s]', not 'coll.%s'", sh.Kind, memberText(dot.RHS), memberText(dot.RHS)))
 }
 
 // bracketRHS returns the bracket branch of a dynamic-index dot
@@ -225,11 +296,8 @@ func staticKeyInBracket(br *ast.PBranch) (string, span.Span, bool) {
 }
 
 // staticKey extracts the key text of a statically known dict key:
-// a string literal ("name") or a quoted identifier ('name).
+// a string literal ("name").
 func staticKey(n ast.PNode) (string, span.Span, bool) {
-	if name, span, ok := quotedIdent(n); ok {
-		return name, span, true
-	}
 	if str, ok := stringLiteral(n); ok {
 		return str, n.GetSpan(), true
 	}

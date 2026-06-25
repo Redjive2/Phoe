@@ -39,7 +39,7 @@ func TestDoBodyVarsResolve(t *testing.T) {
 // writing into a string index must be a static error.
 func TestStringIndexWriteRejected(t *testing.T) {
 	src := "(fun F () (identity do\n" +
-		"    (var s \"hello\")\n" +
+		"    (var s 'hello')\n" +
 		"    (= s.0 9)\n" +
 		"))\n"
 	diags := AnalyzeFile("t.phl", []byte(src))

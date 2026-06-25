@@ -23,7 +23,7 @@ import (
 
 // Size returns the element count of a list or dict, or the rune count of a
 // string. Backs `.Size`.
-func (state *stdDependencies) Size(v core.Value) float64 {
+func (state *stdDependencies) PrimSize(v core.Value) float64 {
 	switch v.Kind {
 	case core.KindArray:
 		return float64(len(*v.Val.(*[]core.Value)))
@@ -47,12 +47,19 @@ func (state *stdDependencies) Size(v core.Value) float64 {
 // which also makes the reflect.Slice case wrap each []core.Value element
 // correctly. That belongs to the Stage A/B core work (pkg/core/tval.go); until
 // it lands, `.Size` is fully live but `.Keys` is pending that single change.
-func (state *stdDependencies) Keys(v core.Value) []core.Value {
+func (state *stdDependencies) PrimKeys(v core.Value) []core.Value {
 	switch v.Kind {
 	case core.KindArray:
 		arr := *v.Val.(*[]core.Value)
 		keys := make([]core.Value, len(arr))
 		for i := range arr {
+			keys[i] = core.TvNum(float64(i))
+		}
+		return keys
+	case core.KindStr:
+		str := v.Val.(string)
+		keys := make([]core.Value, len(str))
+		for i := range str {
 			keys[i] = core.TvNum(float64(i))
 		}
 		return keys

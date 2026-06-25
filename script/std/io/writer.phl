@@ -1,4 +1,4 @@
-(goimport ("stdDependencies" dep))
+(goimport ('stdDependencies' dep))
 
 -- Just a thin box for an id; all functionality routed through stdDependencies 
 -- Passes strings from writers to readers sharing an id

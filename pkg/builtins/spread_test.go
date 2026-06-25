@@ -16,8 +16,8 @@ func TestSpreadIntoCalls(t *testing.T) {
 	}{
 		{"(const ns [1 2 3])\n(+ (spread ns))", 6},              // spread is the only arg
 		{"(+ 1 (spread [2 3]) 4)", 10},                          // spread between fixed args
-		{"(len [0 (spread [1 2 3]) 4])", 5},                     // array literal (slice)
-		{"(len (append [0] (spread [1 2 3])))", 4},              // append
+		{"[0 (spread [1 2 3]) 4].Size", 5},                      // array literal (slice)
+		{"(append [0] (spread [1 2 3])).Size", 4},               // append
 		{"(fun f (a b c) (+ a b c))\n(f (spread [4 5 6]))", 15}, // user fun
 	} {
 		v := evalProgram(t, tc.src)

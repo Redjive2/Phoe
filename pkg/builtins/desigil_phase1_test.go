@@ -11,7 +11,7 @@ import (
 // '/& sigils. These programs eval directly (evalProgram does not lint), so
 // they exercise the runtime in isolation from the linter (Phase 2). A
 // multi-statement body uses `(identity do …)`, the post-cutover sequencing
-// form, and value-position quotes (dict keys) are confirmed to survive.
+// form, and a string-keyed dict reads back through bracket access.
 func TestDesigiledBuiltins(t *testing.T) {
 	cases := []struct {
 		name string
@@ -28,7 +28,7 @@ func TestDesigiledBuiltins(t *testing.T) {
 		{"foreach iterator", "(var s 0)\n(foreach n in [1 2 3 4] (= s (+ s n)))\ns", 10},
 		{"while loop", "(var i 0)\n(while (< i 3) then (= i (+ i 1)))\ni", 3},
 		{"multi-stmt body", "(fun f (n) (identity do (var t (* n 2)) (+ t 1)))\n(f 5)", 11},
-		{"value-position dict key kept", "(var m { 'k 9 })\nm.[\"k\"]", 9},
+		{"string dict key read by bracket", "(var m { 'k' 9 })\nm.['k']", 9},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -18,7 +18,7 @@ func num(t *testing.T, src string, want float64) {
 // required keyword. while/until are the conditional loops with `then`.
 func TestLoopForms(t *testing.T) {
 	num(t, "(var s 0)\n(foreach n in [1 2 3 4] (= s (+ s n)))\ns", 10)        // array
-	num(t, "(var c 0)\n(foreach ch in \"abcde\" (= c (+ c 1)))\nc", 5)        // string (runes)
+	num(t, "(var c 0)\n(foreach ch in 'abcde' (= c (+ c 1)))\nc", 5)        // string (runes)
 	num(t, "(var k 0)\n(foreach key in { 1 10 2 20 } (= k (+ k key)))\nk", 3) // dict keys (1+2)
 
 	num(t, "(var i 0)\n(while (< i 5) then (= i (+ i 1)))\ni", 5)  // while: loop while true

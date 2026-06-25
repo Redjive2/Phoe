@@ -60,7 +60,7 @@ func TestReferencesAcrossSiblings(t *testing.T) {
 func TestReferencesAcrossImporters(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"lib/lib.phl": "(fun Visible () 1)\n",
-		"app.pho":     "(import \"lib\")\n(var x (lib.Visible))\n",
+		"app.pho":     "(import 'lib')\n(var x (lib.Visible))\n",
 	})
 	lib := filepath.Join(root, "lib/lib.phl")
 	app := filepath.Join(root, "app.pho")
@@ -84,7 +84,7 @@ func TestReferencesAcrossImporters(t *testing.T) {
 func TestReferencesMemberAcrossImporters(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"lib/lib.phl": "(struct Thing Part)\n(method Thing.Grow (self) self.Part)\n",
-		"app.pho":     "(import \"lib\")\n(var t lib.Thing.{ Part 1 })\n(var a (t.Grow))\n(var b t.Part)\n",
+		"app.pho":     "(import 'lib')\n(var t lib.Thing.{ Part 1 })\n(var a (t.Grow))\n(var b t.Part)\n",
 	})
 	lib := filepath.Join(root, "lib/lib.phl")
 	app := filepath.Join(root, "app.pho")
@@ -111,7 +111,7 @@ func TestReferencesMemberAcrossImporters(t *testing.T) {
 func TestReferencesStdStyleLayout(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/io/io.phl":     "(fun Visible () 1)\n",
-		"script/std/pctl/pctl.phl": "(import \"std/io\")\n(fun Use () (io.Visible))\n",
+		"script/std/pctl/pctl.phl": "(import 'std/io')\n(fun Use () (io.Visible))\n",
 	})
 	io := filepath.Join(root, "script/std/io/io.phl")
 	pctl := filepath.Join(root, "script/std/pctl/pctl.phl")
@@ -127,7 +127,7 @@ func TestReferencesStdStyleLayout(t *testing.T) {
 // cross-file reads happen at all for them.
 func TestReferencesLocalityNoScan(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"lib/a.phl": "(import \"lib\")\n(fun F (count) (+ count 1))\n",
+		"lib/a.phl": "(import 'lib')\n(fun F (count) (+ count 1))\n",
 		"lib/b.phl": "(fun G (count) (+ count 2))\n",
 	})
 	a := filepath.Join(root, "lib/a.phl")
@@ -164,12 +164,12 @@ func TestReferencesLocalityNoScan(t *testing.T) {
 func TestReferencesSeeOverlay(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"lib/lib.phl": "(fun Visible () 1)\n",
-		"app.pho":     "(import \"lib\")\n",
+		"app.pho":     "(import 'lib')\n",
 	})
 	lib := filepath.Join(root, "lib/lib.phl")
 	app := filepath.Join(root, "app.pho")
 
-	edited := "(import \"lib\")\n(var x (lib.Visible))\n(var y (lib.Visible))\n"
+	edited := "(import 'lib')\n(var x (lib.Visible))\n(var y (lib.Visible))\n"
 	SetSourceReader(func(path string) ([]byte, error) {
 		if path == app {
 			return []byte(edited), nil

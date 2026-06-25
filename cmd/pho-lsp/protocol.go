@@ -223,7 +223,9 @@ type completionList struct {
 }
 
 type completionItem struct {
-	Label  string `json:"label"`
-	Kind   int    `json:"kind,omitempty"`
-	Detail string `json:"detail,omitempty"`
+	Label      string `json:"label"`
+	Kind       int    `json:"kind,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+	FilterText string `json:"filterText,omitempty"` // text the client prefix-matches against
+	InsertText string `json:"insertText,omitempty"` // text inserted on accept (defaults to Label)
 }

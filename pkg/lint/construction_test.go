@@ -6,7 +6,7 @@ import "testing"
 // `retired-construction` diagnostic that points at the `T.{ … }` replacement.
 func TestRetiredConstructionFlagged(t *testing.T) {
 	diags := analyze(t, `(struct Point X y)
-(var p (Point { 'X 1 'y 2 }))
+(var p (Point { 'X' 1 'y' 2 }))
 `)
 	if !hasDiag(diags, "retired-construction") {
 		t.Fatalf("expected retired-construction for (Point { … }), got %#v", diags)
@@ -28,7 +28,7 @@ func TestNewConstructionClean(t *testing.T) {
 // the construction sugar lowers to — is not mistaken for the retired form.
 func TestConstructorWithBareArgsNotFlagged(t *testing.T) {
 	diags := analyze(t, `(struct Point X y)
-(var p (Point "X" 1 "y" 2))
+(var p (Point 'X' 1 'y' 2))
 `)
 	if hasDiag(diags, "retired-construction") {
 		t.Fatalf("(Point \"X\" 1 …) must not be flagged, got %#v", diags)

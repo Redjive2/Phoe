@@ -74,7 +74,7 @@ func TestDefinitionAtImportMember(t *testing.T) {
 		t.Fatal(err)
 	}
 	main := filepath.Join(dir, "main.pho")
-	src := "(import \"" + pkgDir + "\")\n(var x (mylib.Visible))\n"
+	src := "(import '" + pkgDir + "')\n(var x (mylib.Visible))\n"
 	if err := os.WriteFile(main, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -59,7 +59,7 @@ func (ctx Context) Declare(targetIdent string, targetValue Tval, isConst bool) b
 		return false
 	}
 
-	if _, found := (*ctx.Env.Globals)[targetIdent]; found {
+	if _, found := (*ctx.Env.Globals)[targetIdent]; found && !ctx.Env.AllowShadow {
 		return false
 	}
 
@@ -75,7 +75,7 @@ func (ctx Context) Declare(targetIdent string, targetValue Tval, isConst bool) b
 // scope binding is still shadowed, never mutated, since only Stack[0] is
 // written.
 func (ctx Context) Rebind(targetIdent string, targetValue Tval, isConst bool) bool {
-	if _, found := (*ctx.Env.Globals)[targetIdent]; found {
+	if _, found := (*ctx.Env.Globals)[targetIdent]; found && !ctx.Env.AllowShadow {
 		return false
 	}
 

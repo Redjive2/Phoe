@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	"pho/pkg/ast"
+	"pho/pkg/core"
 	"pho/pkg/span"
 	"pho/pkg/syntax"
 )
@@ -24,6 +25,20 @@ import (
 //
 // Falls back to the raw string when nothing resolves — that preserves
 // the historical cwd-relative behavior for setups that relied on it.
+// isMacroLibFile reports whether file lives in the annotation macro-library
+// directory (the resolved "std/annot"), where shadowing builtins is permitted
+// (the runtime loads that library with AllowShadow).
+func isMacroLibFile(file string) bool {
+	if file == "" {
+		return false
+	}
+	dir := filepath.Dir(file)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return dir == resolveImportPath(file, "std/annot")
+}
+
 func resolveImportPath(fromFile, importPath string) string {
 	if fromFile == "" || importPath == "" || filepath.IsAbs(importPath) {
 		return importPath
@@ -162,6 +177,17 @@ func PackageStructs(path string) map[string]*structInfo {
 	}
 
 	any := false
+	// Accumulate each struct's typed-field decls; field navigation shapes are
+	// resolved in a second pass below, once every exported struct name is known
+	// (so same-package and forward references resolve).
+	type pendingFields struct {
+		si     *structInfo
+		fields []fieldDecl
+	}
+	var pending []pendingFields
+	// This package's own imports (alias → resolved path), so a struct field
+	// typed as a struct from a FURTHER import (`pkg2.Foo`) can be navigated.
+	pkgImports := map[string]string{}
 	for _, e := range entries {
 		if e.IsDir() || !isLibrary(e.Name()) {
 			continue
@@ -182,6 +208,25 @@ func PackageStructs(path string) map[string]*structInfo {
 				continue
 			}
 			switch d.Head {
+			case "import":
+				// Record the package's own Pho imports (alias → resolved path),
+				// resolved relative to THIS file, mirroring collectImports' two
+				// forms. Used to follow a `pkg2.Foo` field type below.
+				for _, arg := range d.Branch.Children[1:] {
+					if p, ok := stringLiteral(arg); ok {
+						if alias := pathBasename(p); alias != "" {
+							pkgImports[alias] = resolveImportPath(full, p)
+						}
+						continue
+					}
+					if abr, ok := arg.(*ast.PBranch); ok && abr.Open == "(" && len(abr.Children) == 2 {
+						if p, ok := stringLiteral(abr.Children[0]); ok {
+							if alias, _, ok := declIdent(abr.Children[1]); ok {
+								pkgImports[alias] = resolveImportPath(full, p)
+							}
+						}
+					}
+				}
 			case "struct":
 				// Only EXPORTED (capitalized) structs form the package's
 				// member surface.
@@ -192,7 +237,20 @@ func PackageStructs(path string) map[string]*structInfo {
 				si.File = full
 				for _, f := range d.Fields {
 					si.Fields[f.Name] = f.Span
+					// Resolve the field's declared type against builtins (the
+					// imported package's own aliases aren't loaded here), so a
+					// fully-primitively-typed imported struct gets a precise
+					// record and its values check across the import boundary. A
+					// struct-typed or aliased field resolves to Dynamic → that
+					// struct stays coarse, which is sound.
+					if f.Type != nil {
+						if si.FieldTypes == nil {
+							si.FieldTypes = map[string]*core.PhoType{}
+						}
+						si.FieldTypes[f.Name] = resolveTypeNode(f.Type, nil)
+					}
 				}
+				pending = append(pending, pendingFields{si, d.Fields})
 			case "method":
 				// Methods are collected on capitalized owners regardless of
 				// their own case — private methods still exist and produce
@@ -200,9 +258,15 @@ func PackageStructs(path string) map[string]*structInfo {
 				if d.Owner == "" || d.Name == "" || !unicode.IsUpper(rune(d.Owner[0])) {
 					continue
 				}
-				si := at(d.Owner)
-				si.Methods[d.Name] = d.NameSpan
-				si.MethodFiles[d.Name] = full
+				// A union receiver (Collection = String|List|Map) registers on
+				// EACH member — mirroring collectOne and the runtime — so
+				// `"x".Split` resolves across an import when declared as
+				// `Collection.Split`.
+				for _, owner := range memberOwners(d.Owner) {
+					si := at(owner)
+					si.Methods[d.Name] = d.NameSpan
+					si.MethodFiles[d.Name] = full
+				}
 			case "property":
 				// An ATTACHED `(property Recv.Name …)` is a computed member of
 				// its owner struct — register it like a field so an importer's
@@ -211,8 +275,57 @@ func PackageStructs(path string) map[string]*structInfo {
 				if d.Owner == "" || d.Name == "" || !unicode.IsUpper(rune(d.Owner[0])) {
 					continue
 				}
-				si := at(d.Owner)
-				si.Fields[d.Name] = d.NameSpan
+				// A property on a primitive/union TYPE (e.g. Collection) is a
+				// named member read via primitiveMemberSources (which reads
+				// .Methods); a property on a STRUCT is a computed field read via
+				// the instance-member check (.Fields). Mirror collectOne.
+				_, isType := core.TypeByName(d.Owner)
+				for _, owner := range memberOwners(d.Owner) {
+					si := at(owner)
+					if isType {
+						si.Methods[d.Name] = d.NameSpan
+					} else {
+						si.Fields[d.Name] = d.NameSpan
+					}
+				}
+			}
+		}
+	}
+	// Second pass: record each struct-typed field's navigation shape now that
+	// every exported struct name is known. Field types are bare same-package
+	// names (`Next Node`) or `(Or … Nil)` nullables; transitive `pkg2.Struct`
+	// references across a further import aren't followed yet.
+	resolve := func(n ast.PNode) (Shape, bool) {
+		switch t := n.(type) {
+		case *ast.PLeaf:
+			if _, exists := structs[t.Value]; exists {
+				return Shape{Kind: ShapeInstance, Owner: t.Value, OwnerPkg: path}, true
+			}
+		case *ast.PDot:
+			// A field typed as a struct from a FURTHER import (`pkg2.Foo`):
+			// resolve pkg2 through this package's own imports. The struct's
+			// existence in pkg2 is verified at navigation time (resolveStruct
+			// returns false if it isn't one), so this stays non-recursive.
+			alias, aok := t.LHS.(*ast.PLeaf)
+			member, mok := t.RHS.(*ast.PLeaf)
+			if aok && mok {
+				if p2 := pkgImports[alias.Value]; p2 != "" {
+					return Shape{Kind: ShapeInstance, Owner: member.Value, OwnerPkg: p2}, true
+				}
+			}
+		}
+		return Shape{}, false
+	}
+	for _, p := range pending {
+		for _, f := range p.fields {
+			if f.Type == nil {
+				continue
+			}
+			if sh, ok := fieldStructShape(f.Type, resolve); ok {
+				if p.si.FieldStructOwner == nil {
+					p.si.FieldStructOwner = map[string]Shape{}
+				}
+				p.si.FieldStructOwner[f.Name] = sh
 			}
 		}
 	}

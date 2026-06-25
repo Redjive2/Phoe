@@ -395,6 +395,68 @@ Bring a package into the *current file*:
 binds a Go-side module the host has registered. Either way, the alias
 is visible only in this file.
 
+## Type signatures
+
+Pho is **gradually typed**: types are optional, and the linter checks a
+form only where you actually write one. An un-annotated binding or function
+stays dynamic — no constraint is invented for you, and no false positives
+fire on code you left untyped.
+
+Types are ordinary values — `Number`, `String`, `Boolean`, `Char`, `Atom`,
+`List`, `Map`, `Function`, `NilT` — composed with the connectives `Or`,
+`And`, `Not`, `Diff` and the constructors `(List T)`, `(Map K V)`. A struct
+name is also a type. One casing convention drives everything: a
+**Capitalized** name reads as a *type*, a lowercase one as a *value*.
+
+### Typed bindings
+
+Wrap the bound name in its type:
+
+```pho
+(const (Number n) 5)
+(var (String name) 'ada')
+(const ((Or Number String) id) 42)   -- the type can be any type expression
+```
+
+The initializer is checked against the declared type; a mismatch is a lint
+error. The type is erased at runtime — `(const (Number n) 5)` just binds `n`.
+
+### Function signatures
+
+A signature is a `fun` form whose parameter slots and return are **types**,
+written as its own form next to the implementation:
+
+```pho
+(fun add (Number Number) Number)     -- signature: param types, then result
+(fun add (x y) (+ x y))              -- implementation: param names, then body
+```
+
+The two are paired by name and are order-independent (signature may come
+before or after). Call arguments *and* the implementation's return value are
+checked against the signature. A signature with **no** matching
+implementation is an error (`missing-implementation`).
+
+The casing rule is what tells signature from implementation: a signature's
+params are all types (Capitalized, or a connective form like `(Or …)`); an
+implementation's params are value names (lowercase). A Capitalized
+implementation parameter is flagged (`capitalized-param`) — it reads as a
+type, so you likely meant a signature. A signature whose result is `Nil`
+(e.g. `(fun log (String) Nil)`) is fine — in return position `Nil` means the
+nil type.
+
+### Method signatures
+
+The same, with the **receiver type first** (the type of `self`):
+
+```pho
+(method Point.Dist (Point Point) Number)   -- self-type, then arg types, then result
+(method Point.Dist (self other) …)          -- implementation
+```
+
+> Earlier drafts carried these as `--@ (~sig …)` / `--@ (~type …)`
+> parse-time annotations. Those are **disconnected** now — the inline forms
+> above are the way to type Pho code.
+
 ## Other builtins
 
 The rest, grouped by what they're for.

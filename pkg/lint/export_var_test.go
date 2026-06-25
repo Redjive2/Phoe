@@ -12,9 +12,9 @@ import (
 func TestExportedVarConst(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/cfg/cfg.phl":   "(const Pi 3)\n(var Count 0)\n(const lower 9)\n",
-		"script/std/app/read.phl":  "(import \"std/cfg\")\n(fun ReadPi () cfg.Pi)\n(fun ReadCount () cfg.Count)\n",
-		"script/std/app/write.phl": "(import \"std/cfg\")\n(fun Bump () (= cfg.Count 5))\n",
-		"script/std/app/priv.phl":  "(import \"std/cfg\")\n(fun Peek () cfg.lower)\n",
+		"script/std/app/read.phl":  "(import 'std/cfg')\n(fun ReadPi () cfg.Pi)\n(fun ReadCount () cfg.Count)\n",
+		"script/std/app/write.phl": "(import 'std/cfg')\n(fun Bump () (= cfg.Count 5))\n",
+		"script/std/app/priv.phl":  "(import 'std/cfg')\n(fun Peek () cfg.lower)\n",
 	})
 
 	analyze := func(rel string) []Diagnostic {

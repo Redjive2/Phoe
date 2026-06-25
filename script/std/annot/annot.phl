@@ -2,8 +2,7 @@
 --
 -- These are not ordinary library functions: pho/pkg/annot harvests them and
 -- installs each as a builtin in the isolated environment it spins up for
--- every `--@ (form)` annotation. There, `(sig! num num -> num)` lowers to
--- `(resume (sig 'num 'num '- '> 'num))`; pkg/annot strips the `resume` and
+-- every `--@ (form)` annotation. pkg/annot strips the macro-call wrapper and
 -- evaluates the inner call, so a macro's RETURN VALUE is ignored — it does
 -- its work by side effect, calling (meta.Attach "key" value) to record
 -- metadata against the form being annotated.
@@ -11,48 +10,57 @@
 -- Arguments arrive already de-quoted to their source text: an unquoted
 -- identifier like `num` reaches the macro as the string "num", an atom like
 -- `:strict` as ":strict", and a nested form like `(default :v)` as the array
--- ["default" ":v"]. The arrow in a signature is two tokens (`-` then `>`),
--- since the lexer never combines them, so `sig` splits on the "-" ">" pair.
+-- ["default" ":v"]. The modern `sig` form takes a parenthesized parameter
+-- list then a result — `(~sig (P1 P2) R)` — not an arrow; `->` now lexes as a
+-- single token (the map-literal separator) but `sig` no longer splits on it.
 --
 -- Attachment is metadata-only; nothing here validates the values or enforces
 -- the stated rules (e.g. flag defaults, toplevel purity) — that analysis is
 -- a separate, later pass that consumes these entries.
 
-(goimport ("phoAnnot" meta))
+(goimport ('phoAnnot' meta))
 
 -- A string-literal argument arrives as its raw source text, surrounding
--- quotes included (`"hi"` reaches the macro as the 4-char string `"hi"`),
+-- quotes included (`'hi'` reaches the macro as the 4-char string `'hi'`),
 -- because macro args are quoted source, not evaluated values. stripQuotes
--- peels one layer of double quotes so the attached text is the content.
+-- peels one layer of single quotes so the attached text is the content.
 (fun stripQuotes (s)
-    (if (and (>= (len s) 2) (== s.[0 : 1] "\""))
-        then s.[1 : (- (len s) 1)]
+    (if (and (>= s.Size 2) (== s.[0 : 1] '\''))
+        then s.[1 : (- s.Size 1)]
         else s))
 
--- (type! T) — records the value/expression type T, e.g. `--@ (type! num)`.
+-- (~type T) — records the value/expression type T, e.g. `--@ (~type num)`.
+--
+-- ⚠ DISCONNECTED (inert) — KEEP, DO NOT DELETE. Superseded by the inline
+-- type-signature syntax (Doc/PlanV1/TypeSignatures.md — typed bindings
+-- `(const (Type x) v)`). As of Phase 4 (2026-06) the inline forms feed the
+-- gradual checker and every in-repo site was migrated, so this macro is now
+-- INERT: it harvests nothing. Kept in source (marked) for reference / possible
+-- revival — to revive, restore the original body shown in the comment below.
 (fun type (t)
-    (meta.Attach "type" t))
+    -- Original harvest body (kept for revival): (meta.Attach 'type' t)
+    Nil)
 
--- (doc! "text") — attaches a free-form documentation string for a declaration.
+-- (~doc "text") — attaches a free-form documentation string for a declaration.
 (fun doc (text)
-    (meta.Attach "doc" (stripQuotes text)))
+    (meta.Attach 'doc' (stripQuotes text)))
 
--- (desc! argOrField "text") — documents one argument or struct field by name.
+-- (~desc argOrField "text") — documents one argument or struct field by name.
 -- Attaches "desc" = { "name" argOrField "text" text }; multiple are allowed.
 (fun desc (name text)
-    (meta.Attach "desc" { "name" name "text" (stripQuotes text) }))
+    (meta.Attach 'desc' { 'name' name 'text' (stripQuotes text) }))
 
--- (macrohint! toplevel) | (macrohint! local) — declares where a macro may be
+-- (~macrohint toplevel) | (~macrohint local) — declares where a macro may be
 -- called: a toplevel macro only as a top-level form, a local one inline.
 -- (Purity of toplevel macros is enforced by the runtime — a later pass.)
 (fun macrohint (where)
-    (meta.Attach "macrohint" where))
+    (meta.Attach 'macrohint' where))
 
--- (pure!) — marks the annotated function/macro as pure (no side effects).
+-- (~pure) — marks the annotated function/macro as pure (no side effects).
 (fun pure ()
-    (meta.Attach "pure" True))
+    (meta.Attach 'pure' True))
 
--- (flag! argName (default :v0) :v1 :v2 …) — declares the allowed atom values
+-- (~flag argName (default :v0) :v1 :v2 …) — declares the allowed atom values
 -- of a flag-style argument, and optionally which is the default. A value
 -- wrapped in (default …) marks the default (and is also an allowed value);
 -- every other argument is a plain allowed atom. Attaches
@@ -61,7 +69,7 @@
     (var name parts.[0])
     (var values [])
     (var default Nil)
-    (var n (len parts))
+    (var n parts.Size)
     (var i 1)
     (while (< i n) then do
         (const item parts.[i])
@@ -72,36 +80,35 @@
                 (= values (append values item.[1])))
             else (= values (append values item)))
         (= i (+ i 1)))
-    (meta.Attach "flag" { "arg" name "values" values "default" default }))
+    (meta.Attach 'flag' { 'arg' name 'values' values 'default' default }))
 
--- (sig! P1 P2 … -> R1 R2 …) — a function signature. Everything before the
--- `->` arrow is a parameter type, everything after is a result type. Attaches
--- "kind"="sig", and "params"/"result" as lists of type-name strings.
+-- (~sig (P1 P2 …) R) — a FUNCTION signature: a parenthesized parameter-type
+-- list, then the single result type.
+-- (~sig Recv (P1 P2 …) R) — a METHOD signature: the receiver type (what `self`
+-- is) first, then the parameter list, then the result. The method form is
+-- recognized by its first argument being a type rather than the `(…)` list.
+-- Attaches "kind"="sig", "params" (the list), "result", and — for the method
+-- form — "receiver". (The `~methodsig` spelling, still used for the generic
+-- case in pkg/builtins/pho/universal.phl, is the same family.)
+--
+-- ⚠ DISCONNECTED (inert) — KEEP, DO NOT DELETE. Superseded by the inline
+-- type-signature syntax (Doc/PlanV1/TypeSignatures.md — `fun`/`method`
+-- signature forms). As of Phase 4 (2026-06) the inline forms feed the gradual
+-- checker and every in-repo `~sig` site was migrated, so this macro is now
+-- INERT: it harvests nothing. Kept in source (marked) for reference / possible
+-- revival — to revive, restore the original body shown in the comment below.
+-- (The `~methodsig` spelling, still used for the generic case in
+-- pkg/builtins/pho/universal.phl, is the same family and stays until generics
+-- land.)
 (fun sig ((spread parts)) do
-    (var params [])
-    (var result [])
-    (var n (len parts))
-    (var i 0)
-    (var afterArrow False)
-
-    (while (< i n) then do
-        (if afterArrow
-            -- A bare `do` would capture the else-arm too, so each multi-
-            -- statement arm is wrapped in (identity do …) to bound it.
-            then (identity do
-                (= result (append result parts.[i]))
-                (= i (+ i 1)))
-            else (if (and (< (+ i 1) n)
-                 (and (== parts.[i] "-")
-                      (== parts.[(+ i 1)] ">")))
-                then (identity do
-                    (= afterArrow True)
-                    (= i (+ i 2)))
-                else (identity do
-                    (= params (append params parts.[i]))
-                    (= i (+ i 1))))))
-
-    (meta.Attach "kind" "sig")
-    (meta.Attach "params" params)
-    (meta.Attach "result" result)
-)
+    -- Original harvest body (kept for revival):
+    --   (meta.Attach 'kind' 'sig')
+    --   (if (list? parts.[0])
+    --       then (identity do
+    --           (meta.Attach 'params' parts.[0])
+    --           (meta.Attach 'result' parts.[1]))
+    --       else (identity do
+    --           (meta.Attach 'receiver' parts.[0])
+    --           (meta.Attach 'params' parts.[1])
+    --           (meta.Attach 'result' parts.[2]))))
+    Nil)

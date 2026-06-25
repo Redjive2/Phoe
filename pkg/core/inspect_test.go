@@ -9,7 +9,7 @@ func TestSynthSpansText(t *testing.T) {
 	cases := []ttnode{
 		ttbranch{ttleaf("fakeFn"), ttleaf("arg")},
 		ttbranch{ttleaf("do"), ttbranch{ttleaf("undefinedThing")}},
-		ttbranch{ttleaf("slice"), ttleaf("1"), ttleaf("2")},
+		ttbranch{ttleaf(Slice), ttleaf("1"), ttleaf("2")},
 		ttbranch{ttleaf(Dot), ttleaf("a"), ttleaf("b")},
 		ttbranch{ttleaf(Do), ttleaf("1"), ttleaf("2")},
 		ttbranch{ttleaf(Macrocall), ttleaf("m"), ttleaf("a"), ttleaf("b")},
@@ -44,14 +44,14 @@ func TestInspectUnmanglesDo(t *testing.T) {
 }
 
 // TestInspectUnmanglesMacrocall: the macro-call sugar renders back with the
-// `!` (and the mangled Macrocall head never leaks), like the other sugar.
+// `~` prefix (and the mangled Macrocall head never leaks), like the other sugar.
 func TestInspectUnmanglesMacrocall(t *testing.T) {
 	tree := ttbranch{ttleaf(Macrocall), ttleaf("mymacro"), ttleaf("a"), ttleaf("b")}
-	if got := Inspect(tree); got != "(mymacro! a b)" {
-		t.Errorf("Inspect(Macrocall …) = %q, want %q", got, "(mymacro! a b)")
+	if got := Inspect(tree); got != "(~mymacro a b)" {
+		t.Errorf("Inspect(Macrocall …) = %q, want %q", got, "(~mymacro a b)")
 	}
-	if _, text := SynthSpans(tree); text != "(mymacro! a b)" {
-		t.Errorf("SynthSpans text = %q, want %q", text, "(mymacro! a b)")
+	if _, text := SynthSpans(tree); text != "(~mymacro a b)" {
+		t.Errorf("SynthSpans text = %q, want %q", text, "(~mymacro a b)")
 	}
 }
 

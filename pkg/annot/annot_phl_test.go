@@ -113,18 +113,20 @@ func dictStrings(t *testing.T, v core.Value, field string) []string {
 func TestAnnotPhlMacros(t *testing.T) {
 	ev := New(harvestAnnotPhl(t))
 
-	t.Run("type", func(t *testing.T) {
-		res := ev.Evaluate(`(type! Str)`, parseForm(t, `(type! Str)`))
+	t.Run("type is inert (disconnected, Phase 4)", func(t *testing.T) {
+		// ~type is disconnected (TypeSignatures.md Phase 4): the macro is kept in
+		// annot.phl but harvests nothing — inline typed bindings carry the type now.
+		res := ev.Evaluate(`(~type Str)`, parseForm(t, `(~type Str)`))
 		if len(res.Diags) != 0 {
 			t.Fatalf("unexpected diags: %v", diagMsgs(res))
 		}
-		if got := entryString(t, res, "type"); got != "Str" {
-			t.Fatalf("type = %q, want Str", got)
+		if len(res.Entries) != 0 {
+			t.Fatalf("~type should harvest nothing (inert), got %#v", res.Entries)
 		}
 	})
 
 	t.Run("macrohint", func(t *testing.T) {
-		res := ev.Evaluate(`(macrohint! toplevel)`, parseForm(t, `(macrohint! toplevel)`))
+		res := ev.Evaluate(`(~macrohint toplevel)`, parseForm(t, `(~macrohint toplevel)`))
 		if len(res.Diags) != 0 {
 			t.Fatalf("unexpected diags: %v", diagMsgs(res))
 		}
@@ -134,7 +136,7 @@ func TestAnnotPhlMacros(t *testing.T) {
 	})
 
 	t.Run("doc", func(t *testing.T) {
-		res := ev.Evaluate(`(doc! "hello there")`, parseForm(t, `(doc! "hello there")`))
+		res := ev.Evaluate(`(~doc 'hello there')`, parseForm(t, `(~doc 'hello there')`))
 		if len(res.Diags) != 0 {
 			t.Fatalf("unexpected diags: %v", diagMsgs(res))
 		}
@@ -144,7 +146,7 @@ func TestAnnotPhlMacros(t *testing.T) {
 	})
 
 	t.Run("pure", func(t *testing.T) {
-		res := ev.Evaluate(`(pure!)`, parseForm(t, `(pure!)`))
+		res := ev.Evaluate(`(~pure)`, parseForm(t, `(~pure)`))
 		if len(res.Diags) != 0 {
 			t.Fatalf("unexpected diags: %v", diagMsgs(res))
 		}
@@ -155,7 +157,7 @@ func TestAnnotPhlMacros(t *testing.T) {
 	})
 
 	t.Run("desc", func(t *testing.T) {
-		res := ev.Evaluate(`(desc! count "how many")`, parseForm(t, `(desc! count "how many")`))
+		res := ev.Evaluate(`(~desc count 'how many')`, parseForm(t, `(~desc count 'how many')`))
 		if len(res.Diags) != 0 {
 			t.Fatalf("unexpected diags: %v", diagMsgs(res))
 		}
@@ -168,8 +170,8 @@ func TestAnnotPhlMacros(t *testing.T) {
 	})
 
 	t.Run("flag with default", func(t *testing.T) {
-		res := ev.Evaluate(`(flag! mode (default :strict) :loose :off)`,
-			parseForm(t, `(flag! mode (default :strict) :loose :off)`))
+		res := ev.Evaluate(`(~flag mode (default :strict) :loose :off)`,
+			parseForm(t, `(~flag mode (default :strict) :loose :off)`))
 		if len(res.Diags) != 0 {
 			t.Fatalf("unexpected diags: %v", diagMsgs(res))
 		}
@@ -187,7 +189,7 @@ func TestAnnotPhlMacros(t *testing.T) {
 	})
 
 	t.Run("flag without default", func(t *testing.T) {
-		res := ev.Evaluate(`(flag! mode :loose :off)`, parseForm(t, `(flag! mode :loose :off)`))
+		res := ev.Evaluate(`(~flag mode :loose :off)`, parseForm(t, `(~flag mode :loose :off)`))
 		if len(res.Diags) != 0 {
 			t.Fatalf("unexpected diags: %v", diagMsgs(res))
 		}
@@ -200,32 +202,18 @@ func TestAnnotPhlMacros(t *testing.T) {
 		}
 	})
 
-	t.Run("sig splits on the arrow", func(t *testing.T) {
-		res := ev.Evaluate(`(sig! Num Num -> Num)`, parseForm(t, `(sig! Num Num -> Num)`))
-		if len(res.Diags) != 0 {
-			t.Fatalf("unexpected diags: %v", diagMsgs(res))
-		}
-		if got := entryString(t, res, "kind"); got != "sig" {
-			t.Fatalf("kind = %q, want sig", got)
-		}
-		if params := entryStrings(t, res, "params"); len(params) != 2 || params[0] != "Num" || params[1] != "Num" {
-			t.Fatalf("params = %v, want [Num Num]", params)
-		}
-		if result := entryStrings(t, res, "result"); len(result) != 1 || result[0] != "Num" {
-			t.Fatalf("result = %v, want [Num]", result)
-		}
-	})
-
-	t.Run("sig with no params", func(t *testing.T) {
-		res := ev.Evaluate(`(sig! -> Str)`, parseForm(t, `(sig! -> Str)`))
-		if len(res.Diags) != 0 {
-			t.Fatalf("unexpected diags: %v", diagMsgs(res))
-		}
-		if params := entryStrings(t, res, "params"); len(params) != 0 {
-			t.Fatalf("params = %v, want []", params)
-		}
-		if result := entryStrings(t, res, "result"); len(result) != 1 || result[0] != "Str" {
-			t.Fatalf("result = %v, want [Str]", result)
+	t.Run("sig is inert (disconnected, Phase 4)", func(t *testing.T) {
+		// ~sig is disconnected (TypeSignatures.md Phase 4): the macro is kept in
+		// annot.phl but harvests nothing — inline fun/method signatures carry the
+		// type now. Both the function form and the no-params form harvest nothing.
+		for _, body := range []string{`(~sig (Num Num) Num)`, `(~sig () Str)`} {
+			res := ev.Evaluate(body, parseForm(t, body))
+			if len(res.Diags) != 0 {
+				t.Fatalf("%s: unexpected diags: %v", body, diagMsgs(res))
+			}
+			if len(res.Entries) != 0 {
+				t.Fatalf("%s: ~sig should harvest nothing (inert), got %#v", body, res.Entries)
+			}
 		}
 	})
 }

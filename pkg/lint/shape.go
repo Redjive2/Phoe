@@ -55,11 +55,23 @@ func (w *walker) checkSpecialFormShape(br *ast.PBranch) {
 		// Body (Children[3]) is any expression — no shape check.
 
 	case "struct":
-		// (struct Name f0 f1 …) — a bare name then bare field identifiers.
 		if nargs < 1 {
 			w.emitArity(br, head, "at least 1 (a name)", nargs)
 			return
 		}
+		// Typed-field form `(struct Name.{ F T … })` parses to
+		// `(struct (Name "F" T …))` — a single branch whose head is the struct
+		// name and whose rest are quoted-name / type pairs. The names are string
+		// literals and the types are expressions, neither a bare identifier, so
+		// check only that the branch head names the struct (declOf reads the
+		// pairs).
+		if inner, ok := br.Children[1].(*ast.PBranch); ok && inner.Open == "(" {
+			if len(inner.Children) >= 1 {
+				w.expectQuotedIdent(inner.Children[0], "struct: name")
+			}
+			break
+		}
+		// Bare form `(struct Name f0 f1 …)` — a bare name then bare field idents.
 		w.expectQuotedIdent(br.Children[1], "struct: name")
 		for _, c := range br.Children[2:] {
 			w.expectQuotedIdent(c, "struct: field")
@@ -291,11 +303,12 @@ func (w *walker) expectKeyword(n ast.PNode, kw, form string) {
 	})
 }
 
-// sigilHint returns a pointed suffix when n is a leftover '/& sigil — the
-// usual cause of a shape error while migrating to the bare syntax.
+// sigilHint returns a pointed suffix when n is a stray `&` block sigil sitting
+// where a bare name or list is expected — a common typo, since a block sigil
+// is only valid in value position.
 func sigilHint(n ast.PNode) string {
 	if sig, ok := n.(*ast.PSigil); ok {
-		return "; remove the leading '" + sig.Sigil + "' — sigils are no longer used here"
+		return "; remove the leading '" + sig.Sigil + "' — a block sigil isn't valid here"
 	}
 	return ""
 }

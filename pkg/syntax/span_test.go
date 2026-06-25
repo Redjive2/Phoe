@@ -40,12 +40,18 @@ func TestLowerAttachesSpans(t *testing.T) {
 // TestDereprTransfersSpans pins the quote round-trip: a quoted form
 // (as a fun body would be) keeps its source span through Derepr.
 func TestDereprTransfersSpans(t *testing.T) {
-	tokens, _ := LexPos(`'(+ n 1)`)
+	tokens, _ := LexPos(`&(+ n 1)`)
 	tree, _ := ParsePos(tokens)
 	top := Lower(tree).(core.Branch)
 
+	// `&body` lowers to (block <quoted-body>) — the same quote machinery a
+	// fun body goes through — so the quoted form is the block's argument.
+	block, ok := core.AsBranch(top[0])
+	if !ok || len(block) != 2 {
+		t.Fatalf("expected (block <quoted>), got %s", core.Inspect(top[0]))
+	}
 	// The quoted tree itself is wrapped with the (+ n 1) form's span.
-	quoted := top[0]
+	quoted := block[1]
 	qsp, ok := core.SpanOf(quoted)
 	if !ok {
 		t.Fatal("quoted form has no span")

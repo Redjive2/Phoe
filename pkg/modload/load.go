@@ -94,6 +94,9 @@ var libraryForms = map[string]bool{
 	"method":   true,
 	"struct":   true,
 	"const":    true,
+	// A named type alias `(type Name T)` binds a constant KindType — a
+	// declaration (exported when capitalized), permitted at the top level.
+	"type": true,
 	// A top-level `var` declares module-level state: mutable from within
 	// the module, exported (when capitalized) but read-only from outside
 	// it (the `=` builtin rejects `(= pkg.Name v)`).
@@ -145,7 +148,15 @@ func fileMode(name string) string {
 // .pho files appearing alongside .phl files in a directory are ignored
 // by the directory load (only .phl files are read), so a sibling script
 // cannot suppress a library's exports.
-func LoadPackage(path string) (*core.Package, error) {
+func LoadPackage(path string) (*core.Package, error) { return loadPackage(path, false) }
+
+// LoadMacroLibrary loads the annotation macro library with builtin-shadowing
+// permitted, so its helper funcs (e.g. `type`, which backs `~type`) may rebind
+// same-named builtins — making them an overlay distinct from the builtins in
+// the isolated annotation env.
+func LoadMacroLibrary(path string) (*core.Package, error) { return loadPackage(path, true) }
+
+func loadPackage(path string, allowShadow bool) (*core.Package, error) {
 	path = filepath.Clean(path)
 
 	if pkg, ok := packageCache[path]; ok {
@@ -222,6 +233,7 @@ func LoadPackage(path string) (*core.Package, error) {
 	}
 
 	pkgEnv := EnvFactory()
+	pkgEnv.AllowShadow = allowShadow
 	pkg := &core.Package{
 		Path:    path,
 		Files:   make(map[string]*core.File),
@@ -296,35 +308,6 @@ func LoadPackage(path string) (*core.Package, error) {
 		return session != nil && session.Strict && session.ErrorCount() > 0
 	}
 
-	for _, fname := range sourceFiles {
-		if strictAbort() {
-			break
-		}
-		file := pkg.Files[fname]
-		fileCtx := pkgCtx.WithFile(file)
-
-		// The parser returns a top-level Branch whose children are the
-		// file's top-level forms. Evaluate each in sequence rather than
-		// dispatching the outer branch as a single call. For .phl files
-		// each form is gated through the library allow-list.
-		if topLevel, ok := file.Tree.(core.Branch); ok {
-			for _, form := range topLevel {
-				if strictAbort() {
-					break
-				}
-				if file.Mode == core.ModeLibrary && !isLibraryForm(form) {
-					fileCtx.Errorf(core.ErrLibraryForm,
-						"library file '%s' may only contain declarations and imports at the top level; rejected '%s'",
-						fname, core.Inspect(form))
-					continue
-				}
-				evalTopLevel(fileCtx, fname, form)
-			}
-		} else if file.Tree != nil {
-			evalTopLevel(fileCtx, fname, file.Tree)
-		}
-	}
-
 	// A single-file .pho load is a script being run by the CLI, not a
 	// library being imported. Scripts have no import surface, so the
 	// export pass is skipped: there's nothing to expose, and any
@@ -334,6 +317,44 @@ func LoadPackage(path string) (*core.Package, error) {
 	// already ignores .pho files when assembling a package, so a
 	// sibling script can't "kill" a library's exports.
 	isScriptEntrypoint := len(sourceFiles) == 1 && fileMode(sourceFiles[0]) == core.ModeProgram
+
+	// Collect every top-level form across the package's files, gating .phl
+	// files through the library allow-list. The parser returns a top-level
+	// Branch whose children are the file's top-level forms.
+	var forms []orderedForm
+	for _, fname := range sourceFiles {
+		file := pkg.Files[fname]
+		fileCtx := pkgCtx.WithFile(file)
+		if topLevel, ok := file.Tree.(core.Branch); ok {
+			for _, form := range topLevel {
+				if file.Mode == core.ModeLibrary && !isLibraryForm(form) {
+					fileCtx.Errorf(core.ErrLibraryForm,
+						"library file '%s' may only contain declarations and imports at the top level; rejected '%s'",
+						fname, core.Inspect(form))
+					continue
+				}
+				forms = append(forms, orderedForm{form: form, file: file})
+			}
+		} else if file.Tree != nil {
+			forms = append(forms, orderedForm{form: file.Tree, file: file})
+		}
+	}
+
+	// Order-agnostic library loading: lift every pure definition above the
+	// side-effecting const/var so a declaration can reference another declared
+	// further down. Program (.pho) files are not reordered — their top-level
+	// expressions may have observable side effects.
+	ordered := forms
+	if !isScriptEntrypoint {
+		ordered = liftDefinitions(forms)
+	}
+
+	for _, of := range ordered {
+		if strictAbort() {
+			break
+		}
+		evalTopLevel(pkgCtx.WithFile(of.file), of.file.FileName, of.form)
+	}
 
 	if !isScriptEntrypoint {
 		// Every capitalized top-level binding is exported. Functions,

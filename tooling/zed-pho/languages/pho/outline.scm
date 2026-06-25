@@ -7,7 +7,7 @@
 ;   (struct Name field ...)        struct
 ;   (method Owner.Name (args) …)   method on a struct
 ;   (property Owner.Name get …)    computed property
-;   (macro Name! (params) body)    macro
+;   (macro ~Name (params) body)    macro
 ;
 ; Capture groups:
 ;   @item     — the entire define form
@@ -53,9 +53,9 @@
   (#eq? @_kw "property")
 ) @item
 
-; (macro Name! (params) body)
+; (macro ~Name (params) body)
 ; A macro_definition is its own grammar node, not a list; the name is a bare
-; identifier (no quote), and the `macro` keyword is the @context head.
+; identifier after the `~` prefix, and the `macro` keyword is the @context head.
 (macro_definition
   "macro" @context
   name: (identifier) @name

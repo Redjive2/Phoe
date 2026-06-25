@@ -19,10 +19,11 @@ func TestBuiltinNamesMatchRuntime(t *testing.T) {
 	for name := range *env.Globals {
 		// The mangled internal builtins (the dot accessor, the sequencing
 		// primitive behind `do` notation, the string interpolation helpers,
-		// the macro-call sugar behind `name!`) are deliberately hidden from
-		// user code, so they are intentionally absent from builtinNames.
+		// the macro-call sugar behind `~name`, and the array/dict constructors
+		// behind `[…]`/`{…}`) are deliberately hidden from user code, so they
+		// are intentionally absent from builtinNames.
 		switch name {
-		case core.Dot, core.Do, core.Strinterp, core.Strcoerce, core.Macrocall:
+		case core.Dot, core.Do, core.Strinterp, core.Strcoerce, core.Macrocall, core.Slice, core.Map:
 			continue
 		}
 		registered[name] = true
@@ -32,7 +33,12 @@ func TestBuiltinNamesMatchRuntime(t *testing.T) {
 	// the leaf evaluator recognizes specially, the `self` soft keyword, and
 	// `do` — now a syntactic keyword (the lower pass rewrites it to the
 	// hidden core.Do primitive) rather than a directly registered builtin.
-	softKeyword := map[string]bool{"True": true, "False": true, "Nil": true, "self": true, "do": true}
+	softKeyword := map[string]bool{
+		"True": true, "False": true, "Nil": true,
+		// New literal spellings (Doc/PlanV1/Syntax.md, Phase 2).
+		"none": true, "true": true, "false": true,
+		"self": true, "do": true,
+	}
 
 	listed := map[string]bool{}
 	for _, name := range builtinNames {

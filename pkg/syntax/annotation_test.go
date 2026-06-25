@@ -9,7 +9,7 @@ import (
 // The lexer emits a `--@ ` line as an annotation token carrying the body
 // text verbatim, distinct from an ordinary skipped comment.
 func TestLexAnnotationToken(t *testing.T) {
-	tokens, errs := LexPos("--@ (type! Str)\n(const 'm \"hi\")")
+	tokens, errs := LexPos("--@ (~type Str)\n(const m 'hi')")
 	if len(errs) != 0 {
 		t.Fatalf("unexpected lex errors: %#v", errs)
 	}
@@ -23,8 +23,8 @@ func TestLexAnnotationToken(t *testing.T) {
 	if got == nil {
 		t.Fatalf("no annotation token produced; tokens=%#v", tokens)
 	}
-	if got.Value != "(type! Str)" {
-		t.Fatalf("annotation body = %q, want %q", got.Value, "(type! Str)")
+	if got.Value != "(~type Str)" {
+		t.Fatalf("annotation body = %q, want %q", got.Value, "(~type Str)")
 	}
 }
 
@@ -32,7 +32,7 @@ func TestLexAnnotationToken(t *testing.T) {
 // to that form, with its body re-parsed into a real PNode (here a macro
 // call, since the body uses the `name!` shape).
 func TestAnnotationCaptured(t *testing.T) {
-	tokens, lexErrs := LexPos("--@ (sig! Num Num)\n(fun 'add '(x y) '(+ x y))")
+	tokens, lexErrs := LexPos("--@ (~sig Num Num)\n(fun add (x y) (+ x y))")
 	if len(lexErrs) != 0 {
 		t.Fatalf("unexpected lex errors: %#v", lexErrs)
 	}
@@ -51,8 +51,8 @@ func TestAnnotationCaptured(t *testing.T) {
 		t.Fatalf("expected 1 annotation, got %d", len(br.Annotations))
 	}
 	ann := br.Annotations[0]
-	if ann.Raw != "(sig! Num Num)" {
-		t.Fatalf("annotation Raw = %q, want %q", ann.Raw, "(sig! Num Num)")
+	if ann.Raw != "(~sig Num Num)" {
+		t.Fatalf("annotation Raw = %q, want %q", ann.Raw, "(~sig Num Num)")
 	}
 	mc, ok := ann.Form.(*ast.PMacroCall)
 	if !ok {
@@ -65,7 +65,7 @@ func TestAnnotationCaptured(t *testing.T) {
 
 // Multiple stacked `--@` lines all attach to the next form, in source order.
 func TestAnnotationStacked(t *testing.T) {
-	src := "--@ (sig! Num)\n--@ (doc! \"adds\")\n(fun 'add '(x) '(+ x 1))"
+	src := "--@ (~sig Num)\n--@ (~doc 'adds')\n(fun add (x) (+ x 1))"
 	tree, errs := ParsePos(mustLex(t, src))
 	if len(errs) != 0 {
 		t.Fatalf("unexpected parse errors: %#v", errs)
@@ -74,7 +74,7 @@ func TestAnnotationStacked(t *testing.T) {
 	if len(br.Annotations) != 2 {
 		t.Fatalf("expected 2 annotations, got %d", len(br.Annotations))
 	}
-	if br.Annotations[0].Raw != "(sig! Num)" || br.Annotations[1].Raw != "(doc! \"adds\")" {
+	if br.Annotations[0].Raw != "(~sig Num)" || br.Annotations[1].Raw != "(~doc 'adds')" {
 		t.Fatalf("annotation order wrong: %q then %q",
 			br.Annotations[0].Raw, br.Annotations[1].Raw)
 	}
@@ -84,9 +84,9 @@ func TestAnnotationStacked(t *testing.T) {
 // annotation present — annotations are pure metadata the runtime never
 // sees. dumpTree strips spans, so this compares pure shape.
 func TestAnnotationLeavesRuntimeTreeUnchanged(t *testing.T) {
-	const decl = "(fun 'add '(x y) '(+ x y))"
+	const decl = "(fun add (x y) (+ x y))"
 	plain := dumpTree(lower(decl))
-	annotated := dumpTree(lower("--@ (sig! Num Num -> Num)\n" + decl))
+	annotated := dumpTree(lower("--@ (~sig Num Num -> Num)\n" + decl))
 	if plain != annotated {
 		t.Fatalf("annotation changed the lowered tree:\n plain     = %s\n annotated = %s", plain, annotated)
 	}
@@ -95,8 +95,8 @@ func TestAnnotationLeavesRuntimeTreeUnchanged(t *testing.T) {
 // Body positions are mapped back onto the original source: the annotation
 // span and the parsed form's leaves point at the real columns.
 func TestAnnotationSpanOffset(t *testing.T) {
-	// Columns (1-based): 1:- 2:- 3:@ 4:space 5:( 6:s 7:i 8:g 9:!
-	tree, errs := ParsePos(mustLex(t, "--@ (sig! Num Num)\n(fun 'f '() '())"))
+	// Columns (1-based): 1:- 2:- 3:@ 4:space 5:( 6:~ 7:s 8:i 9:g
+	tree, errs := ParsePos(mustLex(t, "--@ (~sig Num Num)\n(fun f () ())"))
 	if len(errs) != 0 {
 		t.Fatalf("unexpected parse errors: %#v", errs)
 	}
@@ -105,8 +105,8 @@ func TestAnnotationSpanOffset(t *testing.T) {
 		t.Fatalf("annotation span start = %d:%d, want 1:5", ann.Span.StartLine, ann.Span.StartCol)
 	}
 	head := ann.Form.(*ast.PMacroCall).Head.(*ast.PLeaf)
-	if head.Span.StartLine != 1 || head.Span.StartCol != 6 {
-		t.Fatalf("macro head span start = %d:%d, want 1:6", head.Span.StartLine, head.Span.StartCol)
+	if head.Span.StartLine != 1 || head.Span.StartCol != 7 {
+		t.Fatalf("macro head span start = %d:%d, want 1:7", head.Span.StartLine, head.Span.StartCol)
 	}
 }
 
@@ -115,9 +115,9 @@ func TestAnnotationSpanOffset(t *testing.T) {
 // no annotation token or attachment.
 func TestPlainCommentsNotAnnotations(t *testing.T) {
 	for _, src := range []string{
-		"-- @notmarker (x)\n(fun 'f '() '())", // space before @, so `--@` never matches
-		"--@nospace (x)\n(fun 'f '() '())",    // no space after @
-		"-------- divider\n(fun 'f '() '())",  // a run of dashes
+		"-- @notmarker (x)\n(fun f () ())", // space before @, so `--@` never matches
+		"--@nospace (x)\n(fun f () ())",    // no space after @
+		"-------- divider\n(fun f () ())",  // a run of dashes
 	} {
 		tokens := mustLex(t, src)
 		for _, tk := range tokens {
@@ -137,21 +137,21 @@ func TestPlainCommentsNotAnnotations(t *testing.T) {
 
 // A `--@` with no following form (trailing at EOF) is an error.
 func TestAnnotationTrailingNoForm(t *testing.T) {
-	if errs := parseAll("(fun 'f '() '())\n--@ (sig! Num)"); !hasMessageContaining(errs, "has no form to annotate") {
+	if errs := parseAll("(fun f () ())\n--@ (~sig Num)"); !hasMessageContaining(errs, "has no form to annotate") {
 		t.Fatalf("expected trailing-annotation error, got %#v", errs)
 	}
 }
 
 // An annotation before something that isn't a parenthesized form is an error.
 func TestAnnotationOnNonForm(t *testing.T) {
-	if errs := parseAll("--@ (sig! Num)\n42"); !hasMessageContaining(errs, "may only precede") {
+	if errs := parseAll("--@ (~sig Num)\n42"); !hasMessageContaining(errs, "may only precede") {
 		t.Fatalf("expected non-form error, got %#v", errs)
 	}
 }
 
 // An empty `--@ ` body is reported rather than silently accepted.
 func TestAnnotationEmptyBody(t *testing.T) {
-	if errs := parseAll("--@ \n(fun 'f '() '())"); !hasMessageContaining(errs, "empty annotation") {
+	if errs := parseAll("--@ \n(fun f () ())"); !hasMessageContaining(errs, "empty annotation") {
 		t.Fatalf("expected empty-annotation error, got %#v", errs)
 	}
 }

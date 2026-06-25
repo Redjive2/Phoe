@@ -82,6 +82,21 @@
  (#eq? @_kw "method"))
 
 
+; ----- Macro definitions -----
+;
+; (macro ~Name (params) body) is its own grammar node (not a list): the name
+; binds a macro, the first (list) holds the parameters, and the body is a scope.
+
+(macro_definition) @local.scope
+
+(macro_definition name: (identifier) @local.definition.macro)
+
+(macro_definition
+  name: (identifier)
+  .
+  (list (identifier) @local.definition.parameter))
+
+
 ; ----- Imports -----
 ;
 ; (import "path")            — alias is the path basename (no binding node here)

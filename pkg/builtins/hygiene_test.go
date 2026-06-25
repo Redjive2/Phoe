@@ -6,19 +6,9 @@ import (
 	"pho/pkg/core"
 )
 
-// Phase A (macro hygiene): each macro expansion runs in its own scope, so a
-// binding it introduces stays local. Two expansions declaring the same name
-// in one scope therefore don't collide — the second still evaluates. The
-// resumed forms use bare `do` (resume re-applies do notation).
-func TestResumeExpansionScoped(t *testing.T) {
-	exp := func(n string) string {
-		return "(resume '(identity do (var x " + n + ") x))"
-	}
-	got := evalProgram(t, exp("1")+"\n"+exp("2"))
-	if got.Kind != core.KindNum || got.Val != float64(2) {
-		t.Fatalf("second expansion = %#v, want num 2 (expansions must be independently scoped)", got)
-	}
-}
+// Note: macro-expansion hygiene (each expansion runs in its own frame) is
+// exercised by the macro tests; the former `resume`-based case here was removed
+// with the `resume` builtin.
 
 // Phase B1 (lower-scope shadowing): a declaration may shadow a binding from
 // an enclosing scope. A const in a function body shadows an outer const of

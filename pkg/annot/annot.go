@@ -123,7 +123,7 @@ func LoadMacros(importPath string) (map[string]core.StackEntry, error) {
 	silent.Report = func(diag.RuntimeError) {}
 	modload.SetSession(silent)
 
-	pkg, err := modload.LoadPackage(importPath)
+	pkg, err := modload.LoadMacroLibrary(importPath)
 	if err != nil {
 		return nil, err
 	}

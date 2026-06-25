@@ -1,8 +1,6 @@
 package syntax
 
 import (
-	"fmt"
-
 	"pho/pkg/core"
 )
 
@@ -13,40 +11,6 @@ import (
 // already-lowered trees or on runtime values, and are still called by
 // the builtins (decl.go, ctrl.go, meta.go).
 
-// ListifyVal is the runtime counterpart of the legacy ListifyTree pass:
-// converts an array-of-values back into the (slice "stringified" ...)
-// shape that the quote system uses, recursively. Called by `pause` to
-// re-quote macro arguments before handing them to `resume`.
-//
-// In quote-land every scalar is the string of its source text (the
-// parser's listify pass wraps leaves the same way), so a num 1 becomes
-// "1", True becomes "True", and a real string keeps its quotes — each
-// round-trips through `resume` back to the original value.
-func ListifyVal(val core.Value) core.Value {
-	switch val.Kind {
-	case core.KindStr:
-		str := fmt.Sprint(val.Val)
-		return core.TvStr("\"" + str + "\"")
-	case core.KindChr:
-		return core.TvStr("`" + string(val.Val.(rune)) + "`")
-	case core.KindArray:
-		var (
-			list    = *val.Val.(*[]core.Value)
-			newList = make([]core.Value, len(list)+1)
-		)
-
-		newList[0] = core.TvStr("slice")
-
-		for i := range list {
-			newList[i+1] = ListifyVal(list[i])
-		}
-
-		return core.TvSlice(newList)
-	}
-
-	return core.TvStr(core.Stringify(val))
-}
-
 // TreeifyVal converts a runtime value back into an AST node. Used by
 // `resume` to recover an executable tree from a value produced by
 // `pause` / a macro return. Scalars become their source-text leaf, so
@@ -56,10 +20,10 @@ func TreeifyVal(val core.Value) core.Node {
 		// Add one quote level, mirroring ListifyVal, so Derepr's single
 		// strip recovers the value rather than over-stripping it: an
 		// identifier "x" → leaf "x" → x, but a string literal whose value
-		// already carries quotes (`"x"`) → leaf ""x"" → "x". Without the
+		// already carries quotes (`'x'`) → leaf ''x'' → 'x'. Without the
 		// extra level a string literal in a resumed macro expansion would
 		// collapse into a bare identifier (and then fail to resolve).
-		return core.Leaf("\"" + str + "\"")
+		return core.Leaf("'" + str + "'")
 	}
 
 	if val.Kind == core.KindChr {
@@ -76,10 +40,11 @@ func TreeifyVal(val core.Value) core.Node {
 
 	list := *val.Val.(*[]core.Value)
 	branch := make(core.Branch, len(list)+1)
-	// "slice" is the array-literal head the rest of the quote system uses
-	// (see ListifyVal above and the parser's listify pass); "list" is not a
-	// builtin, so resuming a paused branch headed by it would not evaluate.
-	branch[0] = core.Leaf("slice")
+	// core.Slice is the array-literal head the rest of the quote system uses
+	// (see ListifyVal above and the parser's listify pass); a bare "slice" is
+	// no longer a builtin (the literal `[…]` is the only surface form), so
+	// resuming a paused branch headed by anything else would not evaluate.
+	branch[0] = core.Leaf(core.Slice)
 
 	for i := range list {
 		branch[i+1] = TreeifyVal(list[i])
@@ -116,27 +81,21 @@ func Derepr(node core.Node) core.Node {
 		// [..]/{..} sugar) aren't call forms, so — like the parser — leave
 		// them alone.
 		if len(result) > 0 {
-			if head, ok := core.AsLeaf(result[0]); !ok || (string(head) != "slice" && string(head) != "map") {
+			if head, ok := core.AsLeaf(result[0]); !ok || (string(head) != core.Slice && string(head) != core.Map) {
 				result = splitDoNode(result)
 			}
 		}
 		return result
 	}
 
+	// One Derepr peels one quote level: a quoted bare word `x` is carried as
+	// the string leaf `'x'` and recovers to the identifier `x`; a quoted
+	// string literal `'hello'` is carried double-wrapped as `''hello''` and
+	// recovers to the string leaf `'hello'` (which then evaluates to its
+	// value). The single strip handles both.
 	lf := node.(core.Leaf)
-	if len(lf) >= 2 && lf[0] == '"' && lf[len(lf)-1] == '"' {
-		lf = lf[1 : len(lf)-1]
-	}
-	// A leading quote sigil marks a quoted symbol carried as macro data —
-	// the idiomatic data form, e.g. "'name" for `'name`, which keeps the
-	// quote level *visible* in the array (a `'name` element is one level
-	// above a bare `name` identifier). Re-wrap it as a string literal: a
-	// bare `name` stays the identifier `name`, but `'name` resolves to the
-	// symbol "name" — what fun/var/=/method want as a name, and what a
-	// value position sees as the string. Matches what `'name` produces in
-	// source; one Derepr peels one level, so `''x` round-trips too.
-	if len(lf) >= 1 && lf[0] == '\'' {
-		return core.Leaf("\"" + string(lf[1:]) + "\"")
+	if core.IsStrLit(string(lf)) {
+		lf = core.Leaf(core.StrLitBody(string(lf)))
 	}
 	return lf
 }

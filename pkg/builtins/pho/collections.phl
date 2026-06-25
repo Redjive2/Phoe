@@ -4,21 +4,25 @@
 -- that attach the core collection methods to the primitive types. This module
 -- is loaded by the runtime at startup; its members are always in scope, so no
 -- import is required to use them. See Doc/PlanV1/ObjectModel.md §4.5.
+--
+-- One definition each, attached to the generic `Collection` type (String | List
+-- | Map): a method/property on a finite union registers on every member, so
+-- these dispatch on any string, list, or map.
 
-(goimport ("stdDependencies" prim))
+(goimport ('stdDependencies' deps))
 
 -- Element/rune count — replaces the removed `len` builtin.
-(method List.Size   (self) (prim.Size self))
-(method String.Size (self) (prim.Size self))
-(method Dict.Size   (self) (prim.Size self))
+(property Collection.Size
+    get (method Collection (self) (deps.PrimSize self))
+)
 
--- The keys of a collection — replaces the removed `keyof` builtin. A list
--- yields its indices (0 … Size-1); a dict yields its keys.
-(method List.Keys (self) (prim.Keys self))
-(method Dict.Keys (self) (prim.Keys self))
+-- The keys of a collection — replaces the removed `keyof` builtin. A list/string
+-- yields its indices (0 … Size-1); a map yields its keys.
+(property Collection.Keys
+    get (method Collection (self) (deps.PrimKeys self))
+)
 
--- Emptiness — used across the stdlib and the docs' reader example
--- (self.buffer.Empty?).
-(method List.Empty?   (self) (== (self.Size) 0))
-(method String.Empty? (self) (== (self.Size) 0))
-(method Dict.Empty?   (self) (== (self.Size) 0))
+-- Emptiness — used across the stdlib (e.g. self.buffer.Empty?).
+(property Collection.Empty?
+    get (method Collection (self) (== self.Size 0))
+)

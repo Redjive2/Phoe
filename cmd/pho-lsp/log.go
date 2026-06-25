@@ -18,8 +18,9 @@ func logPath() string {
 }
 
 var (
-	logMu   sync.Mutex
-	logFile *os.File
+	logMu         sync.Mutex
+	logFile       *os.File
+	logOpenFailed bool // set once the first OpenFile fails, so we stop retrying
 )
 
 // logf writes a single timestamped line to the LSP log. Cheap, append-
@@ -34,10 +35,14 @@ func logf(format string, args ...any) {
 	defer logMu.Unlock()
 
 	if logFile == nil {
+		if logOpenFailed {
+			return // opening failed once already — don't syscall on every log
+		}
 		f, err := os.OpenFile(logPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
 			// Fall back to stderr; Zed captures it to its own logs.
 			fmt.Fprintf(os.Stderr, "pho-lsp: log open failed: %v\n", err)
+			logOpenFailed = true
 			return
 		}
 		logFile = f

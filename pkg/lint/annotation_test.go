@@ -15,13 +15,15 @@ func TestHoverShowsAnnotations(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	src := "--@ (sig! Num Num -> Num)\n(fun add (x y) (+ x y))"
+	// ~sig/~type are disconnected (TypeSignatures.md Phase 4); use a still-active
+	// annotation (~doc) to exercise hover's annotation-metadata display.
+	src := "--@ (~doc 'adds two numbers')\n(fun add (x y) (+ x y))"
 	md, _, ok := HoverAt("test.pho", []byte(src), 2, 7) // hover on 'add
 	if !ok {
 		t.Fatal("expected a hover for 'add")
 	}
-	if !strings.Contains(md, "annotations") || !strings.Contains(md, "sig") {
-		t.Fatalf("hover should include the sig annotation metadata, got:\n%s", md)
+	if !strings.Contains(md, "annotations") || !strings.Contains(md, "doc") {
+		t.Fatalf("hover should include the doc annotation metadata, got:\n%s", md)
 	}
 }
 

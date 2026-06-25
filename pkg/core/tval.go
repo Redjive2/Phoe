@@ -85,6 +85,15 @@ func TvGoPackage(goModule any) Tval {
 // For a Go function value, the returned tval is a tfun whose body evaluates
 // the call's argv under the caller's ctx and re-wraps the result.
 func TvUnknown(data any) Tval {
+	// A value that is already a Pho value passes through unchanged — e.g. a
+	// goop method that returns core.Value, or []core.Value (handled element by
+	// element via the reflect.Slice case below, which re-enters here per
+	// element). Without this, the reflect path would try to re-wrap a Tval
+	// struct and fail.
+	if tv, ok := data.(Tval); ok {
+		return tv
+	}
+
 	switch data.(type) {
 	case nil:
 		return TvNil

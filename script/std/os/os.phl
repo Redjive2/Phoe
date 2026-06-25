@@ -1,5 +1,5 @@
-(import "std/core")
-(goimport ("stdDependencies" dep))
+(import 'std/core')
+(goimport ('stdDependencies' dep))
 
 (struct File
     id
@@ -19,7 +19,9 @@
 -- Open opens a file at path, accepting a permission string (which can contain `r` and `w` for read and write access), and an optional mode
 -- the mode is either left unfilled (Nil - means standard, overwrite the file content) or set to 'append to add onto the file. Only matters with `w` perm.
 (fun Open (path perm (optional mode)) do
-    (const explicitMode (if (== mode Nil) then :overwrite else mode))
+    (const explicitMode (if (mode.Is? Nil) 
+        then :overwrite 
+        else mode))
     (const id (dep.OsOpen path perm explicitMode))
     
     File.{
@@ -51,10 +53,10 @@
 )
 
 (method File.CanRead? (self) 
-    (core.HasElement? self.perm `r`)
+    (`r`.In? self.perm)
 )
 
 (method File.CanWrite? (self)
-    (core.HasElement? self.perm `w`)
+    (`w`.In? self.perm)
 )
 

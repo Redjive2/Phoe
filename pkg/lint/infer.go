@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"pho/pkg/ast"
+	"pho/pkg/core"
 	"pho/pkg/span"
 )
 
@@ -99,6 +100,37 @@ type structInfo struct {
 	// MethodFiles tracks the declaring file per method — methods can be
 	// attached from a different file than the struct declaration.
 	MethodFiles map[string]string
+	// MethodSigs holds each method's harvested `--@ (~methodsig …)` signature
+	// (the OM half of the Sig surface, Coordination §3): ObjectModel populates
+	// it, GradualTyping's checker reads it to type a method call `x.M(args)`.
+	// nil/absent for an un-annotated method. Populated by harvestMethodSigs.
+	MethodSigs map[string]*funSig
+	// FieldTypes holds each typed field's declared type from the
+	// `(struct Name.{ F T … })` form; absent for a bare/untyped field. The
+	// checker reads it to type a member access `inst.F`. Populated by
+	// harvestFieldTypes (local structs only for now).
+	FieldTypes map[string]*core.PhoType
+	// FieldStructOwner maps a typed field to the INSTANCE SHAPE member access
+	// through it navigates to — the struct it is declared as: a bare local
+	// struct (`Next Node`), a qualified imported one (`Inner pkg.B`), or the
+	// single struct of a nullable union (`Next (Or Node Nil)`). The shape's
+	// OwnerPkg is set for an imported struct, so navigation crosses the import
+	// boundary. Lets shape inference give `inst.Field` an instance shape, so
+	// recursive (node.Next.Next) and nested (a.b.c) access resolves. Populated
+	// by harvestFieldShapes (local) and PackageStructs (imported).
+	FieldStructOwner map[string]Shape
+	// StaticMembers holds the names of type-level members declared with
+	// `static method`/`static property`, reached through the TYPE value
+	// (`Point.At`) rather than an instance.
+	StaticMembers map[string]span.Span
+	// recordType caches the struct's open-record PhoType — built lazily by
+	// structRecord, ONLY for a fully + precisely typed struct (every field has a
+	// non-gradual declared type). nil when the struct has any untyped or
+	// struct-typed (→ Dynamic) field; recordBuilt distinguishes "not yet built"
+	// from "built, no record". This is how a struct instance gets a precise type
+	// at lint time, so the gradual checker can verify struct-shaped arguments.
+	recordType  *core.PhoType
+	recordBuilt bool
 }
 
 // resolveStruct finds the field/method tables for an instance shape:
@@ -132,9 +164,23 @@ func (w *walker) inferShape(scope *Scope, n ast.PNode) Shape {
 			return w.inferCallShape(scope, node)
 		}
 
-	case *ast.PDot, *ast.PSigil, *ast.PMacroCall:
-		// Field reads, quoted data, blocks, and macro results are all
-		// runtime-dependent.
+	case *ast.PDot:
+		// Member access through a struct-typed field: `inst.Field`, where Field
+		// is declared a struct type, yields an instance of that struct — so
+		// recursive (node.Next.Next) and nested (a.b.c) navigation resolves.
+		// The access expression is finite, so this recursion is AST-bounded even
+		// when the type is recursive. Other dot reads stay runtime-dependent.
+		if member, ok := node.RHS.(*ast.PLeaf); ok {
+			if si, ok := w.resolveStruct(scope, w.inferShape(scope, node.LHS)); ok {
+				if sh, found := si.FieldStructOwner[member.Value]; found {
+					return sh
+				}
+			}
+		}
+		return Shape{}
+
+	case *ast.PSigil, *ast.PMacroCall:
+		// Quoted data, blocks, and macro results are all runtime-dependent.
 		return Shape{}
 	}
 	return Shape{}
@@ -146,11 +192,11 @@ func (w *walker) inferLeafShape(scope *Scope, leaf *ast.PLeaf) Shape {
 		return Shape{}
 	}
 	switch {
-	case v == "True" || v == "False":
+	case v == "True" || v == "False" || v == "true" || v == "false":
 		return Shape{Kind: ShapeBool}
-	case v == "Nil":
+	case v == "Nil" || v == "none":
 		return Shape{Kind: ShapeNil}
-	case v[0] == '"':
+	case v[0] == '"' || v[0] == '\'':
 		return Shape{Kind: ShapeString}
 	case v[0] == '`':
 		return Shape{Kind: ShapeChar}
@@ -196,14 +242,12 @@ func (w *walker) inferCallShape(scope *Scope, br *ast.PBranch) Shape {
 		// `+` is intentionally absent: it is both numeric addition and
 		// string concatenation, so its result shape is num-or-str. Leaving
 		// it Unknown avoids false-positive member checks on (+ a b).
-		case "-", "*", "/", "mod", "len":
+		case "-", "*", "/", "mod":
 			return Shape{Kind: ShapeNum}
-		case "==", "~=", "<", "<=", ">", ">=", "~", "and", "or", "has":
+		case "==", "~=", "<", "<=", ">", ">=", "not", "and", "or", "has":
 			return Shape{Kind: ShapeBool}
-		case "slice", "append", "drop", "range", "keyof":
+		case "append", "drop", "range":
 			return Shape{Kind: ShapeArray}
-		case "map":
-			return Shape{Kind: ShapeDict, Keys: dictLiteralKeys(br.Children[1:])}
 		case "fun":
 			return Shape{Kind: ShapeFun}
 		}
@@ -232,17 +276,12 @@ func (w *walker) inferCallShape(scope *Scope, br *ast.PBranch) Shape {
 }
 
 // dictLiteralKeys harvests the statically known keys of a dict literal
-// (or a (map ...) call's args): entries at even positions, either
-// string literals or quoted identifiers. Returns nil — "keys unknown"
-// — if any key position holds something computed, since then the
-// literal's key set can't be trusted.
+// (or a (map ...) call's args): string-literal entries at even positions.
+// Returns nil — "keys unknown" — if any key position holds something
+// computed, since then the literal's key set can't be trusted.
 func dictLiteralKeys(entries []ast.PNode) map[string]span.Span {
 	keys := map[string]span.Span{}
 	for i := 0; i < len(entries); i += 2 {
-		if name, span, ok := quotedIdent(entries[i]); ok {
-			keys[name] = span
-			continue
-		}
 		if str, ok := stringLiteral(entries[i]); ok {
 			keys[str] = entries[i].GetSpan()
 			continue

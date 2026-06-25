@@ -13,7 +13,7 @@ func TestStashAnnotations(t *testing.T) {
 	SetDefault(New(nil))
 	defer SetDefault(New(nil))
 
-	tokens, _ := syntax.LexPos("--@ (sig! Num)\n(fun add (x) (+ x 1))")
+	tokens, _ := syntax.LexPos("--@ (~sig Num)\n(fun add (x) (+ x 1))")
 	tree, _ := syntax.ParsePos(tokens)
 	file := &core.File{}
 	stashAnnotations(tree, file)

@@ -15,24 +15,24 @@ func sp(sl, sc, el, ec int) span.Span {
 // gutter excerpt, caret alignment, notes/help, trace, and the single
 // terminating blank line.
 func TestRenderFullBlock(t *testing.T) {
-	src := "(fun 'double '(n)\n    '(* n 2))\n"
-	// The span underlines the mid-line form '(* n 2)' — deliberately NOT
+	src := "(fun double (n)\n    (* n 2))\n"
+	// The span underlines the mid-line form (* n 2) — deliberately NOT
 	// running to end-of-line, so an inclusive-EndCol regression (which the
 	// endByte clamp would mask on an EOL span) shifts the caret count and
 	// fails this golden.
 	e := RuntimeError{
 		Diagnostic: Diagnostic{
 			File:     "script/rps.pho",
-			Span:     sp(2, 6, 2, 13),
+			Span:     sp(2, 5, 2, 12),
 			Severity: SeverityError,
 			Code:     ErrType,
 			Message:  "'*' expected a 'num' argument, got 'str'",
-			Notes:    []string{"'double' is defined at script/rps.pho:1:7"},
+			Notes:    []string{"'double' is defined at script/rps.pho:1:6"},
 			Help:     []string{"convert it before multiplying: (num count)"},
 		},
 		Source: src,
 		Trace: []Frame{
-			{Name: "double", File: "script/rps.pho", Span: sp(2, 6, 2, 13)},
+			{Name: "double", File: "script/rps.pho", Span: sp(2, 5, 2, 12)},
 			{Name: "<top level>", File: "script/rps.pho", Span: sp(4, 1, 4, 15)},
 		},
 	}
@@ -40,15 +40,15 @@ func TestRenderFullBlock(t *testing.T) {
 	got := Render(e, StylePlain)
 	want := strings.Join([]string{
 		"error[type-mismatch]: '*' expected a 'num' argument, got 'str'",
-		" --> script/rps.pho:2:6",
+		" --> script/rps.pho:2:5",
 		"  |",
-		"2 |     '(* n 2))",
-		"  |      ^^^^^^^",
+		"2 |     (* n 2))",
+		"  |     ^^^^^^^",
 		"  |",
-		"  = note: 'double' is defined at script/rps.pho:1:7",
+		"  = note: 'double' is defined at script/rps.pho:1:6",
 		"  = help: convert it before multiplying: (num count)",
 		"trace (most recent call first):",
-		"   0: double       script/rps.pho:2:6",
+		"   0: double       script/rps.pho:2:5",
 		"   1: <top level>  script/rps.pho:4:1",
 		"",
 		"",

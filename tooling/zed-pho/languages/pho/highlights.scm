@@ -37,6 +37,15 @@
 ((identifier) @type
  (#match? @type "^[A-Z]"))
 
+; A capitalized identifier in list-HEAD position is a call to an exported
+; function (Pho requires exported names to capitalize), not a type — recolor it
+; from the @type heuristic above. Capitalized type-VALUE names in argument
+; position keep @type; the capitalized type operators (Or/And/…) are re-tagged
+; @function.builtin in the builtin-functions block below (which comes later and
+; therefore wins for those specific names).
+((list . (identifier) @function.call)
+ (#match? @function.call "^[A-Z]"))
+
 
 ; ----- Symbol operators -----
 
@@ -58,9 +67,8 @@
 
 ; ----- Sigils for sugar forms -----
 
-"'" @keyword.operator
 "&" @keyword.operator
-"!" @keyword.operator
+"~" @keyword.operator
 
 
 ; ----- Comments -----
@@ -74,12 +82,20 @@
 
 ((list . (identifier) @keyword)
  (#any-of? @keyword
-   "fun" "method" "struct" "property"
+   "fun" "method" "struct" "property" "static" "trait" "type"
    "var" "const"
    "if" "unless" "foreach" "while" "until" "do" "block"
    "return" "break" "continue"
    "import" "goimport"
    "="))
+
+
+; `static method …` / `static property …`: the modifier is the head (tagged
+; above), so the inner method/property head is the SECOND child — tag it too so
+; it matches a standalone `(method …)`/`(property …)`.
+((list . (identifier) @_static . (identifier) @keyword)
+ (#eq? @_static "static")
+ (#any-of? @keyword "method" "property"))
 
 
 ; ----- control-form keyword markers -----
@@ -105,15 +121,21 @@
 ; ----- Boolean operators that look like identifiers -----
 
 ((identifier) @keyword.operator
- (#any-of? @keyword.operator "and" "or"))
+ (#any-of? @keyword.operator "and" "or" "not"))
 
 
 ; ----- Builtin functions (head of a list) -----
 
+; (slice/map are intentionally absent: they are mangled internal heads behind
+;  the `[…]`/`{…}` literals, not callable builtins, so `(slice …)`/`(map …)`
+;  are ordinary unresolved calls, never highlighted as builtins.)
 ((list . (identifier) @function.builtin)
  (#any-of? @function.builtin
-   "get" "has" "slice" "map" "len" "append" "drop" "range" "keyof" "mod"
-   "pause" "resume" "inspect" "identity" "spread" "optional"))
+   "get" "has" "append" "drop" "range" "mod"
+   "inspect" "identity" "spread" "optional"
+   "list?" "atom?" "atom" "atomName"
+   ; type operators / first-class type constructors (gradual typing)
+   "subtype?" "Or" "And" "Not" "Diff" "Fun" "Struct" "Trait"))
 
 
 ; ----- Macro calls -----
@@ -123,32 +145,26 @@
 
 
 ; ----- Macro definitions -----
-; (macro name! (params) body) — the `macro` head reads like the other
-; binding special forms (fun/struct/…); the declared name is painted like
-; the macro it introduces, matching the call-site color above.
+; (macro ~name (params) body) — the `macro` head reads like the other
+; binding special forms (fun/struct/…); the declared name (after the `~`) is
+; painted like the macro it introduces, matching the call-site color above.
 
 (macro_definition "macro" @keyword)
 
 (macro_definition name: (identifier) @function.macro)
 
 
-; ----- User-defined function calls (deliberately not tagged) -----
+; ----- User-defined function calls -----
 ;
-; The natural pattern would be:
+; CAPITALIZED call heads ARE tagged @function.call (the rule next to the
+; capitalized-@type heuristic near the top) — Pho requires exported names to
+; capitalize, so a capitalized list head is an exported-function call.
 ;
-;     (list . (identifier) @function.call)
-;
-; but Zed's tree-sitter resolves the `.` anchor permissively, matching
-; the first IDENTIFIER child rather than the first named child of any
-; kind. That tags parameter names inside quoted arg lists like
-; `(fun 'name '(arg1 arg2) ...)` and `(fun 'name '((spread x) y) ...)`
-; as if they were function calls.
-;
-; Until we have a way to filter by ancestor (e.g. "list, but not under
-; a quote"), we let user-defined call heads inherit the default
-; identifier color via `(identifier) @variable` near the top of this
-; file. Builtins and special forms are still picked up by their
-; specific patterns above.
+; LOWERCASE user-call heads are deliberately left at the default @variable: the
+; param-list-aware ancestor filtering that would let us tag them safely isn't
+; available, and a bare `(list . (identifier) @function.call)` would mis-tag the
+; first identifier of other lists. Builtins and special forms are still picked
+; up by their specific patterns above.
 
 
 ; ----- Dot-chain segments -----
@@ -184,9 +200,8 @@
 ; reads as one value instead of three tokens. The grammar sees a
 ; dot_chain of two numbers; the runtime reassembles it through the
 ; `Dot` operator's number-RHS hack. We only retag the dot when both
-; sides are bare numbers, which is exclusively the decimal case — a
-; dynamic index is bracketed (`xs.[5]`), so the inner number lives in an
-; array node and never matches this two-number dot_chain pattern.
+; sides are bare numbers — `xs.5` (array index) keeps the regular dot
+; color, since it really *is* a member access.
 
 (dot_chain
   (number)
@@ -217,3 +232,13 @@
 
 ((identifier) @keyword
  (#eq? @keyword "do"))
+
+
+; ----- Universal membership methods -----
+; `Is?` / `In?` are the universal type-test methods (x.Is? T, x.In? coll). Give
+; them one consistent color in every position — without this they'd be tagged
+; @property after a dot but @type via the capitalized heuristic at the prefix.
+; Last so it wins over both.
+
+((identifier) @function.method
+ (#any-of? @function.method "Is?" "In?"))

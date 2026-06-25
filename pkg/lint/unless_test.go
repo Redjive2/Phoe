@@ -6,7 +6,7 @@ import "testing"
 // arms, hoists arm declarations, and flags an `elif` as a bad-form-shape.
 func TestUnlessLint(t *testing.T) {
 	// A valid unless (with and without else) lints clean.
-	clean := "(fun f (a) do\n  (unless (> a 0) then \"x\" else \"y\"))\n"
+	clean := "(fun f (a) do\n  (unless (> a 0) then 'x' else 'y'))\n"
 	if d := AnalyzeFile("t.phl", []byte(clean)); hasDiag(d, "bad-form-shape") || hasDiag(d, "unresolved-identifier") {
 		t.Errorf("valid unless should lint clean, got %#v", d)
 	}

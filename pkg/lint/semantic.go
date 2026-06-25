@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"pho/pkg/ast"
+	"pho/pkg/core"
 	"pho/pkg/span"
 	"pho/pkg/syntax"
 )
@@ -107,8 +108,8 @@ func (c *semCollector) walk(scope *Scope, n ast.PNode, inCode bool) {
 		// diagnostic walker's checkInterpChunks (the `%...` parts are
 		// always evaluated when the string is, regardless of the
 		// surrounding quote).
-		if len(node.Value) >= 2 && node.Value[0] == '"' && node.Value[len(node.Value)-1] == '"' {
-			body := node.Value[1 : len(node.Value)-1]
+		if core.IsStrLit(node.Value) {
+			body := core.StrLitBody(node.Value)
 			if syntax.HasInterpolation(body) {
 				c.interpChunks(scope, node, body)
 			}
@@ -120,10 +121,6 @@ func (c *semCollector) walk(scope *Scope, n ast.PNode, inCode bool) {
 		c.classifyLeaf(scope, node)
 
 	case *ast.PSigil:
-		// `'expr` quotes content — data, no semantic refs.
-		if node.Sigil == "'" {
-			return
-		}
 		// `&expr` is a one-argument block whose implicit parameter is `it`, so
 		// classify the body in a child scope binding `it` — that paints it
 		// @parameter, matching the reference walker.
@@ -142,7 +139,7 @@ func (c *semCollector) walk(scope *Scope, n ast.PNode, inCode bool) {
 		}
 
 	case *ast.PMacroCall:
-		// (name! args). Tag name as @macro; args are data.
+		// (~name args). Tag name as @macro; args are data.
 		if leaf, ok := node.Head.(*ast.PLeaf); ok {
 			c.emit(leaf.Span, SemTokMacro)
 		} else {
@@ -243,7 +240,7 @@ func (c *semCollector) classifyLeaf(scope *Scope, leaf *ast.PLeaf) {
 	}
 	if leaf.Value == "self" {
 		// Soft keyword: paint `self` the same way as the other
-		// builtin names (len, drop, slice, …) — SemTokFunction maps
+		// builtin names (len, drop, append, …) — SemTokFunction maps
 		// to @function.builtin in the LSP legend, matching the
 		// tree-sitter scope so the receiver gets the same color
 		// regardless of which highlighter the editor uses.
@@ -299,9 +296,10 @@ var keywordBuiltins = map[string]bool{
 	"var": true, "const": true, "block": true,
 	"if": true, "unless": true, "foreach": true, "while": true, "until": true, "do": true,
 	"return": true, "break": true, "continue": true,
-	"and": true, "or": true,
+	"and": true, "or": true, "not": true,
 	"import": true, "goimport": true,
 	"True": true, "False": true, "Nil": true,
+	"none": true, "true": true, "false": true,
 }
 
 func isKeywordBuiltin(name string) bool { return keywordBuiltins[name] }
@@ -309,7 +307,7 @@ func isKeywordBuiltin(name string) bool { return keywordBuiltins[name] }
 var operatorBuiltins = map[string]bool{
 	"+": true, "-": true, "*": true, "/": true,
 	"==": true, "~=": true, "<": true, "<=": true, ">": true, ">=": true,
-	"~": true, "=": true,
+	"=": true,
 }
 
 func isOperatorBuiltin(name string) bool { return operatorBuiltins[name] }
@@ -330,13 +328,17 @@ func (c *semCollector) semFun(scope *Scope, br *ast.PBranch) {
 	if d.Name != "" { // named form: tag the name as @function
 		c.emit(d.NameSpan, SemTokFunction)
 	}
+	if d.IsSig { // a signature: param/return slots are types, not bindings/code
+		c.emitSigTypes(d.ArgList, d.Body)
+		return
+	}
 	c.walkFunctionLike(scope, d.ArgList, d.Body, false)
 }
 
-// semMacro classifies (macro name! (params) body) — the `macro` keyword,
+// semMacro classifies (macro ~name (params) body) — the `macro` keyword,
 // name as @macro, each param as @parameter, body walked in a body scope.
-// declOf locates the param list and body (skipping the `!` leaf at index 2),
-// so this mirrors semFun apart from the name's token type.
+// declOf locates the name/param list/body (the `~` prefix sigil is the leaf
+// at index 1), so this mirrors semFun apart from the name's token type.
 func (c *semCollector) semMacro(scope *Scope, br *ast.PBranch) {
 	c.classifyHead(scope, br) // the `macro` keyword
 	d, _ := declOf(br)
@@ -367,6 +369,10 @@ func (c *semCollector) semMethod(scope *Scope, br *ast.PBranch) {
 	}
 	if d.Name != "" {
 		c.emit(d.NameSpan, SemTokMethod)
+	}
+	if d.IsSig { // a method signature: receiver + param + return slots are types
+		c.emitSigTypes(d.ArgList, d.Body)
+		return
 	}
 	c.walkFunctionLike(scope, d.ArgList, d.Body, true)
 }
@@ -408,7 +414,13 @@ func (c *semCollector) semStruct(scope *Scope, br *ast.PBranch) {
 	if len(br.Children) < 2 {
 		return
 	}
-	if _, span, ok := declIdent(br.Children[1]); ok {
+	// Typed-field form `(struct (Name "F" T …))`: the struct name is the inner
+	// branch's head.
+	nameNode := br.Children[1]
+	if inner, ok := br.Children[1].(*ast.PBranch); ok && inner.Open == "(" && len(inner.Children) >= 1 {
+		nameNode = inner.Children[0]
+	}
+	if _, span, ok := declIdent(nameNode); ok {
 		c.emit(span, SemTokType)
 	}
 	// Fields stay un-tagged — they're declaration-only and only show up
@@ -475,7 +487,12 @@ func (c *semCollector) semCondLoop(scope *Scope, br *ast.PBranch) {
 func (c *semCollector) semVarConst(scope *Scope, br *ast.PBranch) {
 	c.classifyHead(scope, br)
 	for i := 1; i+1 < len(br.Children); i += 2 {
-		if _, span, ok := declIdent(br.Children[i]); ok {
+		// The name slot is a bare ident `x` or the typed form `(Type x)`; in
+		// the typed form the type leaf is painted @type and the name @variable.
+		if inner, ok := br.Children[i].(*ast.PBranch); ok && inner.Open == "(" && len(inner.Children) == 2 {
+			c.emitTypeNode(inner.Children[0]) // leaf or compound `(Or …)` type
+		}
+		if _, span, ok := bindName(br.Children[i]); ok {
 			c.emit(span, SemTokVariable)
 		}
 		c.walk(scope, br.Children[i+1], true)
@@ -486,7 +503,7 @@ func (c *semCollector) semVarConst(scope *Scope, br *ast.PBranch) {
 func (c *semCollector) semImport(scope *Scope, br *ast.PBranch) {
 	c.classifyHead(scope, br)
 	for _, arg := range br.Children[1:] {
-		if leaf, ok := arg.(*ast.PLeaf); ok && len(leaf.Value) >= 2 && leaf.Value[0] == '"' {
+		if leaf, ok := arg.(*ast.PLeaf); ok && core.IsStrLit(leaf.Value) {
 			// Bare string — alias is implicit. Nothing to highlight beyond
 			// the string itself, which tree-sitter handles.
 			continue
@@ -539,6 +556,41 @@ func (c *semCollector) classifyHead(scope *Scope, br *ast.PBranch) {
 // tokens. For methods the first param is the receiver (conventionally
 // `self`) — it's bound implicitly at call time but is always written
 // explicitly in source, so we just walk the param list normally.
+// emitSigTypes paints the parameter-type slots and the return-type slot of an
+// inline fun/method SIGNATURE as @type (TypeSignatures.md). Unlike an
+// implementation, a signature's param list holds type expressions (the receiver
+// type included, for a method) and the "body" is the result type — none of it
+// is a binding or code.
+func (c *semCollector) emitSigTypes(argList, ret ast.PNode) {
+	if items, ok := declList(argList); ok {
+		for _, item := range items {
+			c.emitTypeNode(item)
+		}
+	}
+	if ret != nil {
+		c.emitTypeNode(ret)
+	}
+}
+
+// emitTypeNode paints a type EXPRESSION as @type: a bare type name or connective
+// leaf, recursing into a compound `(Or …)`/`(List …)`/`(Map …)` form so every
+// type identifier reads as a type. Numeric/string/atom singleton literals keep
+// their own highlighting.
+func (c *semCollector) emitTypeNode(node ast.PNode) {
+	switch n := node.(type) {
+	case *ast.PLeaf:
+		if looksLikeIdentifier(n.Value) {
+			c.emit(n.Span, SemTokType)
+		}
+	case *ast.PBranch:
+		if n.Open == "(" {
+			for _, ch := range n.Children {
+				c.emitTypeNode(ch)
+			}
+		}
+	}
+}
+
 func (c *semCollector) walkFunctionLike(parent *Scope, argList, body ast.PNode, isMethod bool) {
 	_ = isMethod
 	bodyScope := newScope(parent)

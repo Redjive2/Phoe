@@ -41,9 +41,9 @@ func TestParseImportRequestsForms(t *testing.T) {
 		path  string
 		alias string
 	}{
-		{`(import ("std/core" c))`, "std/core", "c"},
-		{`(import "std/core")`, "std/core", "core"},
-		{`(goimport ("stdDependencies" dep))`, "stdDependencies", "dep"},
+		{`(import ('std/core' c))`, "std/core", "c"},
+		{`(import 'std/core')`, "std/core", "core"},
+		{`(goimport ('stdDependencies' dep))`, "stdDependencies", "dep"},
 	}
 	for _, tc := range cases {
 		argv := loweredImportArgs(t, tc.src)
@@ -58,13 +58,12 @@ func TestParseImportRequestsForms(t *testing.T) {
 }
 
 // Hard cutover: the alias must be a bare name. The old bracket form, a
-// quoted alias, and a non-pair are all rejected (no request produced).
+// string alias, and a non-pair are all rejected (no request produced).
 func TestParseImportRequestsRejectsLegacyForms(t *testing.T) {
 	for _, src := range []string{
-		`(import ["std/core" c])`,   // old bracket delimiter
-		`(import ("std/core" 'c))`,  // quoted alias — bare only now
-		`(import ("std/core" "c"))`, // string alias
-		`(import ("a" "b" "c"))`,    // 3-element pair is malformed
+		`(import ['std/core' c])`,   // old bracket delimiter
+		`(import ('std/core' 'c'))`, // string alias
+		`(import ('a' 'b' 'c'))`,    // 3-element pair is malformed
 	} {
 		reqs := parseImportRequests(importTestCtx(), loweredImportArgs(t, src), "import")
 		if len(reqs) != 0 {

@@ -52,22 +52,6 @@ func TestHeadDoSequences(t *testing.T) {
 	}
 }
 
-// `do` notation is a parse-time rewrite, so a `do` recovered from quoted
-// data has to be re-applied when the data becomes code again. resume and
-// macros must sequence it via core.Do, not leave it a bare `do` identifier
-// that resolves to nothing.
-func TestResumeAppliesDoNotation(t *testing.T) {
-	// resume a quoted do-form directly.
-	if v := evalProgram(t, "(resume '(identity do (var a 1) (var b 2) (+ a b)))"); v.Kind != core.KindNum || v.Val.(float64) != 3 {
-		t.Fatalf("resume of (identity do …) = %v (kind %s), want 3", v.Val, v.Kind)
-	}
-	// a head `do` recovered from data sequences in place too — no identity.
-	if v := evalProgram(t, "(resume '(do (var a 1) (var b 2) (+ a b)))"); v.Kind != core.KindNum || v.Val.(float64) != 3 {
-		t.Fatalf("resume of head (do …) = %v (kind %s), want 3", v.Val, v.Kind)
-	}
-	// a macro whose returned data builds a do-body (slice of quoted symbols).
-	prog := "(macro seq! (x y) (slice 'identity 'do x y))\n(seq! (var n 4) (* n 5))"
-	if v := evalProgram(t, prog); v.Kind != core.KindNum || v.Val.(float64) != 20 {
-		t.Fatalf("macro-generated do-body = %v (kind %s), want 20", v.Val, v.Kind)
-	}
-}
+// Note: do-notation recovery through the macro/Derepr path is covered by the
+// macro tests (macro_test.go) and pkg/syntax's splitDoNode tests; the former
+// `resume`-based cases here were removed with the `resume` builtin.

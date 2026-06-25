@@ -161,24 +161,12 @@ func collBuiltins() map[string]core.StackEntry {
 			return core.TvSlice(array)
 		}),
 
-		"len": global(func(ctx core.Context, argv []core.Node) core.Value {
-			if len(argv) != 1 {
-				return ctx.Errorf(core.ErrArity, "'len' requires exactly 1 argument; got %d", len(argv))
-			}
+		// `len`/`keyof` are removed — use the object-model members `x.Size` and
+		// `x.Keys` (built-in module, pkg/builtins/pho/collections.phl).
 
-			col := argv[0].Evaluate(ctx)
-			switch col.Kind {
-			case core.KindArray:
-				return core.TvNum(float64(len(*col.Val.(*[]core.Value))))
-			case core.KindStr:
-				return core.TvNum(float64(strLen(col.Val.(string))))
-			case core.KindDict:
-				return core.TvNum(float64(len(*col.Val.(*map[core.Value]core.Value))))
-			}
-			return ctx.Errorf(core.ErrType, "'len' cannot measure a value of kind '%s'", col.Kind)
-		}),
-
-		"slice": global(func(ctx core.Context, argv []core.Node) core.Value {
+		// Mangled: the `[a b c]` literal lowers to (core.Slice …); a bare
+		// `(slice …)` is not callable. core.Slice is the only registration.
+		core.Slice: global(func(ctx core.Context, argv []core.Node) core.Value {
 			var result []core.Value
 
 			for _, entry := range argv {
@@ -188,7 +176,9 @@ func collBuiltins() map[string]core.StackEntry {
 			return core.TvSlice(result)
 		}),
 
-		"map": global(func(ctx core.Context, argv []core.Node) core.Value {
+		// Mangled: the `{k v}` literal lowers to (core.Map …); a bare
+		// `(map …)` is not callable.
+		core.Map: global(func(ctx core.Context, argv []core.Node) core.Value {
 			if len(argv)%2 != 0 {
 				return ctx.Errorf(core.ErrArity, "'map' requires an even number of arguments (key/value pairs); got %d", len(argv))
 			}
@@ -206,41 +196,6 @@ func collBuiltins() map[string]core.StackEntry {
 			}
 
 			return core.TvDict(result)
-		}),
-
-		"keyof": global(func(ctx core.Context, argv []core.Node) core.Value {
-			if len(argv) != 1 {
-				return ctx.Errorf(core.ErrArity, "'keyof' requires 1 argument; got %d", len(argv))
-			}
-
-			coll := argv[0].Evaluate(ctx)
-
-			switch coll.Kind {
-			case core.KindArray: // return a list of all indices `[0 1 2 3 4 ... len(coll.Val.([]core.Tval))]`
-				size := len(*coll.Val.(*[]core.Tval))
-				result := make([]core.Tval, size)
-
-				for i := range size {
-					result[i] = core.TvNum(float64(i))
-				}
-
-				return core.TvSlice(result)
-
-			case core.KindDict: // return a list of all keys
-				size := len(*coll.Val.(*map[core.Value]core.Value))
-				result := make([]core.Tval, size)
-
-				i := 0
-				for key := range *coll.Val.(*map[core.Value]core.Value) {
-					result[i] = key
-					i++
-				}
-
-				return core.TvSlice(result)
-			}
-
-			ctx.Errorf(core.ErrType, "'keyof' expected array or dict, got %s", coll.Kind)
-			return core.TvNil
 		}),
 
 		"range": global(func(ctx core.Context, argv []core.Node) core.Value {

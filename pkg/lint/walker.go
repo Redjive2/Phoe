@@ -25,7 +25,7 @@ import (
 //     identifier leaf as a reference and verifying it resolves.
 //
 // `(=` `var`/`const`/`fun`/`method`/`struct`/`import`/`goimport` are
-// treated specially — their LHS or quoted-name positions are
+// treated specially — their LHS or name positions are
 // declarations, not references.
 type walker struct {
 	file        string
@@ -58,6 +58,11 @@ type walker struct {
 	// an unused-import warning when the walk finishes.
 	usedImports map[string]bool
 
+	// sigSites collects the inline type SIGNATURE forms seen during
+	// collection (fun/method sigs). After collect, checkMissingImpls verifies
+	// each has a matching implementation. (Phase 2 of the type-signature plan.)
+	sigSites []sigSite
+
 	// inBranch is set while walking code that may or may not run (if
 	// arms, for bodies). Reassignments there can't retarget a
 	// binding's inferred shape — they invalidate it to Unknown so the
@@ -71,6 +76,18 @@ type walker struct {
 
 	// fileScope is the scope of the file being analyzed.
 	fileScope *Scope
+
+	// inMacroLib is set when the file is the annotation macro library (the
+	// std/annot directory). Its helper funcs (e.g. `type`, backing `~type`)
+	// intentionally shadow builtins — the runtime loads it with AllowShadow —
+	// so the linter suppresses the shadows-the-builtin diagnostic there.
+	inMacroLib bool
+
+	// declared holds each `--@ (~type T)`-annotated binding's DECLARED type
+	// (un-narrowed), set by the gradual checker. Assignment checking reads it so
+	// `(= x v)` is validated against x's declared type, not a narrowed flow type
+	// (avoiding a false positive when a narrowed var is reassigned).
+	declared flowEnv
 
 	// bodyScope is the innermost function/method body scope currently
 	// being walked (nil at the top level, meaning fileScope). Shape
@@ -96,16 +113,33 @@ type walker struct {
 	onLeafResolve   func(span span.Span, def Definition)
 	onExportResolve func(span span.Span, def Definition)
 	onMemberResolve func(span span.Span, si *structInfo, member string, kind DefKind)
+	// onBuiltinMember fires for a member access resolving to a built-in
+	// object-model member (a primitive's Size/Keys/Empty? or a universal
+	// Is?/In?). These live in the compiler with no source span, so the hook
+	// carries ready-rendered hover markdown rather than a definition site.
+	onBuiltinMember func(span span.Span, hoverMD string)
 	onDefine        func(span span.Span, def Definition)
 
 	// onAnnotation, if set, is called once per annotated top-level form
 	// with the evaluated annotation results (one per `--@`, in source
 	// order). Lets navigation / hovers surface annotation metadata.
 	onAnnotation func(target *ast.PBranch, results []annot.Result)
+
+	// bodyScopes maps a function/method body node to the scope the reference
+	// walk built for it (params + locals, with shapes). The gradual checker
+	// reuses these to type-check INSIDE bodies with correct shape inference —
+	// without rebuilding scopes, and so a local correctly shadows a top-level
+	// binding (using the file scope would mis-resolve a shadowed name).
+	bodyScopes map[ast.PNode]*Scope
+
+	// checkScope is the scope the gradual checker currently infers shapes
+	// against — the file scope at top level, a function body's scope while
+	// checking inside it. Swapped (save/restore) as the checker descends.
+	checkScope *Scope
 }
 
 func newWalker(file string) *walker {
-	return &walker{file: file, usedImports: map[string]bool{}}
+	return &walker{file: file, usedImports: map[string]bool{}, bodyScopes: map[ast.PNode]*Scope{}}
 }
 
 // exportsFor is PackageExports with per-pass memoization.
@@ -148,7 +182,17 @@ func (w *walker) emit(d Diagnostic) {
 func (w *walker) walkFile(tree []ast.PNode, parent *Scope) {
 	fileScope := newScope(parent)
 	w.fileScope = fileScope
+	w.inMacroLib = isMacroLibFile(w.file)
 	w.collect(fileScope, tree)
+	// Every inline type signature must have a matching implementation.
+	w.checkMissingImpls(fileScope)
+	// Record struct-typed fields' owners so shape inference can navigate through
+	// them (recursive/nested member access). Must precede the reference walk.
+	w.harvestFieldShapes(fileScope, tree)
+	// Harvest each method's `--@ (~methodsig …)` onto its owner's member
+	// surface, now that collect has created the structInfos. The gradual
+	// checker reads these to type method calls (Coordination §3).
+	w.harvestMethodSigs(fileScope, tree)
 	// Record shapes for top-level var/const initializers before any
 	// checking, so function bodies walked earlier in the file see the
 	// shapes of bindings declared later.
@@ -157,6 +201,7 @@ func (w *walker) walkFile(tree []ast.PNode, parent *Scope) {
 		w.checkExpr(fileScope, form, false /* not in body code */)
 	}
 	w.walkAnnotations(tree)
+	w.checkTypes(tree)
 	// Post-walk: every DefImport in the file scope that wasn't
 	// resolved at least once during checking gets flagged. Imports
 	// from sibling files (in the package scope) aren't considered —
@@ -178,8 +223,32 @@ func (w *walker) walkFile(tree []ast.PNode, parent *Scope) {
 	}
 }
 
+// checkMissingImpls flags an inline type SIGNATURE collected in this file that
+// has no matching implementation — `(fun add (Number Number) Number)` with no
+// `(fun add (a b) …)`. Matching is by qualified name through the full scope
+// chain, so an implementation in a sibling file of the same package satisfies
+// it. Phase 2 of the inline type-signature plan (TypeSignatures.md §4).
+func (w *walker) checkMissingImpls(scope *Scope) {
+	for _, s := range w.sigSites {
+		if def, _, ok := scope.Lookup(s.Name); ok && def.Kind == s.Kind {
+			continue
+		}
+		kind := "function"
+		if s.Kind == DefMethod {
+			kind = "method"
+		}
+		w.emit(Diagnostic{
+			File:     w.file,
+			Span:     s.Span,
+			Severity: SeverityError,
+			Code:     "missing-implementation",
+			Message:  fmt.Sprintf("%s signature '%s' has no implementation", kind, s.Name),
+		})
+	}
+}
+
 // walkAnnotations evaluates the parse-time annotations attached to each
-// top-level form (`--@ (sig! ...)` and friends) through pkg/annot's
+// top-level form (`--@ (~sig ...)` and friends) through pkg/annot's
 // isolated, memoized evaluator, and surfaces any diagnostics the annotation
 // macros raise — an undefined macro, a bad argument, a macro-side error.
 // The process-wide evaluator (annot.Default) carries the macro library,
@@ -255,7 +324,14 @@ func (w *walker) collectOne(scope *Scope, form ast.PNode) {
 	switch d.Head {
 	case "fun":
 		// The 2-arg anonymous form has no name to hoist (d.Name == "").
-		if d.Name != "" {
+		switch {
+		case d.Name == "":
+			// anonymous — nothing to collect
+		case d.IsSig:
+			// A type SIGNATURE binds nothing; record it so checkMissingImpls
+			// can require a matching implementation (Phase 2).
+			w.sigSites = append(w.sigSites, sigSite{d.Name, d.NameSpan, DefFun})
+		default:
 			w.define(scope, d.Name, DefFun, d.NameSpan)
 		}
 
@@ -281,21 +357,31 @@ func (w *walker) collectOne(scope *Scope, form ast.PNode) {
 		// so nothing else trips. If the owner isn't a plain identifier we
 		// can't form a stable key, so we skip it rather than risk a false
 		// positive.
-		if d.Owner != "" && d.Name != "" {
+		if d.Owner != "" && d.Name != "" && d.IsSig {
+			// A method type SIGNATURE binds nothing — record it so
+			// checkMissingImpls can require a matching implementation (Phase 2).
+			w.sigSites = append(w.sigSites, sigSite{d.Owner + "." + d.Name, d.NameSpan, DefMethod})
+		}
+		if d.Owner != "" && d.Name != "" && !d.IsSig {
 			w.define(scope, d.Owner+"."+d.Name, DefMethod, d.NameSpan)
 			// Attach to the owner's member table. Lookup first: the
 			// struct may have been collected into an outer (package)
 			// scope by a sibling file, and splitting its table across
-			// scopes would lose members.
-			si, ok := scope.LookupStruct(d.Owner)
-			if !ok {
-				si = scope.structAt(d.Owner)
+			// scopes would lose members. A union receiver (Collection =
+			// String|List|Map) registers on EACH member's surface,
+			// mirroring the runtime's union-receiver expansion, so an
+			// access on a concrete list/string/map resolves.
+			for _, owner := range memberOwners(d.Owner) {
+				si, ok := scope.LookupStruct(owner)
+				if !ok {
+					si = scope.structAt(owner)
+				}
+				si.Methods[d.Name] = d.NameSpan
+				if si.MethodFiles == nil {
+					si.MethodFiles = map[string]string{}
+				}
+				si.MethodFiles[d.Name] = w.file
 			}
-			si.Methods[d.Name] = d.NameSpan
-			if si.MethodFiles == nil {
-				si.MethodFiles = map[string]string{}
-			}
-			si.MethodFiles[d.Name] = w.file
 		}
 
 	case "property":
@@ -306,13 +392,44 @@ func (w *walker) collectOne(scope *Scope, form ast.PNode) {
 		// DefVar so a reference reads (and highlights) as a plain variable.
 		switch {
 		case d.Owner != "" && d.Name != "":
-			si, ok := scope.LookupStruct(d.Owner)
-			if !ok {
-				si = scope.structAt(d.Owner)
+			// A property on a built-in type (a primitive, or a union like
+			// Collection expanded across its members) is a named member —
+			// register it on the member surface the primitive-member check
+			// reads (Methods). A struct property is a field, reached via the
+			// instance-member check.
+			_, isType := core.TypeByName(d.Owner)
+			for _, owner := range memberOwners(d.Owner) {
+				si, ok := scope.LookupStruct(owner)
+				if !ok {
+					si = scope.structAt(owner)
+				}
+				if isType {
+					si.Methods[d.Name] = d.NameSpan
+				} else {
+					si.Fields[d.Name] = d.NameSpan
+				}
 			}
-			si.Fields[d.Name] = d.NameSpan
 		case d.Name != "":
 			w.define(scope, d.Name, DefVar, d.NameSpan)
+		}
+
+	case "static":
+		// A type-level member registers on the owner's STATIC surface (reached
+		// via the type value `Point.At`), not the instance member table. The
+		// receiver-qualified key flags the one redeclaration worth catching — the
+		// same static member declared twice on the same owner.
+		if d.Owner != "" && d.Name != "" {
+			w.define(scope, d.Owner+".static."+d.Name, DefMethod, d.NameSpan)
+			for _, owner := range memberOwners(d.Owner) {
+				si, ok := scope.LookupStruct(owner)
+				if !ok {
+					si = scope.structAt(owner)
+				}
+				if si.StaticMembers == nil {
+					si.StaticMembers = map[string]span.Span{}
+				}
+				si.StaticMembers[d.Name] = d.NameSpan
+			}
 		}
 
 	case "struct":
@@ -341,6 +458,19 @@ func (w *walker) collectOne(scope *Scope, form ast.PNode) {
 					})
 				}
 			}
+		}
+
+	case "type":
+		// (type Name T) — a named type alias binds Name as a constant KindType.
+		if d.Name != "" {
+			w.define(scope, d.Name, DefType, d.NameSpan)
+		}
+
+	case "trait":
+		// (trait Name …) — a named trait binds Name as a constant KindType, like
+		// the `(type Name (Trait …))` it shorthands.
+		if d.Name != "" {
+			w.define(scope, d.Name, DefType, d.NameSpan)
 		}
 
 	case "const":
@@ -480,6 +610,11 @@ func (w *walker) define(scope *Scope, name string, kind DefKind, span span.Span)
 
 	switch {
 	case prior.Kind == DefBuiltin:
+		if w.inMacroLib {
+			// The macro library intentionally shadows builtins (e.g. its `type`
+			// fun backs the `~type` annotation); the runtime permits this.
+			break
+		}
 		w.emit(Diagnostic{
 			File:     w.file,
 			Span:     span,
@@ -514,26 +649,6 @@ func (w *walker) define(scope *Scope, name string, kind DefKind, span span.Span)
 	}
 }
 
-// checkUnquotedName flags a var/const/= name that still carries a leftover
-// quote. Post-cutover a binding name is a bare identifier — (var x 5) — so a
-// `'x` would declare a binding named literally "x" (quotes and all), which is
-// never intended. A bare name is correct and a dot/index = target is left to
-// the shape checker. label is the prefix, e.g. "var name" or "assignment
-// target".
-func (w *walker) checkUnquotedName(target ast.PNode, label string) {
-	sig, ok := target.(*ast.PSigil)
-	if !ok || sig.Sigil != "'" {
-		return // bare name (correct), dot target, or other — not flagged here
-	}
-	w.emit(Diagnostic{
-		File:     w.file,
-		Span:     sig.Span,
-		Severity: SeverityError,
-		Code:     "quoted-name",
-		Message:  label + " is quoted — names are bare now; remove the leading '",
-	})
-}
-
 // ----------------------------------------------------------------------
 // Check pass — walk expressions, verify references, flag set-on-const
 // ----------------------------------------------------------------------
@@ -553,8 +668,8 @@ func (w *walker) checkExpr(scope *Scope, n ast.PNode, inCode bool) {
 		// identifiers we want to resolve. Walk into each interp
 		// expression chunk so unresolved-identifier / set-on-const /
 		// invalid-self-usage all fire there too.
-		if len(node.Value) >= 2 && node.Value[0] == '"' && node.Value[len(node.Value)-1] == '"' {
-			body := node.Value[1 : len(node.Value)-1]
+		if core.IsStrLit(node.Value) {
+			body := core.StrLitBody(node.Value)
 			if syntax.HasInterpolation(body) {
 				w.checkInterpChunks(scope, node, body, inCode)
 			}
@@ -583,7 +698,7 @@ func (w *walker) checkExpr(scope *Scope, n ast.PNode, inCode bool) {
 				Span:     node.Span,
 				Severity: SeverityError,
 				Code:     "unresolved-identifier",
-				Message:  fmt.Sprintf("'%s' is not defined", node.Value),
+				Message:  fmt.Sprintf("'%s' is not defined", node.Value) + arrayDictHint(node.Value),
 			})
 			return
 		}
@@ -637,7 +752,7 @@ func (w *walker) checkExpr(scope *Scope, n ast.PNode, inCode bool) {
 					Span:     leaf.Span,
 					Severity: SeverityError,
 					Code:     "not-a-macro",
-					Message:  fmt.Sprintf("'%s' is a %s, not a macro — call it without the '!'", leaf.Value, def.Kind),
+					Message:  fmt.Sprintf("'%s' is a %s, not a macro — call it without the '~' prefix", leaf.Value, def.Kind),
 				})
 			}
 		}
@@ -739,6 +854,7 @@ func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 		for _, c := range body {
 			w.checkExpr(scope, c, true)
 		}
+		w.checkUnreachable(body)
 		return
 	}
 
@@ -753,15 +869,24 @@ func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 		w.checkMethod(scope, br)
 	case "property":
 		w.checkProperty(scope, br)
+	case "static":
+		w.checkStatic(scope, br)
 	case "struct":
 		// (struct Name f0 f1 …) — name + fields are declarations,
 		// nothing to reference-check.
 		return
+	case "type":
+		// (type Name T) — Name is a declaration; T is a type expression that
+		// may reference builtin type names, connectives, and other aliases.
+		if len(br.Children) >= 3 {
+			w.checkExpr(scope, br.Children[2], true)
+		}
+	case "Trait", "trait":
+		w.checkTrait(scope, br)
 	case "var", "const":
-		// (var 'a 1 'b 2 ...) — names are declarations; values are
+		// (var a 1 b 2 ...) — names are declarations; values are
 		// expressions that may reference other names.
 		for i := 1; i+1 < len(br.Children); i += 2 {
-			w.checkUnquotedName(br.Children[i], headIdent(br)+" name")
 			w.checkExpr(scope, br.Children[i+1], true)
 		}
 		// Re-record shapes at the decl's lexical position: the hoisting
@@ -808,6 +933,7 @@ func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 		for _, c := range br.Children[1:] {
 			w.checkExpr(scope, c, true)
 		}
+		w.checkUnreachable(br.Children[1:])
 	case "=":
 		w.checkAssign(scope, br)
 	case "import", "goimport":
@@ -835,7 +961,7 @@ func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 				Span:     br.Children[0].GetSpan(),
 				Severity: SeverityError,
 				Code:     "break-outside-loop",
-				Message:  "'break' is only valid inside a 'for' loop",
+				Message:  "'break' is only valid inside a loop (foreach / while / until)",
 			})
 		}
 	case "continue":
@@ -845,7 +971,7 @@ func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 				Span:     br.Children[0].GetSpan(),
 				Severity: SeverityError,
 				Code:     "continue-outside-loop",
-				Message:  "'continue' is only valid inside a 'for' loop",
+				Message:  "'continue' is only valid inside a loop (foreach / while / until)",
 			})
 		}
 	default:
@@ -859,8 +985,8 @@ func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 						File:     w.file,
 						Span:     leaf.Span,
 						Severity: SeverityError,
-						Code:     "macro-needs-bang",
-						Message:  fmt.Sprintf("'%s' is a macro — call it with the '!' syntax: (%s! ...)", leaf.Value, leaf.Value),
+						Code:     "macro-needs-prefix",
+						Message:  fmt.Sprintf("'%s' is a macro — call it with the '~' prefix: (~%s ...)", leaf.Value, leaf.Value),
 					})
 				}
 			}
@@ -877,6 +1003,9 @@ func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 				Message:  fmt.Sprintf("the (%s { … }) construction form was removed; write %s.{ field value … }", name, name),
 			})
 		}
+		// `T.{ field value … }` construction: every literal field name must be a
+		// declared field of T (the runtime rejects an unknown key).
+		w.checkConstruction(scope, br)
 		for _, c := range br.Children {
 			w.checkExpr(scope, c, true)
 		}
@@ -918,6 +1047,120 @@ func (w *walker) retiredConstruction(scope *Scope, br *ast.PBranch) (string, *as
 		}
 	}
 	return "", nil, false
+}
+
+// headStruct resolves a call head to the struct it constructs — a local
+// `(struct …)` name or an imported `pkg.Struct` — returning the struct's
+// field/method tables and a display name. Used to validate construction.
+func (w *walker) headStruct(scope *Scope, head ast.PNode) (*structInfo, string, bool) {
+	switch h := head.(type) {
+	case *ast.PLeaf:
+		if !looksLikeIdentifier(h.Value) {
+			return nil, "", false
+		}
+		if def, _, found := scope.Lookup(h.Value); found && def.Kind == DefStruct {
+			if si, ok := scope.LookupStruct(h.Value); ok {
+				return si, h.Value, true
+			}
+		}
+	case *ast.PDot:
+		alias, aok := h.LHS.(*ast.PLeaf)
+		member, mok := h.RHS.(*ast.PLeaf)
+		if !aok || !mok {
+			return nil, "", false
+		}
+		def, _, found := scope.Lookup(alias.Value)
+		if !found || def.Kind != DefImport || def.Path == "" {
+			return nil, "", false
+		}
+		if si, ok := w.structsFor(def.Path)[member.Value]; ok {
+			return si, alias.Value + "." + member.Value, true
+		}
+	}
+	return nil, "", false
+}
+
+// checkConstruction flags an unknown field name in a `T.{ field value … }`
+// construction. The sugar lowers (at parse time) to a plain call
+// `(T 'field' value …)` with the field names as string literals, so this runs
+// in the generic-call path: when the head names a struct, every literal
+// field-name argument (the odd-position children) must be a declared field of
+// that struct — the runtime rejects an unknown key (see builtins/decl.go).
+func (w *walker) checkConstruction(scope *Scope, br *ast.PBranch) {
+	if br.Open != "(" || len(br.Children) < 2 {
+		return
+	}
+	si, name, ok := w.headStruct(scope, br.Children[0])
+	if !ok {
+		return
+	}
+	seen := map[string]bool{}
+	for i := 1; i < len(br.Children); i += 2 {
+		field, isStr := stringLiteral(br.Children[i])
+		if !isStr {
+			continue // dynamic/non-literal key (unusual) — leave to the runtime
+		}
+		switch {
+		case seen[field]:
+			w.emit(Diagnostic{
+				File:     w.file,
+				Span:     br.Children[i].GetSpan(),
+				Severity: SeverityWarning,
+				Code:     "duplicate-field",
+				Message:  fmt.Sprintf("field '%s' is set more than once; the last value wins", field),
+			})
+		case !fieldDeclared(si, field):
+			w.emit(Diagnostic{
+				File:     w.file,
+				Span:     br.Children[i].GetSpan(),
+				Severity: SeverityError,
+				Code:     "unknown-field",
+				Message:  fmt.Sprintf("'%s' has no field '%s'", name, field),
+			})
+		}
+		seen[field] = true
+	}
+}
+
+// fieldDeclared reports whether a struct declares the named field (comma-ok so a
+// field whose recorded span is the zero value still counts as present).
+func fieldDeclared(si *structInfo, field string) bool {
+	_, ok := si.Fields[field]
+	return ok
+}
+
+// checkUnreachable flags statements that follow an UNCONDITIONAL control-flow
+// exit — a bare `(return …)` / `(break)` / `(continue)` at the top of a
+// do-sequence — since they can never run. Reported once (Warning), at the
+// first dead statement. A `return` nested inside an `(if …)` arm is conditional
+// and does not trigger this.
+func (w *walker) checkUnreachable(body []ast.PNode) {
+	for i := 0; i < len(body)-1; i++ {
+		if kw, ok := unconditionalExit(body[i]); ok {
+			w.emit(Diagnostic{
+				File:     w.file,
+				Span:     body[i+1].GetSpan(),
+				Severity: SeverityWarning,
+				Code:     "unreachable-code",
+				Message:  fmt.Sprintf("unreachable code: the preceding '%s' always exits", kw),
+			})
+			return
+		}
+	}
+}
+
+// unconditionalExit reports whether n is a direct (return …)/(break)/(continue)
+// call, returning the head keyword.
+func unconditionalExit(n ast.PNode) (string, bool) {
+	br, ok := n.(*ast.PBranch)
+	if !ok || br.Open != "(" || len(br.Children) == 0 {
+		return "", false
+	}
+	h, ok := br.Children[0].(*ast.PLeaf)
+	if ok && (h.Value == "return" || h.Value == "break" || h.Value == "continue") {
+		return h.Value, true
+	}
+	return "", false
 }
 
 // checkForeach walks `(foreach name in collection body)`. The collection is
@@ -971,9 +1214,16 @@ func (w *walker) checkCondLoop(scope *Scope, br *ast.PBranch) {
 	w.checkExpr(scope, br.Children[3], true) // body
 }
 
-// checkFun walks (fun 'name '(args) '(body)) or (fun '(args) '(body)).
+// checkFun walks (fun name (args) body) or (fun (args) body).
 func (w *walker) checkFun(scope *Scope, br *ast.PBranch) {
 	d, _ := declOf(br)
+	// A type SIGNATURE is erased in Phase 1: its "param list" is a list of
+	// types and its "body" is the return type, so it must NOT be walked as an
+	// implementation (that would collect the types as params and reference-
+	// check them as code). See decls.go IsSig.
+	if d.IsSig {
+		return
+	}
 	if d.ArgList == nil || d.Body == nil {
 		return
 	}
@@ -996,9 +1246,15 @@ func (w *walker) checkProperty(scope *Scope, br *ast.PBranch) {
 	}
 }
 
-// checkMethod walks (method Owner 'name '(args) '(body)).
+// checkMethod walks (method Owner.name (args) body).
 func (w *walker) checkMethod(scope *Scope, br *ast.PBranch) {
 	d, _ := declOf(br)
+	// A method type SIGNATURE is erased in Phase 1 — its param list is types
+	// and its "body" is the return type, so it must not be walked as an
+	// implementation. See decls.go IsSig.
+	if d.IsSig {
+		return
+	}
 	if d.ArgList == nil || d.Body == nil {
 		return // too short to be a complete method
 	}
@@ -1012,6 +1268,85 @@ func (w *walker) checkMethod(scope *Scope, br *ast.PBranch) {
 		w.checkExpr(scope, br.Children[1], true)
 	}
 	w.walkFunctionBody(scope, d.ArgList, d.Body, d.Owner)
+}
+
+// checkStatic walks a `(static method Recv.Name (args) body)` or `(static
+// property Recv.Name get …)` declaration. The receiver names the owning struct
+// (a reference, checked). A static method's body sees the explicit params plus
+// `Self` (the receiver TYPE); a static property's getter/setter are anonymous
+// `(method Recv (Self) body)` forms walked the same way.
+func (w *walker) checkStatic(scope *Scope, br *ast.PBranch) {
+	d, ok := declOf(br)
+	if !ok {
+		return
+	}
+	if len(br.Children) >= 3 {
+		if dot, ok := br.Children[2].(*ast.PDot); ok {
+			w.checkExpr(scope, dot.LHS, true)
+		}
+	}
+	switch d.Sub {
+	case "method":
+		if d.ArgList != nil && d.Body != nil {
+			w.walkStaticBody(scope, d.ArgList, d.Body)
+		}
+	case "property":
+		for _, c := range br.Children[3:] {
+			if cb, ok := c.(*ast.PBranch); ok && cb.Open == "(" && headIdent(cb) == "method" && len(cb.Children) >= 4 {
+				w.walkFunctionBody(scope, cb.Children[2], cb.Children[3], "")
+			}
+		}
+	}
+}
+
+// walkStaticBody walks a static method body with the explicit params plus
+// `Self` (the receiver type) in scope. It reuses walkFunctionBody by prepending
+// a synthetic `Self` parameter, so `Self` and `Self.{ … }` resolve; no owner is
+// passed because a static method has no `self` instance.
+func (w *walker) walkStaticBody(scope *Scope, argList, body ast.PNode) {
+	items := []ast.PNode{&ast.PLeaf{Value: "Self", Span: argList.GetSpan()}}
+	if br, ok := argList.(*ast.PBranch); ok {
+		items = append(items, br.Children...)
+	}
+	augmented := &ast.PBranch{Open: "(", Close: ")", Children: items, Span: argList.GetSpan()}
+	w.walkFunctionBody(scope, augmented, body, "")
+}
+
+// checkTrait walks a `(Trait (extends…) member…)` form. The extends-list
+// entries are trait references (resolved); the member `(method Self.Name …)` /
+// `(property Self.Name get…)` forms are SIGNATURES whose `Self` receiver,
+// parameter names, and get/set keywords are declarations — not references — so
+// they are not reference-checked. A default body, when present, IS walked (with
+// `Self` as the receiver owner, so `self` is allowed and resolves loosely).
+func (w *walker) checkTrait(scope *Scope, br *ast.PBranch) {
+	extends, members := traitFormParts(br)
+	if extends != nil {
+		for _, ref := range extends.Children {
+			w.checkExpr(scope, ref, true)
+		}
+	}
+	for _, sub := range members {
+		sb, ok := sub.(*ast.PBranch)
+		if !ok || sb.Open != "(" {
+			continue
+		}
+		switch headIdent(sb) {
+		case "method":
+			if len(sb.Children) >= 4 { // (method Self.Name (args) body) — a default
+				w.walkFunctionBody(scope, sb.Children[2], sb.Children[3], "Self")
+			}
+		case "property":
+			// (property Self.Name get [impl] [set [impl]]) — each impl is a
+			// (method <recv> (args) body) default.
+			for _, c := range sb.Children[2:] {
+				if cb, ok := c.(*ast.PBranch); ok && cb.Open == "(" && headIdent(cb) == "method" && len(cb.Children) >= 4 {
+					w.walkFunctionBody(scope, cb.Children[2], cb.Children[3], "Self")
+				}
+			}
+			// `static` members are signature-only requirements whose `Self` receiver
+			// is a placeholder — not reference-checked, like the instance signatures.
+		}
+	}
 }
 
 // walkFunctionBody opens a body scope, defines the parameters in it,
@@ -1058,6 +1393,13 @@ func (w *walker) walkFunctionBody(parent *Scope, argList, body ast.PNode, owner 
 
 	bodyScope := newScope(parent)
 
+	// Stash the body scope so the gradual checker (a later pass) can type-check
+	// inside this body with the same params/locals and shapes the reference walk
+	// resolves against — keyed by the body node it'll look up.
+	if body != nil {
+		w.bodyScopes[body] = bodyScope
+	}
+
 	// This body's own scope is where reassignment may soundly retarget a
 	// shape (see checkAssign). Restore on exit so a nested fun/method
 	// hands control back to its enclosing body's scope.
@@ -1065,35 +1407,30 @@ func (w *walker) walkFunctionBody(parent *Scope, argList, body ast.PNode, owner 
 	w.bodyScope = bodyScope
 	defer func() { w.bodyScope = prevBody }()
 
-	// unquoteForm bridges the de-sigiling migration: an old-style `'(args)`
-	// list is unwrapped so its params are still defined here (the form itself
-	// is separately flagged with bad-form-shape). Without this, params of an
-	// un-migrated fun resolve to nothing and every body reference to them
-	// errors as unresolved.
-	if items, ok := declList(unquoteForm(argList)); ok {
+	if items, ok := declList(argList); ok {
 		for _, item := range items {
 			w.collectParam(bodyScope, item)
 		}
 	}
 
 	if owner != "" {
-		// The receiver param (conventionally the first, named `self`)
-		// is a privileged instance of the owner struct.
+		// Shape the receiver `self` from the owner type. A struct owner makes
+		// it a privileged instance; a built-in CONCRETE type (List/String/Map/
+		// Number/…) makes it that type's value — so `self.[i]` is a valid
+		// index and `self.Size` resolves, instead of being checked as
+		// struct-field access (a struct is not indexable). A composite/abstract
+		// owner (Collection, Unknown) stays Unknown. See selfShapeForOwner.
 		if d, ok := bodyScope.Defs["self"]; ok {
-			d.Shape = Shape{Kind: ShapeInstance, Owner: owner, Privileged: true}
+			d.Shape = selfShapeForOwner(parent, owner)
 			bodyScope.Defs["self"] = d
 		}
 	}
 
 	// The body is a single expression — at runtime BindFun evaluates it as one
-	// form. During the de-sigiling migration it may still be written in the
-	// legacy quoted style `'(...)`; unwrap that (the quote is syntax, not data)
-	// so the body's references are resolved rather than skipped — otherwise an
-	// imported alias used only inside an old-style body is falsely flagged
-	// unused. Walk it directly so special forms (do / if / for / =) get their
+	// form. Walk it directly so special forms (do / if / for / =) get their
 	// dispatch in checkBranch. A `(do …)` / `(identity do …)` body hoists its
 	// own statement scope in the "do" case.
-	w.checkExpr(bodyScope, unquoteForm(body), true)
+	w.checkExpr(bodyScope, body, true)
 }
 
 // collectParam handles a single entry in a parameter list.
@@ -1104,6 +1441,7 @@ func (w *walker) walkFunctionBody(parent *Scope, argList, body ast.PNode, owner 
 func (w *walker) collectParam(scope *Scope, item ast.PNode) {
 	if leaf, ok := item.(*ast.PLeaf); ok {
 		if looksLikeIdentifier(leaf.Value) {
+			w.flagCapitalizedParam(leaf)
 			w.define(scope, leaf.Value, DefParam, leaf.Span)
 		}
 		return
@@ -1111,23 +1449,43 @@ func (w *walker) collectParam(scope *Scope, item ast.PNode) {
 	if br, ok := item.(*ast.PBranch); ok && br.Open == "(" && len(br.Children) == 2 {
 		if h, ok := br.Children[0].(*ast.PLeaf); ok && (h.Value == "spread" || h.Value == "optional") {
 			if name, ok := br.Children[1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) {
+				w.flagCapitalizedParam(name)
 				w.define(scope, name.Value, DefParam, name.Span)
 			}
 		}
 	}
 }
 
-// checkAssign handles `(= LHS RHS)`. The LHS may be a quoted name
-// (variable assignment) or a dot chain (struct-field write); only the
-// quoted-name case can fire set-on-constant.
+// flagCapitalizedParam enforces the §3 casing split: a Capitalized identifier
+// used as an IMPLEMENTATION parameter name reads as a TYPE, so the form looks
+// like a signature whose params accidentally have a body — flag it. (Sigs
+// never reach here; checkFun/checkMethod skip them. The value literals
+// Nil/True/False are excluded.) Phase 2 of the inline type-signature plan.
+func (w *walker) flagCapitalizedParam(leaf *ast.PLeaf) {
+	v := leaf.Value
+	// Excluded: the value literals Nil/True/False, and `Self` — the
+	// conventional capitalized receiver name in (static) method getters like
+	// `(method Counter (Self) …)`, where Self is the receiver instance.
+	if v == "" || v[0] < 'A' || v[0] > 'Z' || v == "Nil" || v == "True" || v == "False" || v == "Self" {
+		return
+	}
+	w.emit(Diagnostic{
+		File:     w.file,
+		Span:     leaf.Span,
+		Severity: SeverityError,
+		Code:     "capitalized-param",
+		Message:  fmt.Sprintf("parameter '%s' is capitalized — a Capitalized name reads as a type; lowercase it, or (if you meant a type signature) drop the body", v),
+	})
+}
+
+// checkAssign handles `(= LHS RHS)`. The LHS may be a bare name (variable
+// assignment) or a dot chain (struct-field write); only the bare-name case
+// can fire set-on-constant.
 func (w *walker) checkAssign(scope *Scope, br *ast.PBranch) {
 	if len(br.Children) != 3 {
 		return
 	}
 	lhs, rhs := br.Children[1], br.Children[2]
-
-	// A leftover quoted target ('PI) is flagged; a bare name is correct.
-	w.checkUnquotedName(lhs, "assignment target")
 
 	// Bare-name LHS: `(= PI 4)`.
 	if name, span, ok := declIdent(lhs); ok {
@@ -1300,4 +1658,20 @@ func (w *walker) checkInterpChunks(scope *Scope, leaf *ast.PLeaf, body string, i
 			w.checkExpr(scope, form, inCode)
 		}
 	}
+}
+
+// arrayDictHint suggests the literal syntax when an unresolved identifier is
+// the name of the mangled array/dict constructor — `slice` / `map`. Those are
+// no longer callable builtins (the `[…]` and `{…}` literals are the only
+// surface forms), so a bare `(slice …)` / `(map …)` resolves to nothing; the
+// hint redirects the user to the literal instead of a bare "not defined".
+// Returns "" for any other name.
+func arrayDictHint(name string) string {
+	switch name {
+	case "slice":
+		return " (arrays are written with brackets: [a b c])"
+	case "map":
+		return " (dicts are written with braces: {k v})"
+	}
+	return ""
 }

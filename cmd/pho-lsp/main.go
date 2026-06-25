@@ -6,7 +6,7 @@
 // Currently implements:
 //
 //	initialize / initialized
-//	textDocument/didOpen, didChange, didClose
+//	textDocument/didOpen, didChange, didClose, didSave
 //	textDocument/publishDiagnostics
 //	textDocument/semanticTokens/full
 //	textDocument/completion          (scope names + dot members)
@@ -51,7 +51,17 @@ func main() {
 // document's text, keyed by URI. Linting runs on the in-memory text,
 // not the on-disk file, so unsaved edits get diagnostics.
 type server struct {
-	t       *transport
+	t *transport
+
+	// mu guards buffers. Like the transport's writeMu it never actually
+	// contends today: run() does all reading, dispatching, and replying on one
+	// goroutine (there is no `go` anywhere in this package), and the macro-
+	// library reload (handleDidSave → republishAll) runs inline on it too. The
+	// lock is future-proofing. IMPORTANT: that single-threaded dispatch is also
+	// what makes pkg/annot's process-global evaluator safe — publish() reads and
+	// mutates it while handleDidSave reassigns it, with no locking inside
+	// pkg/annot — so any move to concurrent handlers must serialize annotation
+	// evaluation, not merely lock `buffers`.
 	mu      sync.Mutex
 	buffers map[string]string
 
@@ -60,7 +70,13 @@ type server struct {
 	// folder, else rootUri/rootPath, else the process cwd).
 	workspaceRoot string
 
-	shutdown bool
+	// initialized is set once `initialize` has been answered; shutdown once
+	// `shutdown` has. The read/dispatch loop is single-threaded, so these
+	// need no lock. They gate the lifecycle: requests before initialize get
+	// ServerNotInitialized, a second initialize gets InvalidRequest, and
+	// requests after shutdown get InvalidRequest.
+	initialized bool
+	shutdown    bool
 }
 
 func newServer(in io.Reader, out io.Writer) *server {
@@ -176,6 +192,17 @@ func (s *server) dispatch(msg *rawMessage) {
 		return
 	}
 
+	// Before `initialize`, the spec requires every request except
+	// `initialize` itself (and `exit`) be answered with ServerNotInitialized;
+	// stray notifications are dropped. This stops a racing client from getting
+	// real answers before the handshake completes.
+	if !s.initialized && msg.Method != "initialize" && msg.Method != "exit" {
+		if len(msg.ID) > 0 {
+			_ = s.t.replyError(msg.ID, codeServerNotInitialized, "server not initialized")
+		}
+		return
+	}
+
 	// After `shutdown`, the spec requires every further request (except
 	// `exit`) be answered with InvalidRequest; lingering notifications are
 	// dropped. Without this the server would keep servicing requests as if
@@ -239,6 +266,12 @@ func (s *server) dispatch(msg *rawMessage) {
 // ----------------------------------------------------------------------
 
 func (s *server) handleInitialize(msg *rawMessage) {
+	// A second initialize is an InvalidRequest per the lifecycle spec.
+	if s.initialized {
+		_ = s.t.replyError(msg.ID, codeInvalidRequest, "server already initialized")
+		return
+	}
+
 	var p initializeParams
 	if err := json.Unmarshal(msg.Params, &p); err == nil {
 		switch {
@@ -255,7 +288,7 @@ func (s *server) handleInitialize(msg *rawMessage) {
 	}
 	logf("workspace root: %q", s.workspaceRoot)
 
-	// The parse-time annotation macros (so `--@ (sig! ...)` resolves rather
+	// The parse-time annotation macros (so `--@ (~sig ...)` resolves rather
 	// than reporting "macro not defined") are not loaded here. The linter
 	// loads them lazily the first time it analyzes a file that carries
 	// annotations, resolved relative to that file — which is more robust than
@@ -295,6 +328,7 @@ func (s *server) handleInitialize(msg *rawMessage) {
 		},
 		ServerInfo: &serverInfo{Name: "pho-lsp", Version: "0.2.0"},
 	}
+	s.initialized = true
 	_ = s.t.reply(msg.ID, result)
 }
 

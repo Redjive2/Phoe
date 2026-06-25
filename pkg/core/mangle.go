@@ -25,9 +25,20 @@ var (
 	Strinterp = "strinterp" + ManglerSuffix
 	Strcoerce = "strcoerce" + ManglerSuffix
 
-	// Macrocall backs the `(name! arg ...)` macro-call sugar: the lower
+	// Macrocall backs the `(~name arg ...)` macro-call sugar: the lower
 	// pass rewrites it to (Macrocall name 'arg ...), which resolves name to
 	// a macro, calls it with the quoted args, and resumes the result.
 	// Mangled like the others so user code can't invoke it directly.
 	Macrocall = "macrocall" + ManglerSuffix
+
+	// Slice and Map are the runtime array / dict constructors behind the
+	// `[a b c]` and `{k v}` literal sugar. The lower pass rewrites a bracket
+	// literal to (Slice …) and a brace literal to (Map …), and the quote
+	// round-trip (ListifyVal / TreeifyVal / Derepr) uses Slice as the head of
+	// the array-as-data form. Mangling the names hides them from user code —
+	// the literal syntax is the only way to build an array or dict, exactly as
+	// `.` is the only way to reach the Dot accessor. Inspect renders them back
+	// to `[…]` / `{…}`.
+	Slice = "slice" + ManglerSuffix
+	Map   = "map" + ManglerSuffix
 )

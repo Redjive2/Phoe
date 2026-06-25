@@ -13,6 +13,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"pho/pkg/lint"
 )
@@ -42,6 +43,14 @@ func main() {
 				continue
 			}
 		} else {
+			// An explicitly-named file must actually be Pho source; otherwise
+			// analyzing it as Pho is meaningless and a clean exit 0 is
+			// misleading. (Directories are scanned by extension already.)
+			if ext := filepath.Ext(arg); ext != ".pho" && ext != ".phl" {
+				fmt.Fprintf(os.Stderr, "pho-lint: %s: not a .pho or .phl file\n", arg)
+				exitCode = 2
+				continue
+			}
 			src, readErr := os.ReadFile(arg)
 			if readErr != nil {
 				fmt.Fprintf(os.Stderr, "pho-lint: %s: %v\n", arg, readErr)

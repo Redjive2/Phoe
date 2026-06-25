@@ -1,0 +1,34 @@
+# Go binaries built into the repo (the interpreter + the tools). These are
+# build artifacts, not source — `go build`/`go install` regenerates them.
+/pho
+/pho-lsp
+/pho-lint
+/ifmigrate
+/unquote
+
+# ...and the same binaries if built in place inside their cmd/ or tooling/ dir
+cmd/pho-lsp/pho-lsp
+cmd/pho-lint/pho-lint
+tooling/ifmigrate/ifmigrate
+
+# Go test/coverage output
+*.test
+*.out
+
+# tree-sitter grammar C build outputs (the parser source IS committed; the
+# compiled library is not)
+tooling/tree-sitter-pho/build/
+tooling/tree-sitter-pho/*.o
+tooling/tree-sitter-pho/*.a
+tooling/tree-sitter-pho/*.so
+tooling/tree-sitter-pho/*.dylib
+
+# Zed extension Rust build output
+tooling/zed-pho/target/
+
+# Editor / OS noise
+.DS_Store
+*.log
+
+# Zed-managed grammar clone cache (nested .git inside the worktree)
+tooling/zed-pho/grammars/

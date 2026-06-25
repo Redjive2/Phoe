@@ -44,7 +44,7 @@ func noteOverlay(calls *int) map[string]core.StackEntry {
 func TestEvaluateAttaches(t *testing.T) {
 	calls := 0
 	ev := New(noteOverlay(&calls))
-	res := ev.Evaluate(`(note "greeting" "hi")`, parseForm(t, `(note "greeting" "hi")`))
+	res := ev.Evaluate(`(note 'greeting' 'hi')`, parseForm(t, `(note 'greeting' 'hi')`))
 	if len(res.Diags) != 0 {
 		t.Fatalf("unexpected diags: %v", res.Diags)
 	}
@@ -56,10 +56,10 @@ func TestEvaluateAttaches(t *testing.T) {
 	}
 }
 
-// prepare strips the macro `resume` wrapper: `(sig! ...)` lowers to
+// prepare strips the macro `resume` wrapper: `(~sig ...)` lowers to
 // `(resume (sig ...))`, and we must evaluate the inner `(sig ...)` directly.
 func TestPrepareUnwrapsResume(t *testing.T) {
-	node := prepare(parseForm(t, "(sig! Num Num)"))
+	node := prepare(parseForm(t, "(~sig Num Num)"))
 	br, ok := core.AsBranch(node)
 	if !ok {
 		t.Fatalf("expected a branch after prepare, got %T", node)
@@ -70,13 +70,13 @@ func TestPrepareUnwrapsResume(t *testing.T) {
 	}
 }
 
-// End-to-end of the bang path: `(note! foo bar)` lowers to
+// End-to-end of the bang path: `(~note foo bar)` lowers to
 // `(resume (note 'foo 'bar))`; after unwrap the macro runs exactly once with
 // its arguments quoted to strings, and attaches them.
 func TestEvaluateMacroCallUnwrapped(t *testing.T) {
 	calls := 0
 	ev := New(noteOverlay(&calls))
-	res := ev.Evaluate(`(note! foo bar)`, parseForm(t, `(note! foo bar)`))
+	res := ev.Evaluate(`(~note foo bar)`, parseForm(t, `(~note foo bar)`))
 	if len(res.Diags) != 0 {
 		t.Fatalf("unexpected diags: %v", res.Diags)
 	}
@@ -119,7 +119,7 @@ func TestRecoverGuardReturn(t *testing.T) {
 func TestMemoization(t *testing.T) {
 	calls := 0
 	ev := New(noteOverlay(&calls))
-	const raw = `(note "k" "v")`
+	const raw = `(note 'k' 'v')`
 	first := ev.Evaluate(raw, parseForm(t, raw))
 	second := ev.Evaluate(raw, parseForm(t, raw))
 	if calls != 1 {

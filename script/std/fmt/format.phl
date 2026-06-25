@@ -1,4 +1,4 @@
-(goimport ("stdDependencies" dep))
+(goimport ('stdDependencies' dep))
 
 (fun Format ((spread args))
     (dep.FmtSprint (spread args))

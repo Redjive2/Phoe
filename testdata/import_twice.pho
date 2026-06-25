@@ -1,4 +1,4 @@
 -- imports the same parse-broken package twice: its parse diagnostics
 -- must render exactly once (negative cache), not once per import
-(import ("badlib" a))
-(import ("badlib" b))
+(import ('badlib' a))
+(import ('badlib' b))

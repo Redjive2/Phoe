@@ -5,22 +5,9 @@ import (
 	"pho/pkg/syntax"
 )
 
-// macroName recovers the macro's name from the lowered `(head 'args)`
-// form `resume` is handed — i.e. the head identifier of `(name! ...)`.
-// Returns "" when `resume` was invoked directly on a value (not via macro
-// sugar), so the diagnostic can label the expansion generically.
-func macroName(arg core.Node) string {
-	if br, ok := core.AsBranch(arg); ok && len(br) > 0 {
-		if lf, ok := core.AsLeaf(br[0]); ok {
-			return string(lf)
-		}
-	}
-	return ""
-}
-
 // resumeCode treeifies a code value, renders it with spans for
 // expansion-aware diagnostics, and evaluates it in a fresh (hygienic) scope.
-// Shared by the `resume` builtin and the Macrocall sugar.
+// Used by the Macrocall sugar to evaluate the code a macro body returns.
 //
 // Generated code has no source of its own, so an error inside it would
 // otherwise only show the macro call site. SynthSpans renders the generated
@@ -37,8 +24,8 @@ func resumeCode(ctx core.Context, name string, code core.Value) core.Value {
 	return core.BindCallback(wrapped)(ectx, nil)
 }
 
-// metaBuiltins returns the code-as-data and reflection builtins:
-// pause, resume, inspect, and the spread / optional markers.
+// metaBuiltins returns the reflection / code-as-data builtins:
+// inspect, identity, the Macrocall sugar, and the spread / optional markers.
 func metaBuiltins() map[string]core.StackEntry {
 	return map[string]core.StackEntry{
 		// noop; only used as a marker for the interpreter
@@ -52,19 +39,11 @@ func metaBuiltins() map[string]core.StackEntry {
 			return core.TvNil
 		}),
 
-		"resume": global(func(ctx core.Context, argv []core.Node) core.Value {
-			if len(argv) != 1 {
-				return ctx.Errorf(core.ErrArity, "'resume' requires exactly 1 argument; got %d", len(argv))
-			}
-			return resumeCode(ctx, macroName(argv[0]), argv[0].Evaluate(ctx))
-		}),
-
-		// Macrocall backs the `(name! arg ...)` macro-call sugar: it resolves
+		// Macrocall backs the `(~name arg ...)` macro-call sugar: it resolves
 		// name to a macro, runs the macro body with the QUOTED argument nodes
-		// (argv[1:]) — exactly as the old `(resume (name 'a 'b))` did — and
-		// resumes the code the body returns. Refusing anything that isn't a
-		// macro is what gives the `!` syntax meaning: a plain function called
-		// with `!` lands here and errors.
+		// (argv[1:]) and resumes the code the body returns. Refusing anything
+		// that isn't a macro is what gives the `~` prefix its meaning: a plain
+		// function called with `~` lands here and errors.
 		core.Macrocall: global(func(ctx core.Context, argv []core.Node) core.Value {
 			if len(argv) < 1 {
 				return ctx.Errorf(core.ErrArity, "macro call is missing its macro")
@@ -73,16 +52,9 @@ func metaBuiltins() map[string]core.StackEntry {
 			fn, ok := macroVal.Val.(core.Fun)
 			if macroVal.Kind != core.KindMacro || !ok {
 				return ctx.Errorf(core.ErrNotCallable,
-					"'%s' is not a macro (it's a %s) — call it without the '!'", core.Inspect(argv[0]), macroVal.Kind)
+					"'%s' is not a macro (it's a %s) — call it without the '~' prefix", core.Inspect(argv[0]), macroVal.Kind)
 			}
 			return resumeCode(ctx, core.Inspect(argv[0]), fn(ctx, argv[1:]))
-		}),
-
-		"pause": global(func(ctx core.Context, argv []core.Node) core.Value {
-			if len(argv) != 1 {
-				return ctx.Errorf(core.ErrArity, "'pause' requires exactly 1 argument; got %d", len(argv))
-			}
-			return syntax.ListifyVal(argv[0].Evaluate(ctx))
 		}),
 
 		"inspect": global(func(ctx core.Context, argv []core.Node) core.Value {

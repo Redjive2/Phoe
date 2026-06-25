@@ -2,23 +2,36 @@
 --
 -- Universal methods on `Unknown` (the top type): because every value is a
 -- subtype of Unknown, these resolve on values of any type. Pure Pho, built on
--- `typeof`, `==`, and `foreach`. See Doc/PlanV1/ObjectModel.md §4.5 / §4.6.
+-- `foreach`. See Doc/PlanV1/ObjectModel.md.
 --
--- NOTE: the `--@ (methodsig! …)` signature annotations from the plan are
--- omitted until `methodsig!` lands in script/std/annot/annot.phl (GradualTyping
--- track); they attach additively then, with no change to these bodies.
-
--- True iff `self`'s type is exactly `type`.
---
--- Ships on `==` (exact-nominal membership). The gradual type system upgrades
--- this to `(subtype? (typeof self) type)` once `subtype?` is wired through, so
--- union/composite membership — e.g. (1.Is? (Or Number String)) — works.
-(method Unknown.Is? (self type) do
-    (== (typeof self) type))
+-- NB: the membership test `(self.Is? type)` is itself a universal method, but a
+-- Go-native one registered in builtinmod.go (there is deliberately no `Is?`
+-- builtin, so `x.Is? T` is the only way to test a type) — not defined here.
 
 -- True iff `self` is an element of `collection` (a list or string, or one of a
 -- dict's keys — whatever `foreach` iterates).
 (method Unknown.In? (self collection) do
     (foreach value in collection
-        (if (== self value) then (return True)))
-    False)
+        (if (== self value) then 
+            (return True)
+        )
+    )
+    
+    False
+)
+
+(method Unknown.Pipe (self (spread steps)) do
+    (var acc self)
+
+    (foreach step in steps
+        (= acc (step acc))
+    )
+    
+    acc
+)
+
+-- (1.To String) <-> (String.From 1)
+--@ (~methodsig i ((From i) o) -> o)
+(method Unknown.To (self type) 
+    (type.From self)
+)

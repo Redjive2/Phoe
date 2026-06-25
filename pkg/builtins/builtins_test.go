@@ -50,27 +50,27 @@ func TestInterpolationEndToEnd(t *testing.T) {
 	}{
 		{
 			"bare name",
-			"(const who \"World\")\n\"hi %who\"",
+			"(const who 'World')\n'hi %who'",
 			"hi World",
 		},
 		{
 			"number coercion",
-			"(const n 42)\n\"n=%n\"",
+			"(const n 42)\n'n=%n'",
 			"n=42",
 		},
 		{
 			"paren expression",
-			"(const xs [1 2 3])\n\"len=%(len xs)\"",
+			"(const xs [1 2 3])\n'len=%(+ 0 xs.Size)'",
 			"len=3",
 		},
 		{
 			"two interpolations and a literal tail",
-			"(const a 1 b 2)\n\"%a+%b=\"",
+			"(const a 1 b 2)\n'%a+%b='",
 			"1+2=",
 		},
 		{
 			"escaped percent stays literal",
-			"\"100\\% sure\"",
+			"'100\\% sure'",
 			"100% sure",
 		},
 	}
@@ -137,7 +137,7 @@ func TestBindFunRecoversReturn(t *testing.T) {
 	ctx := core.Context{Env: &env}
 
 	// (return "hi") with one arg.
-	body := core.Branch{core.Leaf("return"), core.Leaf(`"hi"`)}
+	body := core.Branch{core.Leaf("return"), core.Leaf(`'hi'`)}
 
 	fn := core.BindFun("f", body, []string{}, ctx)
 	result := fn(ctx, nil)
@@ -209,17 +209,17 @@ func TestInterpolationInFunBody(t *testing.T) {
 	}{
 		{
 			"quoted-string fun body",
-			"(fun greet (who) \"hi %who\")\n(greet \"World\")",
+			"(fun greet (who) 'hi %who')\n(greet 'World')",
 			"hi World",
 		},
 		{
 			"interp inside (do ...) body",
-			"(fun tag (n) (identity do (var s \"n=%n\") s))\n(tag 7)",
+			"(fun tag (n) (identity do (var s 'n=%n') s))\n(tag 7)",
 			"n=7",
 		},
 		{
 			"paren expr in fun body",
-			"(fun count (xs) \"len=%(len xs)\")\n(count [1 2 3 4])",
+			"(fun count (xs) 'len=%(+ 0 xs.Size)')\n(count [1 2 3 4])",
 			"len=4",
 		},
 		// NOTE: method-body interpolation uses the exact same quoted-body

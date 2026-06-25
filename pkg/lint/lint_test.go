@@ -43,7 +43,7 @@ func TestPackageScopeResolvesCrossFile(t *testing.T) {
 
 	// Sibling file: defines `helper`, imports `io` as `io`.
 	sibling := filepath.Join(dir, "lib.phl")
-	if err := os.WriteFile(sibling, []byte(`(import "std/io")
+	if err := os.WriteFile(sibling, []byte(`(import 'std/io')
 (const helper 42)
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -76,15 +76,15 @@ func TestPackageScopeResolvesCrossFile(t *testing.T) {
 // ----------------------------------------------------------------------
 
 func TestUnusedImport(t *testing.T) {
-	src := []byte(`(import "std/io")
-(io.PrintLine "hi")
+	src := []byte(`(import 'std/io')
+(io.PrintLine 'hi')
 `)
 	used := AnalyzeFile("test.pho", src)
 	if hasDiag(used, "unused-import") {
 		t.Errorf("did not expect unused-import on used import, got %#v", used)
 	}
 
-	src = []byte(`(import "std/io")
+	src = []byte(`(import 'std/io')
 (fun main () (identity do))
 `)
 	unused := AnalyzeFile("test.pho", src)
@@ -130,10 +130,10 @@ func TestArityOnSpecialForms(t *testing.T) {
 		name string
 		src  string
 	}{
-		{"fun-too-few", `(fun 'foo)`},
-		{"fun-too-many", `(fun 'foo '(x) '(body) extra)`},
+		{"fun-too-few", `(fun foo)`},
+		{"fun-too-many", `(fun foo (x) (body) extra)`},
 		{"struct-too-few", `(struct)`},
-		{"= without value", `(= 'x)`},
+		{"= without value", `(= x)`},
 		{"do-empty", `(do)`},
 		{"var-odd-args", `(var a 1 b)`},
 	}
@@ -155,24 +155,14 @@ func TestSigilShape(t *testing.T) {
 		t.Errorf("keyword-form if should be valid, got %#v", d)
 	}
 
-	// A leftover quoted name or quoted arg-list is the migration error now.
-	d = AnalyzeFile("test.pho", []byte(`(fun 'foo (x) x)`))
-	if !hasDiag(d, "bad-form-shape") {
-		t.Errorf("expected bad-form-shape on quoted fun name, got %#v", d)
-	}
-	d = AnalyzeFile("test.pho", []byte(`(fun foo '(x) x)`))
-	if !hasDiag(d, "bad-form-shape") {
-		t.Errorf("expected bad-form-shape on quoted arg list, got %#v", d)
-	}
-
-	// A bare var name is correct; a leftover quoted name is flagged.
+	// Post-cutover the declaration forms take BARE names and arg-lists. A
+	// leftover `'` quote is no longer recognized at all — it's a parse-level
+	// "unrecognized character" (covered by the lexer tests), not a lint
+	// diagnostic — so here the linter only needs to confirm the bare forms
+	// stay clean.
 	d = AnalyzeFile("test.pho", []byte(`(var x 5)`))
-	if hasDiag(d, "quoted-name") || hasDiag(d, "bad-form-shape") {
+	if hasDiag(d, "bad-form-shape") {
 		t.Errorf("bare var name should be clean, got %#v", d)
-	}
-	d = AnalyzeFile("test.pho", []byte(`(var 'x 5)`))
-	if !hasDiag(d, "quoted-name") {
-		t.Errorf("expected quoted-name on quoted var name, got %#v", d)
 	}
 
 	// Top-level `var` is allowed in both .pho scripts and .phl libraries
@@ -195,15 +185,14 @@ func TestSigilShape(t *testing.T) {
 		t.Errorf("top-level macro should be allowed in .phl libraries, got %#v", d)
 	}
 
-	// fun/method bodies accept any quoted form, not just `'(...)`:
-	// `(fun '(value) 'value)` is the identity function — perfectly
-	// valid and the LSP must not flag it.
+	// A fun with a bare param-list and a bare body — the identity function
+	// `(fun (value) value)` — is well-formed and the LSP must not flag it.
 	d = AnalyzeFile("test.pho", []byte(`(fun (value) value)`))
 	if hasDiag(d, "bad-form-shape") {
-		t.Errorf("did not expect bad-form-shape on quoted-leaf fun body, got %#v", d)
+		t.Errorf("did not expect bad-form-shape on bare-leaf fun body, got %#v", d)
 	}
 
-	// `=` accepts bare ident, 'ident, and dot — the user's mixed
+	// `=` accepts a bare ident or a dot target — the user's mixed
 	// style across the cards/ scripts must keep linting clean.
 	d = AnalyzeFile("test.pho", []byte(`(fun main () (identity do
   (var x 0)
@@ -285,8 +274,8 @@ func TestControlFlowScoping(t *testing.T) {
 // `%(call args)` fires unresolved-identifier. Resolved names stay
 // clean.
 func TestInterpolationReferenceChecks(t *testing.T) {
-	d := AnalyzeFile("test.pho", []byte(`(const name "ok")
-(io.PrintLine "hi %name")`))
+	d := AnalyzeFile("test.pho", []byte(`(const name 'ok')
+(io.PrintLine 'hi %name')`))
 	if hasDiag(d, "unresolved-identifier") {
 		// `name` is defined, `io` resolves via the import surface only,
 		// so io may or may not be defined here — but a real test
@@ -299,24 +288,24 @@ func TestInterpolationReferenceChecks(t *testing.T) {
 	}
 
 	// Unresolved bare-name interpolation.
-	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine "hi %who")`))
+	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine 'hi %who')`))
 	if !hasDiagWithName(d, "unresolved-identifier", "who") {
 		t.Errorf("expected unresolved-identifier 'who' inside %%who, got %#v", d)
 	}
 
 	// Unresolved name inside %(call ...).
-	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine "got %(len missing)")`))
+	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine 'got %(len missing)')`))
 	if !hasDiagWithName(d, "unresolved-identifier", "missing") {
 		t.Errorf("expected unresolved-identifier 'missing' inside %%(len missing), got %#v", d)
 	}
 
 	// Bad interpolation shape — trailing %, empty %(), %X for X not a
 	// valid start — surfaces as bad-interpolation.
-	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine "trailing %")`))
+	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine 'trailing %')`))
 	if !hasDiag(d, "bad-interpolation") {
 		t.Errorf("expected bad-interpolation on trailing %%, got %#v", d)
 	}
-	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine "empty %()")`))
+	d = AnalyzeFile("test.pho", []byte(`(io.PrintLine 'empty %()')`))
 	if !hasDiag(d, "bad-interpolation") {
 		t.Errorf("expected bad-interpolation on empty %%(), got %#v", d)
 	}
@@ -353,7 +342,7 @@ func TestUnknownExport(t *testing.T) {
 	//   mathx.Cube       — typo'd version of the lowercase helper; not exported
 	//   mathx.cube       — exists but lowercase, not exported
 	target := filepath.Join(dir, "main.pho")
-	src := []byte(`(import "` + pkgDir + `")
+	src := []byte(`(import '` + pkgDir + `')
 (mathx.Square 3)
 (mathx.Cube 3)
 (mathx.cube 3)
@@ -380,7 +369,7 @@ func TestUnknownExport(t *testing.T) {
 // flagging every dot access as "package not found" would drown out
 // the real signal.
 func TestUnknownExportSilentOnUnresolvableImport(t *testing.T) {
-	src := []byte(`(import "definitely/does/not/exist")
+	src := []byte(`(import 'definitely/does/not/exist')
 (exist.Foo)
 `)
 	diags := AnalyzeFile("test.pho", src)
@@ -392,7 +381,7 @@ func TestUnknownExportSilentOnUnresolvableImport(t *testing.T) {
 // goimport aliases have no Pho-side package to read; the check
 // silently skips them.
 func TestUnknownExportSkipsGoImport(t *testing.T) {
-	src := []byte(`(goimport ("stdDependencies" dep))
+	src := []byte(`(goimport ('stdDependencies' dep))
 (dep.AnythingAtAll)
 `)
 	diags := AnalyzeFile("test.pho", src)
@@ -402,7 +391,7 @@ func TestUnknownExportSkipsGoImport(t *testing.T) {
 }
 
 func TestSetOnImportAlias(t *testing.T) {
-	d := AnalyzeFile("test.pho", []byte(`(import "std/io")
+	d := AnalyzeFile("test.pho", []byte(`(import 'std/io')
 (fun main () (= io 5))
 `))
 	if !hasDiag(d, "set-on-constant") {
@@ -485,7 +474,7 @@ func TestEmptyParenInPhl(t *testing.T) {
 			t.Fatalf("AnalyzeFile panicked on empty (): %v", r)
 		}
 	}()
-	src := []byte("(import \"std/io\")\n()\n")
+	src := []byte("(import 'std/io')\n()\n")
 	diags := AnalyzeFile("test.phl", src)
 	// Expect the empty form to be flagged as a side-effect.
 	gotEmpty := false

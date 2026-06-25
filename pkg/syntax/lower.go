@@ -228,8 +228,8 @@ func lowerNode(p ast.PNode) core.Node {
 		// String literals with `%name` / `%(expr)` interpolation
 		// markers get desugared to a (Strinterp ...) call. Plain
 		// strings and non-string leaves fall through unchanged.
-		if len(n.Value) >= 2 && n.Value[0] == '"' && n.Value[len(n.Value)-1] == '"' {
-			body := n.Value[1 : len(n.Value)-1]
+		if core.IsStrLit(n.Value) {
+			body := core.StrLitBody(n.Value)
 			if HasInterpolation(body) {
 				return spanned(loweredInterp(body, n.Span), n.Span)
 			}
@@ -241,15 +241,31 @@ func lowerNode(p ast.PNode) core.Node {
 		// by the legacy lexer; preserve that shape here.
 		switch n.Open {
 		case "[":
+			// `[…]` is a list literal, EXCEPT when it carries `->` separators —
+			// then it's a map literal `[k -> v  …]` (the new map syntax; the old
+			// `{k v}` form still lowers to (map …) below during the migration).
+			// The arrows are dropped, leaving alternating key/value args, so
+			// `[k -> v]` → (map k v) and the empty map `[->]` → (map).
+			if bracketIsMap(n.Children) {
+				out := make(core.Branch, 0, len(n.Children)+1)
+				out = append(out, core.Leaf(core.Map))
+				for _, c := range n.Children {
+					if lf, ok := c.(*ast.PLeaf); ok && lf.Value == "->" {
+						continue
+					}
+					out = append(out, lowerNode(c))
+				}
+				return spanned(out, n.Span)
+			}
 			out := make(core.Branch, 0, len(n.Children)+1)
-			out = append(out, core.Leaf("slice"))
+			out = append(out, core.Leaf(core.Slice))
 			for _, c := range n.Children {
 				out = append(out, lowerNode(c))
 			}
 			return spanned(out, n.Span)
 		case "{":
 			out := make(core.Branch, 0, len(n.Children)+1)
-			out = append(out, core.Leaf("map"))
+			out = append(out, core.Leaf(core.Map))
 			for _, c := range n.Children {
 				out = append(out, lowerNode(c))
 			}
@@ -266,14 +282,11 @@ func lowerNode(p ast.PNode) core.Node {
 		}
 
 	case *ast.PSigil:
-		// 'expr → quoted form (leaf wraps in literal "x"; branch wraps
-		// children in (slice ...)).
 		// &expr → (block <quoted-expr>) — the `block` builtin makes it a
 		// one-argument function whose implicit parameter is `it`. (`&do …` is
-		// rewritten to `&(do …)` by splitDoForm before this point.)
+		// rewritten to `&(do …)` by splitDoForm before this point.) The `'`
+		// quote sigil was retired; the only remaining sigil is `&`.
 		switch n.Sigil {
-		case "'":
-			return listifyP(n.Inner)
 		case "&":
 			return spanned(core.Branch{core.Leaf("block"), listifyP(n.Inner)}, n.Span)
 		}
@@ -285,7 +298,7 @@ func lowerNode(p ast.PNode) core.Node {
 		return spanned(core.Branch{core.Leaf(core.Dot), lowerNode(n.LHS), lowerNode(n.RHS)}, n.Span)
 
 	case *ast.PMacroCall:
-		// (head! a b ...) → (Macrocall head 'a 'b ...): the macro's arguments
+		// (~head a b ...) → (Macrocall head 'a 'b ...): the macro's arguments
 		// are quoted, and the Macrocall builtin resolves head to a macro,
 		// invokes it with the quoted args, and resumes the result. head stays
 		// a bare reference (not quoted) so Macrocall can evaluate it to the
@@ -301,10 +314,21 @@ func lowerNode(p ast.PNode) core.Node {
 	return nil
 }
 
+// bracketIsMap reports whether a `[…]` literal carries `->` separators, which
+// distinguishes a map literal `[k -> v]` from a plain list `[a b c]`.
+func bracketIsMap(children []ast.PNode) bool {
+	for _, c := range children {
+		if lf, ok := c.(*ast.PLeaf); ok && lf.Value == "->" {
+			return true
+		}
+	}
+	return false
+}
+
 // listifyP is the PNode-aware ListifyTree: produces the AST shape that
 // the legacy quote system would have produced for the given subtree.
 //
-//	leaf x  → Leaf("\"x\"")              -- the leaf wrapped in literal "
+//	leaf x  → Leaf("'x'")               -- the leaf wrapped in literal '
 //	(...)   → (slice listify(c1) ...)    -- children re-listified
 //	[...]   → lower then re-listify      -- legacy collapses [ to (slice ..
 //	                                         BEFORE listification, so we
@@ -327,13 +351,13 @@ func listifyP(p ast.PNode) core.Node {
 		// Lower it to the (Strinterp ...) call, then listify THAT, so
 		// once the quoted body is Derepr'd and evaluated the
 		// interpolation fires. Mirrors the PLeaf case in lowerNode.
-		if len(n.Value) >= 2 && n.Value[0] == '"' && n.Value[len(n.Value)-1] == '"' {
-			body := n.Value[1 : len(n.Value)-1]
+		if core.IsStrLit(n.Value) {
+			body := core.StrLitBody(n.Value)
 			if HasInterpolation(body) {
 				return listifyNode(spanned(loweredInterp(body, n.Span), n.Span))
 			}
 		}
-		return core.Leaf("\"" + n.Value + "\"")
+		return core.Leaf("'" + n.Value + "'")
 	case *ast.PBranch:
 		if n.Open != "(" {
 			return listifyNode(lowerNode(n))
@@ -343,7 +367,7 @@ func listifyP(p ast.PNode) core.Node {
 		// runs correctly once Derepr'd and evaluated.
 		children := splitDoForm(n.Children, core.Do)
 		out := make(core.Branch, 0, len(children)+1)
-		out = append(out, core.Leaf("slice"))
+		out = append(out, core.Leaf(core.Slice))
 		for _, c := range children {
 			out = append(out, listifyP(c))
 		}
@@ -364,11 +388,11 @@ func listifyNode(t core.Node) core.Node {
 		return core.WithSpan(listifyNode(core.Strip(t)), sp)
 	}
 	if lf, ok := t.(core.Leaf); ok {
-		return core.Leaf("\"" + lf + "\"")
+		return core.Leaf("'" + lf + "'")
 	}
 	branch := t.(core.Branch)
 	out := make(core.Branch, len(branch)+1)
-	out[0] = core.Leaf("slice")
+	out[0] = core.Leaf(core.Slice)
 	for i, c := range branch {
 		out[i+1] = listifyNode(c)
 	}

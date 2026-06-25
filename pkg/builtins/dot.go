@@ -31,6 +31,16 @@ func dotBuiltins() map[string]core.StackEntry {
 
 			col := argv[0].Evaluate(ctx)
 
+			// A bare-identifier RHS is a member access (method/property) on the
+			// value, resolved import-scoped (see core/member.go). Kinds with their
+			// own identifier-RHS handling — struct instances (fields), packages —
+			// fall through to the switch. A number keeps the fractional-decimal
+			// hack only for a NUMERIC RHS; an identifier RHS (e.g. 1.Double) is a
+			// member access.
+			if name, ok := memberName(argv[1]); ok && wantsMemberLookup(col.Kind) {
+				return memberAccess(ctx, col, name)
+			}
+
 			switch col.Kind {
 			case core.KindDict:
 				dict := *col.Val.(*map[core.Value]core.Value)
@@ -161,7 +171,11 @@ func dotBuiltins() map[string]core.StackEntry {
 
 					method, found := inst.Struct.Methods[ident]
 					if !found {
-						return ctx.Errorf(core.ErrField, "could not resolve method or field '%s' on struct instance", ident)
+						// Not an own field/property/method — fall back to the
+						// import-scoped extension + universal (Unknown) member
+						// tables, so a struct instance can use universal methods
+						// like `inst.Is?` exactly as any other value does.
+						return memberAccess(ctx, col, ident)
 					}
 
 					return core.TvFun(func(ctx core.Context, argv []core.Node) core.Value {
@@ -285,7 +299,7 @@ func dotBuiltins() map[string]core.StackEntry {
 // that shows the intended `coll.[name]` rewrite.
 func asBracket(ctx core.Context, rhs core.Node) (core.Branch, bool) {
 	br, ok := core.AsBranch(rhs)
-	if !ok || len(br) == 0 || br[0] != core.Leaf("slice") {
+	if !ok || len(br) == 0 || br[0] != core.Leaf(core.Slice) {
 		ctx.Errorf(core.ErrField, "index a collection with brackets: write 'coll.[%s]', not 'coll.%s'", core.Inspect(rhs), core.Inspect(rhs))
 		return nil, false
 	}
@@ -391,4 +405,106 @@ func sliceBounds(ctx core.Context, br core.Branch, length int) (int, int, bool) 
 	}
 
 	return lhs, rhs, true
+}
+
+// memberName returns the identifier text of a bare-identifier RHS (a member
+// access like `x.Size`), or ok=false for a bracket form `x.[i]` or a numeric
+// RHS (the fractional-decimal hack on a number).
+func memberName(node core.Node) (string, bool) {
+	lf, ok := core.AsLeaf(node)
+	if !ok {
+		return "", false
+	}
+	s := string(lf)
+	if !core.IsIdent(s) {
+		return "", false
+	}
+	return s, true
+}
+
+// wantsMemberLookup reports whether a value of the given kind resolves a
+// bare-identifier RHS as a method/property member. Struct instances, packages,
+// and go-packages keep their bespoke identifier handling in the dot switch.
+func wantsMemberLookup(kind string) bool {
+	switch kind {
+	case core.KindNum, core.KindStr, core.KindArray, core.KindDict,
+		core.KindBool, core.KindChr, core.KindAtom, core.KindFun,
+		core.KindNil, core.KindType, core.KindMacro, core.KindMethod:
+		return true
+	}
+	return false
+}
+
+// memberAccess resolves a method/property `name` on col through the import
+// scope and returns the property value (read via its getter) or the bound
+// method — a Fun that pushes col as the receiver on the instance stack at call
+// time, exactly like the struct-instance method wrapper.
+func memberAccess(ctx core.Context, col core.Value, name string) core.Value {
+	// A struct TYPE value resolves STATIC members (declared via `static
+	// method`/`static property`) from the struct itself — keyed per struct, not
+	// through the shared prim:type extension table every type value would share.
+	// The type value is pushed as the receiver, so the member's `Self` is it.
+	if col.Kind == core.KindType {
+		if sdata, isStruct := core.StructOf(col.Val.(*core.PhoType)); isStruct {
+			if prop, found := sdata.StaticProperties[name]; found {
+				env := ctx.Env
+				env.InstStack = append([]core.Value{col}, env.InstStack...)
+				defer func() { env.InstStack = env.InstStack[1:] }()
+				return prop.Getter.Val.(core.Fun)(ctx, nil)
+			}
+			if method, found := sdata.StaticMethods[name]; found {
+				return core.TvFun(func(ctx core.Context, argv []core.Node) core.Value {
+					env := ctx.Env
+					env.InstStack = append([]core.Value{col}, env.InstStack...)
+					defer func() { env.InstStack = env.InstStack[1:] }()
+					return method(ctx, argv)
+				})
+			}
+		}
+	}
+
+	res := ctx.ResolveMember(core.TypeKeyOf(col), name)
+	if res.Clash {
+		return ctx.Errorf(core.ErrField, "member '%s' on type '%s' is ambiguous: more than one module in scope defines it", name, core.TvTypeOf(col).Name())
+	}
+	if !res.Found {
+		// Auto-inject a Trait default: if some registered trait that col
+		// satisfies provides a default for this member, dispatch it (col as
+		// self). Two satisfied traits defaulting the same name is ambiguous.
+		if fn, isProp, found, clash := core.TraitDefaultMember(ctx, col, name); found {
+			if clash {
+				return ctx.Errorf(core.ErrField, "member '%s' on type '%s' is ambiguous: two traits provide a default", name, core.TvTypeOf(col).Name())
+			}
+			if isProp {
+				env := ctx.Env
+				env.InstStack = append([]core.Value{col}, env.InstStack...)
+				defer func() { env.InstStack = env.InstStack[1:] }()
+				return fn(ctx, nil)
+			}
+			return core.TvFun(func(ctx core.Context, argv []core.Node) core.Value {
+				env := ctx.Env
+				env.InstStack = append([]core.Value{col}, env.InstStack...)
+				defer func() { env.InstStack = env.InstStack[1:] }()
+				return fn(ctx, argv)
+			})
+		}
+		return ctx.Errorf(core.ErrField, "'%s' is not defined on type '%s'", name, core.TvTypeOf(col).Name())
+	}
+
+	if res.IsProperty {
+		env := ctx.Env
+		env.InstStack = append([]core.Value{col}, env.InstStack...)
+		defer func() { env.InstStack = env.InstStack[1:] }()
+		return res.Property.Getter.Val.(core.Fun)(ctx, nil)
+	}
+
+	method := res.Method
+	return core.TvFun(func(ctx core.Context, argv []core.Node) core.Value {
+		env := ctx.Env
+		env.InstStack = append([]core.Value{col}, env.InstStack...)
+		defer func() {
+			env.InstStack = env.InstStack[1:]
+		}()
+		return method(ctx, argv)
+	})
 }

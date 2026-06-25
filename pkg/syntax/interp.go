@@ -190,8 +190,8 @@ func readAtom(body string, pos int) (int, error) {
 			end++
 		}
 		return end, nil
-	case c == '"':
-		end, _, _, ok := scanString(body, pos, 1, 1)
+	case c == '\'':
+		end, _, _, ok := scanString(body, pos, 1, 1, c)
 		if !ok {
 			return pos, fmt.Errorf("unterminated string inside interpolation")
 		}
@@ -224,8 +224,8 @@ func readBalanced(body string, pos int) (int, error) {
 	for j < len(body) && depth > 0 {
 		c := body[j]
 		switch {
-		case c == '"':
-			next, _, _, ok := scanString(body, j, 1, 1)
+		case c == '\'':
+			next, _, _, ok := scanString(body, j, 1, 1, c)
 			if !ok {
 				return pos, fmt.Errorf("unterminated string inside interpolation")
 			}
@@ -287,14 +287,14 @@ func loweredInterp(body string, strSpan span.Span) core.Node {
 	out = append(out, core.Leaf(core.Strinterp))
 	for _, ch := range chunks {
 		if !ch.IsExpr {
-			out = append(out, core.Leaf("\""+ch.Text+"\""))
+			out = append(out, core.Leaf("'"+ch.Text+"'"))
 			continue
 		}
 		tokens, lexErrs := LexPos(ch.Text)
 		tree, parseErrs := ParsePos(tokens)
 		if len(lexErrs)+len(parseErrs) > 0 || len(tree) != 1 {
 			fmt.Fprintf(os.Stderr, "pho: failed to parse interpolation expression '%s'\n", ch.Text)
-			out = append(out, core.Leaf("\"%"+ch.Text+"\""))
+			out = append(out, core.Leaf("'%"+ch.Text+"'"))
 			continue
 		}
 		if strSpan != (span.Span{}) {
@@ -367,7 +367,7 @@ func OffsetSpans(n ast.PNode, lineDelta, firstColDelta int) {
 		OffsetSpans(t.RHS, lineDelta, firstColDelta)
 	case *ast.PMacroCall:
 		shift(&t.Span)
-		shift(&t.BangSpan)
+		shift(&t.SigilSpan)
 		OffsetSpans(t.Head, lineDelta, firstColDelta)
 		for _, a := range t.Args {
 			OffsetSpans(a, lineDelta, firstColDelta)
@@ -377,5 +377,5 @@ func OffsetSpans(n ast.PNode, lineDelta, firstColDelta int) {
 
 func isInterpStart(c byte) bool { return isIdentStart(c) || c == '(' }
 func isAtomStart(c byte) bool {
-	return isIdentStart(c) || isDigit(c) || c == '-' || c == '"' || c == '(' || c == '[' || c == '{'
+	return isIdentStart(c) || isDigit(c) || c == '-' || c == '\'' || c == '(' || c == '[' || c == '{'
 }

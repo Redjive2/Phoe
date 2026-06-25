@@ -3,8 +3,8 @@
 -- arity error. Calling with the arg present still works. This script
 -- must run clean (exit 0, silent stderr).
 (fun greet (name (optional greeting)) (identity do
-    (if (== greeting Nil) then (= greeting "Hello"))
-    (+ greeting (+ ", " name))))
+    (if (== greeting Nil) then (= greeting 'Hello'))
+    (+ greeting (+ ', ' name))))
 
-(greet "Sam")
-(greet "Sam" "Hi")
+(greet 'Sam')
+(greet 'Sam' 'Hi')

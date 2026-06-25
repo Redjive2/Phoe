@@ -11,13 +11,13 @@ import "testing"
 func TestContextAwareDoLintsClean(t *testing.T) {
 	src := []byte(`(fun classify (n) do
     (if (< n 0) then do
-        (const r "neg")
+        (const r 'neg')
         r
      elif (== n 0) then do
-        (const r "zero")
+        (const r 'zero')
         r
      else do
-        (const r "pos")
+        (const r 'pos')
         r))
 (classify -3)`)
 	for _, d := range AnalyzeFile("test.pho", src) {

@@ -157,18 +157,18 @@ func TestFunctionBodyAssignInvalidatesTopLevelShape(t *testing.T) {
 // ----------------------------------------------------------------------
 
 func TestDictBareAccessNeedsBrackets(t *testing.T) {
-	diags := analyze(t, `(var d {"a" 1 'b 2})
+	diags := analyze(t, `(var d {'a' 1 'b' 2})
 (var x d.zzz)
 `)
-	// Bare dot on a collection is now field syntax; dict lookup must use
-	// brackets, so this steers the user to d.[zzz].
-	if !hasDiagWithName(diags, "invalid-member-access", "zzz") {
-		t.Fatalf("expected invalid-member-access steering d.zzz to d.[zzz], got %#v", diags)
+	// Bare dot on a dict is a member lookup; `zzz` isn't a member of Map, so
+	// it's flagged (dict KEY lookup must use brackets, d.[zzz]).
+	if !hasDiagWithName(diags, "unknown-member", "zzz") {
+		t.Fatalf("expected unknown-member for d.zzz, got %#v", diags)
 	}
 }
 
 func TestDictBracketUnboundKeyIsUnresolved(t *testing.T) {
-	diags := analyze(t, `(var d {"a" 1})
+	diags := analyze(t, `(var d {'a' 1})
 (var x d.[zzz])
 `)
 	// The key expression inside the bracket is an ordinary expression, so
@@ -180,8 +180,8 @@ func TestDictBracketUnboundKeyIsUnresolved(t *testing.T) {
 }
 
 func TestDictBracketBoundKeyIsSilent(t *testing.T) {
-	diags := analyze(t, `(var d {"a" 1})
-(var k "a")
+	diags := analyze(t, `(var d {'a' 1})
+(var k 'a')
 (var x d.[k])
 `)
 	if hasDiag(diags, "unknown-key") || hasDiag(diags, "unresolved-identifier") {
@@ -190,8 +190,8 @@ func TestDictBracketBoundKeyIsSilent(t *testing.T) {
 }
 
 func TestDictUnknownStaticKeyWarns(t *testing.T) {
-	diags := analyze(t, `(var d {"a" 1 'b 2})
-(var x d.["missing"])
+	diags := analyze(t, `(var d {'a' 1 'b' 2})
+(var x d.['missing'])
 `)
 	found := false
 	for _, d := range diags {
@@ -205,9 +205,9 @@ func TestDictUnknownStaticKeyWarns(t *testing.T) {
 }
 
 func TestDictKnownStaticKeySilent(t *testing.T) {
-	diags := analyze(t, `(var d {"a" 1 'b 2})
-(var x d.["a"])
-(var y d.['b])
+	diags := analyze(t, `(var d {'a' 1 'b' 2})
+(var x d.['a'])
+(var y d.['b'])
 `)
 	if hasDiag(diags, "unknown-key") {
 		t.Fatalf("known static keys must be silent, got %#v", diags)
@@ -215,9 +215,9 @@ func TestDictKnownStaticKeySilent(t *testing.T) {
 }
 
 func TestDictWriteAddsKey(t *testing.T) {
-	diags := analyze(t, `(var d {"a" 1})
-(= d.["fresh"] 2)
-(var x d.["fresh"])
+	diags := analyze(t, `(var d {'a' 1})
+(= d.['fresh'] 2)
+(var x d.['fresh'])
 `)
 	if hasDiag(diags, "unknown-key") {
 		t.Fatalf("a written key must be readable without warning, got %#v", diags)
@@ -225,9 +225,9 @@ func TestDictWriteAddsKey(t *testing.T) {
 }
 
 func TestComputedDictKeysDisableKeyChecks(t *testing.T) {
-	diags := analyze(t, `(var k "dyn")
+	diags := analyze(t, `(var k 'dyn')
 (var d {k 1})
-(var x d.["anything"])
+(var x d.['anything'])
 `)
 	if hasDiag(diags, "unknown-key") {
 		t.Fatalf("computed keys must disable key tracking, got %#v", diags)
@@ -239,10 +239,10 @@ func TestArrayBareAccessNeedsBrackets(t *testing.T) {
 (var x arr.qqq)
 (var z arr.0)
 `)
-	// Both an identifier and a numeric literal after a bare dot are now
-	// errors on an array: indexing must be bracketed.
-	if !hasDiagWithName(diags, "invalid-member-access", "qqq") {
-		t.Fatalf("expected invalid-member-access steering arr.qqq to arr.[qqq], got %#v", diags)
+	// An identifier after a bare dot is a member lookup that misses on a List;
+	// a numeric literal is steered to bracket indexing.
+	if !hasDiagWithName(diags, "unknown-member", "qqq") {
+		t.Fatalf("expected unknown-member for arr.qqq, got %#v", diags)
 	}
 	if !hasDiagWithName(diags, "invalid-member-access", "0") {
 		t.Fatalf("expected invalid-member-access steering arr.0 to arr.[0], got %#v", diags)
@@ -268,20 +268,9 @@ func TestArrayBracketAccessIsChecked(t *testing.T) {
 	}
 }
 
-// TestKeyofResultIsArray locks in that keyof's result shape is an array
-// (the indices of an array, or the keys of a map), so member access on
-// the call result is checked like any array: a bare dot (field syntax)
-// is flagged and steered to bracket indexing. A user-function call would
-// be Unknown and stay silent (see TestUnknownShapesStaySilent), so this
-// firing proves the builtin's shape is what's being inferred.
-func TestKeyofResultIsArray(t *testing.T) {
-	diags := analyze(t, `(var m {"a" 1 "b" 2})
-(var x (keyof m).qqq)
-`)
-	if !hasDiagWithName(diags, "invalid-member-access", "qqq") {
-		t.Fatalf("expected invalid-member-access on (keyof m).qqq — keyof should infer as an array, got %#v", diags)
-	}
-}
+// (TestKeyofResultIsArray was removed: the `keyof` builtin is gone — the keys
+// of a map are reached via the `.Keys` member now — and `.Keys` does not yet
+// shape-infer as a List, so there's no equivalent member-access check.)
 
 // TestIncompleteIfDoesNotPanicTheWalker is a regression for a crash that
 // broke hover/completion/definition for a whole file: an incomplete
@@ -311,11 +300,11 @@ func TestScalarAccess(t *testing.T) {
 (var b True)
 (var y b.thing)
 `)
-	if !hasDiagWithName(diags, "invalid-member-access", "foo") {
-		t.Fatalf("expected invalid-member-access for n.foo, got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-member", "foo") {
+		t.Fatalf("expected unknown-member for n.foo, got %#v", diags)
 	}
-	if !hasDiag(diags, "invalid-member-access") {
-		t.Fatalf("expected invalid-member-access for b.thing, got %#v", diags)
+	if !hasDiagWithName(diags, "unknown-member", "thing") {
+		t.Fatalf("expected unknown-member for b.thing, got %#v", diags)
 	}
 	// 1.5 — the decimal hack — must stay silent.
 	for _, d := range diags {

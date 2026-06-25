@@ -11,12 +11,12 @@ func TestPrimSize(t *testing.T) {
 	s := &stdDependencies{}
 
 	list := core.TvSlice([]core.Value{core.TvNum(1), core.TvNum(2), core.TvNum(3)})
-	if got := s.Size(list); got != 3 {
+	if got := s.PrimSize(list); got != 3 {
 		t.Errorf("Size(list of 3) = %v, want 3", got)
 	}
 
 	// Strings measure by rune, not byte: "café" is 4 runes / 5 bytes.
-	if got := s.Size(core.TvStr("café")); got != 4 {
+	if got := s.PrimSize(core.TvStr("café")); got != 4 {
 		t.Errorf("Size(\"café\") = %v, want 4 (runes)", got)
 	}
 
@@ -24,14 +24,14 @@ func TestPrimSize(t *testing.T) {
 		core.TvStr("a"): core.TvNum(1),
 		core.TvStr("b"): core.TvNum(2),
 	})
-	if got := s.Size(dict); got != 2 {
+	if got := s.PrimSize(dict); got != 2 {
 		t.Errorf("Size(dict of 2) = %v, want 2", got)
 	}
 
-	if got := s.Size(core.TvSlice(nil)); got != 0 {
+	if got := s.PrimSize(core.TvSlice(nil)); got != 0 {
 		t.Errorf("Size(empty list) = %v, want 0", got)
 	}
-	if got := s.Size(core.TvStr("")); got != 0 {
+	if got := s.PrimSize(core.TvStr("")); got != 0 {
 		t.Errorf("Size(empty string) = %v, want 0", got)
 	}
 }
@@ -40,7 +40,7 @@ func TestPrimKeysList(t *testing.T) {
 	s := &stdDependencies{}
 	list := core.TvSlice([]core.Value{core.TvStr("x"), core.TvStr("y"), core.TvStr("z")})
 
-	keys := s.Keys(list)
+	keys := s.PrimKeys(list)
 	if len(keys) != 3 {
 		t.Fatalf("Keys(list of 3) returned %d keys, want 3", len(keys))
 	}
@@ -63,7 +63,7 @@ func TestPrimKeysDict(t *testing.T) {
 		core.TvStr("b"): core.TvNum(2),
 	})
 
-	keys := s.Keys(dict)
+	keys := s.PrimKeys(dict)
 	got := make([]string, 0, len(keys))
 	for _, k := range keys {
 		if k.Kind != core.KindStr {
