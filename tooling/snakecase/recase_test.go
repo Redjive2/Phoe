@@ -23,6 +23,10 @@ func TestRecase(t *testing.T) {
 
 		// Params/locals: snake_case, NO `#`.
 		{"param", "(fun f (myArg) myArg)", "(fun f (my_arg) my_arg)"},
+		// A param that SHADOWS a global private name stays local (no `#`).
+		{"param shadows global", "(fun f (privateHelper) privateHelper)", "(fun f (private_helper) private_helper)"},
+		// A body-local let that shadows a global private name stays local.
+		{"local let shadows", "(fun f () (let privateHelper = 1) privateHelper)", "(fun f () (let private_helper = 1) private_helper)"},
 
 		// Member access: visibility by capitalization.
 		{"public member", "obj.Size", "obj.size"},

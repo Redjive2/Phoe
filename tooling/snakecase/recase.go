@@ -61,6 +61,9 @@ type recaseCtx struct {
 	renames   map[string]string
 	types     map[string]bool
 	goimports map[string]bool // Go-module aliases whose members must NOT be recased
+	bound     map[string]bool // names bound LOCALLY in the current scope (params,
+	// body lets) — these are values (snake_case, never `#`) even if they collide
+	// with a global private name. Replaced per fun/method scope.
 }
 
 // Recase rewrites identifier spellings in src per the new scheme. It refuses on
@@ -74,7 +77,7 @@ func Recase(src string, renames map[string]string, types, goimports map[string]b
 	if len(parseErrs) > 0 {
 		return src, 0, fmt.Errorf("refusing to recase: %d parse error(s)", len(parseErrs))
 	}
-	ctx := &recaseCtx{renames, types, goimports}
+	ctx := &recaseCtx{renames, types, goimports, map[string]bool{}}
 	var edits []edit
 	for _, form := range tree {
 		recaseWalk(src, form, ctx, &edits)
@@ -104,13 +107,19 @@ func recaseWalk(src string, n ast.PNode, ctx *recaseCtx, edits *[]edit) {
 	switch node := n.(type) {
 	case *ast.PLeaf:
 		if isIdentLeaf(node.Value) {
-			leafEdit(src, node, recaseLeaf(node.Value, ctx.renames, ctx.types), edits)
+			leafEdit(src, node, recaseName(node.Value, ctx), edits)
 		}
 	case *ast.PBranch:
 		if node.Open == "(" && len(node.Children) >= 1 {
 			if head, ok := node.Children[0].(*ast.PLeaf); ok {
 				if head.Value == "struct" {
 					recaseStruct(src, node, ctx, edits)
+					return
+				}
+				// fun/method open a new scope: their params and body-local
+				// bindings are values, even if they shadow a global private name.
+				if head.Value == "fun" || head.Value == "method" {
+					recaseFunLike(src, node, ctx, edits)
 					return
 				}
 				// A construction `(Type 'field' val …)` (the `.{}` sugar quotes
@@ -146,6 +155,112 @@ func recaseWalk(src string, n ast.PNode, ctx *recaseCtx, edits *[]edit) {
 		}
 	case *ast.PSigil:
 		recaseWalk(src, node.Inner, ctx, edits)
+	}
+}
+
+// recaseName chooses the spelling of a general identifier, respecting scope: a
+// name bound locally (param/body let) is a value (snake_case, never `#`); any
+// other name goes through the package-wide map / type rule.
+func recaseName(name string, ctx *recaseCtx) string {
+	if ctx.bound[name] {
+		if literalNames[name] {
+			return name
+		}
+		return toSnakeCase(name)
+	}
+	return recaseLeaf(name, ctx.renames, ctx.types)
+}
+
+func cloneSet(s map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(s)+4)
+	for k := range s {
+		out[k] = true
+	}
+	return out
+}
+
+// recaseFunLike walks a `(fun …)` / `(method …)` form in a fresh scope: its
+// parameter names and body-local bindings are added to `bound` so references to
+// them recase as locals, not via the global private map.
+func recaseFunLike(src string, br *ast.PBranch, ctx *recaseCtx, edits *[]edit) {
+	child := &recaseCtx{ctx.renames, ctx.types, ctx.goimports, cloneSet(ctx.bound)}
+	collectFunLocals(br, child.bound)
+	for i := 1; i < len(br.Children); i++ {
+		recaseWalk(src, br.Children[i], child, edits)
+	}
+}
+
+// collectFunLocals adds a fun/method's parameter names and any body-local
+// let/const/var/foreach binding names (anywhere in the subtree, closures
+// included) to set.
+func collectFunLocals(br *ast.PBranch, set map[string]bool) {
+	for i := 1; i < len(br.Children); i++ {
+		if pl, ok := br.Children[i].(*ast.PBranch); ok && pl.Open == "(" {
+			for _, p := range pl.Children {
+				if name := paramName(p); name != "" {
+					set[name] = true
+				}
+			}
+			break // the first (…) after the head is the parameter list
+		}
+	}
+	collectBindings(br, set)
+}
+
+// paramName reads a parameter name: a bare leaf, or the `(optional x)` /
+// `(spread x)` wrapper whose second child is the name.
+func paramName(n ast.PNode) string {
+	if lf, ok := n.(*ast.PLeaf); ok {
+		return lf.Value
+	}
+	if br, ok := n.(*ast.PBranch); ok && br.Open == "(" && len(br.Children) == 2 {
+		if lf, ok := br.Children[1].(*ast.PLeaf); ok {
+			return lf.Value
+		}
+	}
+	return ""
+}
+
+// collectBindings adds every let/const/var/foreach binding name found in the
+// subtree to set. `let` is `(let [var] name = value …)`; const/var are pairs
+// (defensive — Recase normally runs after the mechanical const→let pass).
+func collectBindings(n ast.PNode, set map[string]bool) {
+	br, ok := n.(*ast.PBranch)
+	if !ok {
+		return
+	}
+	if br.Open == "(" && len(br.Children) >= 1 {
+		if head, ok := br.Children[0].(*ast.PLeaf); ok {
+			switch head.Value {
+			case "let":
+				i := 1
+				if i < len(br.Children) {
+					if m, ok := br.Children[i].(*ast.PLeaf); ok && m.Value == "var" {
+						i++
+					}
+				}
+				for ; i+2 < len(br.Children); i += 3 {
+					if name := bindLeafName(br.Children[i]); name != "" {
+						set[name] = true
+					}
+				}
+			case "const", "var":
+				for i := 1; i+1 < len(br.Children); i += 2 {
+					if name := bindLeafName(br.Children[i]); name != "" {
+						set[name] = true
+					}
+				}
+			case "foreach":
+				if len(br.Children) >= 2 {
+					if lf, ok := br.Children[1].(*ast.PLeaf); ok {
+						set[lf.Value] = true
+					}
+				}
+			}
+		}
+	}
+	for _, c := range br.Children {
+		collectBindings(c, set)
 	}
 }
 

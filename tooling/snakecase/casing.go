@@ -233,7 +233,7 @@ func buildRenameMap(tree []ast.PNode, isLibrary bool) map[string]string {
 		if types[name] {
 			continue // a name can't be both; the type classification wins
 		}
-		if isLibrary && !public {
+		if isLibrary && !public && !keepPublic[name] {
 			renames[name] = "#" + toSnakeCase(name)
 		} else {
 			renames[name] = toSnakeCase(name)
@@ -245,6 +245,15 @@ func buildRenameMap(tree []ast.PNode, isLibrary bool) map[string]string {
 		}
 	}
 	return renames
+}
+
+// keepPublic are lowercase library names that are PUBLIC by protocol rather than
+// private — chiefly the annotation vocabulary, which pkg/annot harvests BY NAME
+// and code invokes as `~name`. They must never gain a `#` prefix (which would
+// break the harvest and every `~name` site).
+var keepPublic = map[string]bool{
+	"doc": true, "flag": true, "desc": true, "pure": true,
+	"macrohint": true, "sig": true, "type": true, "methodsig": true,
 }
 
 // collectGoimports returns the set of `goimport` aliases — Go-module handles
