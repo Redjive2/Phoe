@@ -16,6 +16,10 @@ func TestRecase(t *testing.T) {
 		{"goimport member", "(dep.PctlSpawn x)", "(dep.PctlSpawn x)"},
 		// Construction field keys: public → snake, private → `#` (bare in source).
 		{"construction keys", "Box.{ Width 1 height 2 }", "Box.{ width 1 #height 2 }"},
+		// Construction on a non-type head (`self` in a static) still recases keys.
+		{"self construction", "self.{ X val }", "self.{ x val }"},
+		// A call with an EXPLICIT string arg is not a construction — left as-is.
+		{"explicit string arg", "(f 'hello' x)", "(f 'hello' x)"},
 		// Top-level names + references via the package map.
 		{"public ref", "(PctlSpawn 1)", "(pctl_spawn 1)"},
 		{"private ref", "privateHelper", "#private_helper"},

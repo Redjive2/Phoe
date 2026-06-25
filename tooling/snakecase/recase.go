@@ -103,6 +103,15 @@ func isStrLit(n ast.PNode) (*ast.PLeaf, bool) {
 	return nil, false
 }
 
+// isSyntheticKey reports whether a string-literal leaf was synthesized by the
+// `.{}` construction sugar (a bare field word the parser quoted) rather than
+// written as an explicit `'string'`. The synthetic leaf's source span covers
+// the bare word, so the source byte at its start is not a quote.
+func isSyntheticKey(src string, lf *ast.PLeaf) bool {
+	start := offsetOf(src, lf.Span.StartLine, lf.Span.StartCol)
+	return start < len(src) && src[start] != '\''
+}
+
 func recaseWalk(src string, n ast.PNode, ctx *recaseCtx, edits *[]edit) {
 	switch node := n.(type) {
 	case *ast.PLeaf:
@@ -122,11 +131,14 @@ func recaseWalk(src string, n ast.PNode, ctx *recaseCtx, edits *[]edit) {
 					recaseFunLike(src, node, ctx, edits)
 					return
 				}
-				// A construction `(Type 'field' val …)` (the `.{}` sugar quotes
-				// the keys). A USER struct type with a string-literal first arg
-				// marks it; built-in connectives (`(Or 'GET' …)`) are excluded.
-				if len(node.Children) >= 2 && ctx.types[head.Value] && !builtinTypes[head.Value] {
-					if _, ok := isStrLit(node.Children[1]); ok {
+				// A construction `(Head 'field' val …)`: the `.{}` sugar quotes
+				// BARE field words into string keys whose source span has no
+				// quotes (a synthetic key). That marks a construction for ANY
+				// head — a type, `self` in a static, or a var holding a type —
+				// and distinguishes it from a call with an explicit string arg
+				// (`(f 'hello' x)`, whose key span DOES start with a quote).
+				if len(node.Children) >= 2 {
+					if lf, ok := isStrLit(node.Children[1]); ok && isSyntheticKey(src, lf) {
 						recaseConstruction(src, node, ctx, edits)
 						return
 					}
