@@ -217,11 +217,37 @@ func MigrateGoFile(src string, renames map[string]string, types map[string]bool)
 		}
 	}
 
+	// Collect type names FILE-WIDE first: a test often builds one Pho program by
+	// concatenating several Go string fragments, so a type declared in one
+	// fragment is used (e.g. constructed, or as a sig param) in another. Without
+	// this, the using fragment wouldn't know the name is a type and would snake it.
+	fileTypes := map[string]bool{}
+	for k := range types {
+		fileTypes[k] = true
+	}
+	if renames != nil {
+		for _, l := range lits {
+			val, err := strconv.Unquote(l.text)
+			if err != nil || !looksLikePhoCode(val) {
+				continue
+			}
+			toks, lexErrs := syntax.LexPos(val)
+			if len(lexErrs) > 0 {
+				continue
+			}
+			if tree, parseErrs := syntax.ParsePos(toks); len(parseErrs) == 0 {
+				for k := range collectTypeNames(tree) {
+					fileTypes[k] = true
+				}
+			}
+		}
+	}
+
 	out := src
 	changed := 0
 	for i := len(lits) - 1; i >= 0; i-- {
 		l := lits[i]
-		newLit, ok := migrateGoLiteral(l.text, renames, types)
+		newLit, ok := migrateGoLiteral(l.text, renames, fileTypes)
 		if !ok || newLit == l.text {
 			continue
 		}
