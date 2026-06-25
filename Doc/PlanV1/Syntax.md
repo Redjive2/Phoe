@@ -1,12 +1,33 @@
 # Syntax overhaul: casing, visibility, declarations, collections
 
-Status: **active**. Replaces the capitalization-based public/private rule and
-the implicit type-name rules with an explicit, strictly-enforced scheme.
+Status: **DONE** — the cutover is merged to `main` and the whole suite is green.
+Replaces the capitalization-based public/private rule and the implicit type-name
+rules with an explicit `#`-prefix visibility + snake_case/Title_Snake_Case scheme.
 
-This is a **hard cutover**, run the same way as the prior `desigiling` and
-`dequote` migrations: build the new reader/runtime/tooling tolerant of both
-old and new for the duration, run a codemod over every source, then flip on
-the hard rejection and green the suite.
+The cutover ran the same way as the prior `desigiling`/`dequote` migrations:
+tolerant phases first (1–6, additive), then the codemod (`tooling/snakecase`)
+migrated every `.phl`/`.pho` + the embedded Pho in `*_test.go`, the runtime/lint
+flipped to pure-`#` visibility, and the suite was greened (155 → 0 failures) via
+two fan-out triage/fix workflows. Merged at commit `7c4f47c`.
+
+**What's live on `main`:** snake_case values, Title_Snake_Case types, `#`-prefix
+privacy (`self.#pid`), `none`/`true`/`false`, `let`/`let var` + `=`, `[k -> v]`
+maps, `self` receiver, struct `.{ field = val }` init.
+
+**Remaining (optional, non-blocking — main is green):**
+- **Phase 8 tree-sitter grammar/corpus** still encodes the OLD surface
+  (grammar.js, corpus, most of highlights). Only the `atomName`→`atom_name`
+  builtin-name was synced (for the subset-of-lint test). Zed editor highlighting
+  of new-syntax files lags until the grammar is migrated + SHA-bumped.
+- **`StrictNames` is still off** and the runtime/lint still *tolerate* the old
+  forms (const/var, Nil/True/False, `{k v}` maps). Nothing uses them; flipping
+  `StrictNames` on + removing old-form acceptance is a future hardening step.
+- **`tooling/snakecase` codemod** still has a few known bugs the triage surfaced
+  (dot-headed construction keys, sig-receiver `Self` lowering, double-migration
+  of already-new sources) — fixed in the affected test SOURCES directly, not all
+  in the codemod. The codemod is a one-shot tool (not re-run), so this is
+  posterity-only. The `##` double-private and `NilT`/builtin-preservation and
+  scope/keepPublic/file-wide-types fixes ARE in the codemod.
 
 ---
 
