@@ -45,6 +45,8 @@ func TestRecase(t *testing.T) {
 		{"type ref", "(p.Is? Point)", "(p.is? Point)"},
 		// A type head with no args must not panic (len-1 children).
 		{"type call no args", "(Point)", "(Point)"},
+		// An already-private member keeps a single '#' (no double-#).
+		{"already-private member", "self.#secret", "self.#secret"},
 		// A builtin type keeps its exact spelling (not re-split by Title_Snake).
 		{"builtin NilT", "(f NilT)", "(f NilT)"},
 	}

@@ -133,7 +133,7 @@
  (#any-of? @function.builtin
    "get" "has" "append" "drop" "range" "mod"
    "inspect" "identity" "spread" "optional"
-   "list?" "atom?" "atom" "atomName"
+   "list?" "atom?" "atom" "atom_name"
    ; type operators / first-class type constructors (gradual typing)
    "subtype?" "Or" "And" "Not" "Diff" "Fun" "Struct" "Trait"))
 

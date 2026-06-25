@@ -56,6 +56,9 @@ func recaseMember(name string, types map[string]bool) string {
 		}
 		return toTitleSnake(name)
 	}
+	if name != "" && name[0] == '#' {
+		return toSnakeCase(name) // already private — keep the single '#', don't double it
+	}
 	if isCapitalized(name) {
 		return toSnakeCase(name)
 	}
