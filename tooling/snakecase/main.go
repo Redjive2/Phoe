@@ -193,8 +193,10 @@ func looksLikePhoCode(s string) bool {
 	return t[0] == '(' || t[0] == '[' || t[0] == '{' || strings.HasPrefix(t, "--")
 }
 
-// MigrateGoFile rewrites Pho embedded in Go string literals.
-func MigrateGoFile(src string) (string, int, error) {
+// MigrateGoFile rewrites Pho embedded in Go string literals. When renames is
+// nil it does the mechanical Transform only; otherwise it also recases each
+// snippet with the package-wide map (used by the full migration).
+func MigrateGoFile(src string, renames map[string]string, types map[string]bool) (string, int, error) {
 	fset := token.NewFileSet()
 	file := fset.AddFile("", fset.Base(), len(src))
 	var s scanner.Scanner
@@ -219,7 +221,7 @@ func MigrateGoFile(src string) (string, int, error) {
 	changed := 0
 	for i := len(lits) - 1; i >= 0; i-- {
 		l := lits[i]
-		newLit, ok := migrateGoLiteral(l.text)
+		newLit, ok := migrateGoLiteral(l.text, renames, types)
 		if !ok || newLit == l.text {
 			continue
 		}
@@ -229,7 +231,7 @@ func MigrateGoFile(src string) (string, int, error) {
 	return out, changed, nil
 }
 
-func migrateGoLiteral(goLit string) (string, bool) {
+func migrateGoLiteral(goLit string, renames map[string]string, types map[string]bool) (string, bool) {
 	if len(goLit) < 2 {
 		return goLit, false
 	}
@@ -238,7 +240,31 @@ func migrateGoLiteral(goLit string) (string, bool) {
 		return goLit, false
 	}
 	migrated, n, err := Transform(val)
-	if err != nil || n == 0 {
+	if err != nil {
+		return goLit, false
+	}
+	// Casing pass: an embedded snippet is a PROGRAM. Augment the global type
+	// set with the snippet's own struct/type decls so a local type still
+	// Title_Snakes, and collect its goimports so Go-module members are spared.
+	if renames != nil {
+		toks, lexErrs := syntax.LexPos(migrated)
+		if len(lexErrs) == 0 {
+			if tree, parseErrs := syntax.ParsePos(toks); len(parseErrs) == 0 {
+				snipTypes := map[string]bool{}
+				for k := range types {
+					snipTypes[k] = true
+				}
+				for k := range collectTypeNames(tree) {
+					snipTypes[k] = true
+				}
+				if recased, nc, err := Recase(migrated, renames, snipTypes, collectGoimports(tree)); err == nil {
+					migrated = recased
+					n += nc
+				}
+			}
+		}
+	}
+	if n == 0 {
 		return goLit, false
 	}
 	if goLit[0] == '`' && !strings.Contains(migrated, "`") {
@@ -313,10 +339,107 @@ func runRecase(paths []string, dry bool) {
 	fmt.Printf("total: %d edit(s)\n", total)
 }
 
+// runMigrate is the full atomic cutover: it builds ONE package-wide rename map
+// + type set from every Pho source, then recases all `.phl`/`.pho` files AND the
+// Pho embedded in `.go` files with that shared map. A name renames identically
+// everywhere it appears.
+func runMigrate(paths []string, dry bool) {
+	var phoPaths, goPaths []string
+	for _, p := range paths {
+		switch {
+		case strings.HasSuffix(p, ".phl"), strings.HasSuffix(p, ".pho"):
+			phoPaths = append(phoPaths, p)
+		case strings.HasSuffix(p, ".go"):
+			goPaths = append(goPaths, p)
+		}
+	}
+
+	type phoInfo struct {
+		path, src string
+		goimports map[string]bool
+	}
+	var phos []phoInfo
+	var files []fileTree
+	for _, p := range phoPaths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", p, err)
+			continue
+		}
+		src := string(data)
+		toks, lexErrs := syntax.LexPos(src)
+		if len(lexErrs) > 0 {
+			fmt.Fprintf(os.Stderr, "%s: %d lex error(s); skipping\n", filepath.Base(p), len(lexErrs))
+			continue
+		}
+		tree, parseErrs := syntax.ParsePos(toks)
+		if len(parseErrs) > 0 {
+			fmt.Fprintf(os.Stderr, "%s: %d parse error(s); skipping\n", filepath.Base(p), len(parseErrs))
+			continue
+		}
+		phos = append(phos, phoInfo{p, src, collectGoimports(tree)})
+		files = append(files, fileTree{tree, strings.HasSuffix(p, ".phl")})
+	}
+	renames, types := buildGlobalMaps(files)
+
+	total := 0
+	report := func(path string, n int) {
+		if dry {
+			fmt.Printf("%s: would apply %d edit(s)\n", filepath.Base(path), n)
+		} else {
+			fmt.Printf("%s: applied %d edit(s)\n", filepath.Base(path), n)
+		}
+	}
+	for _, ph := range phos {
+		mech, nm, err := Transform(ph.src)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", filepath.Base(ph.path), err)
+			continue
+		}
+		out, nc, err := Recase(mech, renames, types, ph.goimports)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", filepath.Base(ph.path), err)
+			continue
+		}
+		if nm+nc == 0 {
+			continue
+		}
+		total += nm + nc
+		if !dry {
+			if err := os.WriteFile(ph.path, []byte(out), 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "%s: %v\n", ph.path, err)
+				continue
+			}
+		}
+		report(ph.path, nm+nc)
+	}
+	for _, gp := range goPaths {
+		data, err := os.ReadFile(gp)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", gp, err)
+			continue
+		}
+		out, n, err := MigrateGoFile(string(data), renames, types)
+		if err != nil || n == 0 {
+			continue
+		}
+		total += n
+		if !dry {
+			if err := os.WriteFile(gp, []byte(out), 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "%s: %v\n", gp, err)
+				continue
+			}
+		}
+		report(gp, n)
+	}
+	fmt.Printf("total: %d edit(s)\n", total)
+}
+
 func main() {
 	args := os.Args[1:]
 	goMode := false
 	recaseMode := false
+	migrateMode := false
 	dry := false
 	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
 		switch args[0] {
@@ -324,6 +447,8 @@ func main() {
 			goMode = true
 		case "-recase":
 			recaseMode = true
+		case "-migrate":
+			migrateMode = true
 		case "-n":
 			dry = true
 		default:
@@ -333,6 +458,10 @@ func main() {
 		args = args[1:]
 	}
 
+	if migrateMode {
+		runMigrate(args, dry)
+		return
+	}
 	if recaseMode {
 		runRecase(args, dry)
 		return
@@ -347,7 +476,7 @@ func main() {
 		var out string
 		var n int
 		if goMode {
-			out, n, err = MigrateGoFile(string(data))
+			out, n, err = MigrateGoFile(string(data), nil, nil)
 		} else {
 			out, n, err = Transform(string(data))
 		}
