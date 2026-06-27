@@ -1322,8 +1322,28 @@ func (w *walker) checkInlineTypedBinds(form ast.PNode, env typeEnv, sigs map[str
 	if !ok {
 		return
 	}
-	for i := 1; i+1 < len(br.Children); i += 2 {
-		inner, ok := asList(br.Children[i])
+	// The binding layout differs by form: const/var are (name value) pairs; a
+	// `let` form is an optional `var` modifier then (name = value) triples.
+	// Collect (nameNode, valueNode) so the type check below is shared.
+	type binding struct{ nameNode, valueNode ast.PNode }
+	var binds []binding
+	if headIdent(br) == "let" {
+		i := 1
+		if i < len(br.Children) {
+			if mod, ok := br.Children[i].(*ast.PLeaf); ok && mod.Value == "var" {
+				i++
+			}
+		}
+		for ; i+2 < len(br.Children); i += 3 {
+			binds = append(binds, binding{br.Children[i], br.Children[i+2]})
+		}
+	} else {
+		for i := 1; i+1 < len(br.Children); i += 2 {
+			binds = append(binds, binding{br.Children[i], br.Children[i+1]})
+		}
+	}
+	for _, bd := range binds {
+		inner, ok := asList(bd.nameNode)
 		if !ok || len(inner.Children) != 2 {
 			continue // bare name, untyped
 		}
@@ -1336,7 +1356,7 @@ func (w *walker) checkInlineTypedBinds(form ast.PNode, env typeEnv, sigs map[str
 			continue
 		}
 		base[name.Value] = declared
-		value := br.Children[i+1]
+		value := bd.valueNode
 		if info, isTrait := core.TraitOf(declared); isTrait && w.checkTraitArg(value, info, declared.Name()) {
 			continue
 		}

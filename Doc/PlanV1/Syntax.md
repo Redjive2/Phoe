@@ -45,8 +45,9 @@ maps, `self` receiver, struct `.{ field = val }` init.
    `Nil`/`True`/`False` are removed from the surface syntax.
 5. **`const` → `let`, `var` → `let var`, both gain `=`:**
    `(let x = v)` (immutable), `(let var x = v)` (mutable).
-6. **Reassignment is `(name = value)`** (and `(obj.field = value)`,
-   `(obj.[i] = value)`). The standalone `(= target val)` builtin is removed.
+6. **Reassignment is the prefix `(= target value)`** (and `(= obj.field value)`,
+   `(= obj.[i] value)`). The infix `(name = value)` spelling is NOT used — `=`
+   appears infix only as the binding marker inside `let` / struct-init.
 7. **Struct declarations** drop the `.{` dot-form and go **type → field** inside
    plain braces: `(struct My_Struct { Integer field_name  Float #priv })`.
 8. **Struct initialization** gains `=` per field:
@@ -64,7 +65,7 @@ maps, `self` receiver, struct `.{ field = val }` init.
 | Private            | lowercase / capitalization       | `#` prefix                                  |
 | Nil / bools        | `Nil` `True` `False`             | `none` `true` `false`                       |
 | Const / var        | `(const x v)` `(var x v)`        | `(let x = v)` `(let var x = v)`             |
-| Reassign           | `(= x v)`                        | `(x = v)`                                    |
+| Reassign           | `(= x v)`                        | `(= x v)` (prefix; unchanged)                |
 | List               | `[a b c]` → `(Slice …)`          | `[a b c]` → `(Slice …)` (unchanged)         |
 | Map                | `{k v …}` → `(Map …)`            | `[k -> v  …]` → `(Map …)`                    |
 | Empty list / map   | `[]` / `{}`                      | `[]` / `[->]`                               |
@@ -138,36 +139,32 @@ Deferred to the flip / Phase 8 (would break golden + grammar tests if done now):
 - tree-sitter `nil`/`bool` rules (`'Nil'` → `'none'`, `True/False` → `true/
   false`) — Phase 8.
 
-### Phase 3 — `let` / `let var` + `(name = value)`
-Landed as **parse-time sugar** in `pkg/syntax/positioned.go`, so the runtime and
-the *entire* linter keep seeing the existing `const`/`var`/prefix-`=` forms — no
-runtime builtin and no lint fan-out during the migration.
-- `rewriteLet`: `(let [var] name = value …)` → `(const name value …)` /
-  `(var name value …)` (strips the `var` modifier and the `=` markers). **Done.**
-- `rewriteInfixAssign`: `(lhs = rhs)` → `(= lhs rhs)` (fires only when the 2nd
-  element is a bare `=`, so prefix `(= …)` and `(let x = …)` are untouched).
-  Handles bare-name and `obj.field`/`obj.[i]` targets via the existing `=`
-  builtin. **Done.**
-- Tests: `pkg/syntax/letassign_phase3_test.go` (rewrite shape),
+### Phase 3 — `let` / `let var` + reassignment
+**`let`/`let var` are now FIRST-CLASS** (the parse-time `rewriteLet` sugar was
+removed); **reassignment is the prefix `(= target value)`** (the `rewriteInfixAssign`
+sugar that accepted `(name = value)` was removed). Both rewrites are gone from
+`pkg/syntax/positioned.go`.
+- Runtime: a real `let` builtin (`declareLet` in `pkg/builtins/decl.go`) parses the
+  optional `var` modifier + the `name = value` triples and binds each name —
+  immutable for `let`, mutable for `let var` — reusing the var/const Rebind logic.
+- Lint fan-out (so the AST keeps `let` and tooling labels/highlights it): `declOf`
+  (`decls.go`) normalizes a `let` form to a const/var `Head` + `Binds` while keeping
+  `d.Branch` as the `let` form for hover/symbols; raw-head consumers got `let`
+  awareness — `semantic.go` (`semLet` + keyword), `shape.go` (triple-arity check),
+  `infer.go`/`walker.go` (route through `declOf`), `nav.go` (find/render/symbols),
+  `typecheck.go` (`checkInlineTypedBinds` handles the triple layout for typed
+  binds), plus the allow-lists/predicate `scope.go` builtinNames, `checkers.go` +
+  `modload/load.go` libraryForms, `modload/reorder.go` `isVarConst`.
+- Reassignment is prefix-only and goes straight to the existing `=` builtin — no
+  rewrite, no new mangled head. `=` still appears infix solely as the binding
+  marker inside `let` and struct-init.
+- Tests: `pkg/syntax/letassign_phase3_test.go` (forms pass through unchanged),
   `pkg/builtins/let_phase3_test.go` (runtime), `pkg/lint/let_phase3_test.go`
-  (const/var distinction + set-on-constant survive the desugar). **Done.**
+  (const/var distinction + set-on-constant). **Done — suite green.**
 
-Why sugar, not first-class: the const/var consumers (`semVarConst`,
-`walker.go` check pass, `shape.go`, `infer.go assignDeclShapes`, `nav.go`) read
-raw children as name/value **pairs**, so a `let` triple-shape form can't be fed
-to them directly. Normalizing at the parser is the low-risk tolerant bridge.
-
-Note (deviation from the original sketch): reassignment reuses the existing `=`
-builtin via the prefix rewrite — no new `Assign` mangled head is introduced.
-
-Deferred to the flip:
-- Make `let`/`let var` first-class (real builtin + the lint fan-out above:
-  `decl.go`, `scope.go` `DefConst`/`DefVar` + builtin names, `checkers.go`,
-  `semantic.go`, `nav.go`, `typecheck.go`, `shape.go`, `infer.go`, `decls.go`
-  `declOf`, `modload/load.go`+`reorder.go`) so tooling labels them `let`, not
-  `const`/`var`.
-- Remove `const`/`var` and the standalone prefix-`=` form.
-- tree-sitter `let`/`var`/`=` rules — Phase 8.
+`const`/`var` and `Nil`/`True`/`False` stay accepted (tolerant) until `StrictNames`
+is flipped on; nothing in-repo uses them. tree-sitter `let`/`var`/`=` highlighting
+is Phase 8.
 
 ### Phase 4 — Bracket reshuffle (maps→`[]`, body→`{}`) + `->` token
 Split into 4a (landed, additive/tolerant) and 4b (deferred to the flip, because
@@ -331,8 +328,10 @@ couple of end-to-end `.pho` runs.
 deploy (SHA bump → Zed rebuild) is the manual tail.
 
 **Top risks**
-- `=` overloading: `(let x = v)` vs `(x = v)` vs `(obj.f = v)` distinguished
-  purely by position. Needs tight parser tests.
+- `=` roles: the binding marker in `(let x = v)` / struct-init `T.{ f = v }`
+  vs the prefix reassignment builtin `(= x v)` / `(= obj.f v)`. Distinguished by
+  position (marker is infix inside a decl; the builtin is the head). Resolved:
+  reassignment is prefix-only, so there is no infix `(x = v)` to disambiguate.
 - Empty-collection ambiguity: `[]`=list, `[->]`=map; inspect must round-trip both.
 - The reclassification name-map (Phase 7) is genuine design labor.
 - Migration blast radius: 157 test files; budget real time for hand-fixing.

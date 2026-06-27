@@ -313,7 +313,7 @@ func declFormContaining(tree []ast.PNode, span span.Span) *ast.PBranch {
 		case *ast.PBranch:
 			if spanCovers(node.Span, span) {
 				switch headIdent(node) {
-				case "fun", "macro", "method", "struct", "property", "var", "const":
+				case "fun", "macro", "method", "struct", "property", "var", "const", "let":
 					found = node
 				}
 			}
@@ -376,7 +376,7 @@ func renderDeclHeader(br *ast.PBranch) string {
 		}
 	case "struct":
 		return renderStructHeader(br)
-	case "var", "const":
+	case "var", "const", "let":
 		return pnodeText(br)
 	}
 	return pnodeText(br)
@@ -751,15 +751,15 @@ func DocumentSymbols(path string, src []byte) (syms []Symbol) {
 					}
 				}
 			}
-		case "var", "const":
+		case "var", "const", "let":
+			// declOf normalizes a `let`/`let var` form to const/var + binds.
+			decl, _ := declOf(br)
 			kind := DefVar
-			if headIdent(br) == "const" {
+			if decl.Head == "const" {
 				kind = DefConst
 			}
-			for i := 1; i+1 < len(br.Children); i += 2 {
-				if name, span, ok := declIdent(br.Children[i]); ok {
-					out = append(out, Symbol{Name: name, Kind: kind, Span: br.Span, SelectionSpan: span})
-				}
+			for _, b := range decl.Binds {
+				out = append(out, Symbol{Name: b.Name, Kind: kind, Span: br.Span, SelectionSpan: b.Span})
 			}
 		}
 	}

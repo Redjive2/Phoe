@@ -52,5 +52,5 @@ func isVarConst(form core.Node) bool {
 	if !ok {
 		return false
 	}
-	return string(head) == "var" || string(head) == "const"
+	return string(head) == "var" || string(head) == "const" || string(head) == "let"
 }

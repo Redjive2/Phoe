@@ -15,6 +15,9 @@ var libraryForms = map[string]bool{
 	"struct":   true,
 	"const":    true,
 	"var":      true,
+	// `let` / `let var` are the canonical declaration forms (const/var kept for
+	// tolerance); both bind module-level names at the top of a library.
+	"let": true,
 	// A named type alias `(type Name T)` is a declaration (a constant KindType
 	// binding), so it is permitted at the top level of a library.
 	"type": true,

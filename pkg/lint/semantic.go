@@ -204,6 +204,8 @@ func (c *semCollector) walkBranch(scope *Scope, br *ast.PBranch) {
 		c.semStruct(scope, br)
 	case "var", "const":
 		c.semVarConst(scope, br)
+	case "let":
+		c.semLet(scope, br)
 	case "foreach":
 		c.semForeach(scope, br)
 	case "while", "until":
@@ -293,7 +295,7 @@ func kindToToken(kind DefKind, name string) SemanticTokenType {
 // imports.
 var keywordBuiltins = map[string]bool{
 	"fun": true, "macro": true, "method": true, "struct": true, "property": true,
-	"var": true, "const": true, "block": true,
+	"var": true, "const": true, "let": true, "block": true,
 	"if": true, "unless": true, "foreach": true, "while": true, "until": true, "do": true,
 	"return": true, "break": true, "continue": true,
 	"and": true, "or": true, "not": true,
@@ -496,6 +498,31 @@ func (c *semCollector) semVarConst(scope *Scope, br *ast.PBranch) {
 			c.emit(span, SemTokVariable)
 		}
 		c.walk(scope, br.Children[i+1], true)
+	}
+}
+
+// semLet classifies (let [var] name = value [name = value]*): the `let` head
+// and optional `var` modifier as keywords, each binding name as a variable, and
+// the value expressions recursively. The `=` markers are punctuation (left to
+// tree-sitter).
+func (c *semCollector) semLet(scope *Scope, br *ast.PBranch) {
+	c.classifyHead(scope, br)
+	i := 1
+	if i < len(br.Children) {
+		if mod, ok := br.Children[i].(*ast.PLeaf); ok && mod.Value == "var" {
+			c.emit(mod.Span, SemTokKeyword)
+			i++
+		}
+	}
+	for ; i+2 < len(br.Children); i += 3 {
+		// The name slot is a bare ident `x` or the typed form `(Type x)`.
+		if inner, ok := br.Children[i].(*ast.PBranch); ok && inner.Open == "(" && len(inner.Children) == 2 {
+			c.emitTypeNode(inner.Children[0])
+		}
+		if _, span, ok := bindName(br.Children[i]); ok {
+			c.emit(span, SemTokVariable)
+		}
+		c.walk(scope, br.Children[i+2], true)
 	}
 }
 

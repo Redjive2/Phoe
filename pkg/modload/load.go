@@ -93,6 +93,9 @@ var libraryForms = map[string]bool{
 	"method":   true,
 	"struct":   true,
 	"const":    true,
+	// `let` / `let var` are the canonical declaration forms: `let` binds a
+	// module constant, `let var` module-level state (read-only from outside).
+	"let": true,
 	// A named type alias `(type Name T)` binds a constant KindType — a
 	// declaration (exported when capitalized), permitted at the top level.
 	"type": true,

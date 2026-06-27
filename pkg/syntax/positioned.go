@@ -390,6 +390,26 @@ func quoteFieldKey(n ast.PNode) ast.PNode {
 	return n
 }
 
+// isFieldTypePos reports whether the first element of a `.{ … }` pair sits in
+// TYPE position — i.e. the pair is a typed field `Type name` (a struct
+// declaration `(struct P.{ Number x })` or a record type `Struct.{ Number x }`)
+// rather than a `name value` construction `P.{ x 1 }`. A type is a compound
+// form (`(Or …)`, `(List …)`, a qualified `pkg.T`, a nested `Struct.{ … }`) or a
+// Title-cased identifier; a field name is a lower-case identifier (optionally
+// `#`-private). This lets the brace sugar quote the NAME — not the type — in
+// either shape, keeping the type expression live for the constructor/checker.
+func isFieldTypePos(n ast.PNode) bool {
+	lf, ok := n.(*ast.PLeaf)
+	if !ok {
+		return true // a form/dot is a type expression
+	}
+	s := lf.Value
+	if len(s) > 0 && s[0] == '#' {
+		s = s[1:]
+	}
+	return len(s) > 0 && s[0] >= 'A' && s[0] <= 'Z'
+}
+
 func isBareWord(s string) bool {
 	if s == "" {
 		return false
@@ -727,7 +747,7 @@ func (p *posParser) parsePrimary() ast.PNode {
 	t := p.peek()
 	switch t.Value {
 	case "(":
-		return rewriteLet(rewriteInfixAssign(foldMacroCall(p.parseGrouping("(", ")"))))
+		return foldMacroCall(p.parseGrouping("(", ")"))
 	case "[":
 		return p.parseGrouping("[", "]")
 	case "{":
@@ -746,75 +766,6 @@ func (p *posParser) parsePrimary() ast.PNode {
 	}
 	tok := p.advance()
 	return &ast.PLeaf{Value: tok.Value, Span: tok.Span}
-}
-
-// rewriteInfixAssign normalizes the infix assignment form `(lhs = rhs)` into
-// the prefix `(= lhs rhs)` that the runtime `=` builtin and the linter already
-// understand. It fires only for a parenthesized call whose SECOND element is a
-// bare `=` leaf, so `(x = 5)` and `(obj.f = 5)` are rewritten while `(= x 5)`
-// (already prefix) and `(let x = 5)` (the `=` sits third) are left untouched.
-func rewriteInfixAssign(n ast.PNode) ast.PNode {
-	br, ok := n.(*ast.PBranch)
-	if !ok || br.Open != "(" || len(br.Children) < 2 {
-		return n
-	}
-	eq, ok := br.Children[1].(*ast.PLeaf)
-	if !ok || eq.Value != "=" {
-		return n
-	}
-	reordered := make([]ast.PNode, 0, len(br.Children))
-	reordered = append(reordered, br.Children[1]) // the "=" leaf becomes the head
-	reordered = append(reordered, br.Children[0]) // lhs (assignment target)
-	reordered = append(reordered, br.Children[2:]...)
-	return &ast.PBranch{
-		Open:     br.Open,
-		Close:    br.Close,
-		Children: reordered,
-		Span:     br.Span,
-	}
-}
-
-// rewriteLet normalizes the new declaration form `(let [var] name = value …)`
-// into the existing `(const name value …)` / `(var name value …)` shape that
-// the runtime builtins and the whole linter already understand. `let` binds a
-// constant; `let var` binds mutable state. The optional `var` modifier and the
-// `=` markers are stripped, leaving alternating name/value pairs. This is a
-// transitional sugar: at the hard cutover `let` becomes first-class and
-// const/var are removed (Doc/PlanV1/Syntax.md).
-func rewriteLet(n ast.PNode) ast.PNode {
-	br, ok := n.(*ast.PBranch)
-	if !ok || br.Open != "(" || len(br.Children) < 1 {
-		return n
-	}
-	head, ok := br.Children[0].(*ast.PLeaf)
-	if !ok || head.Value != "let" {
-		return n
-	}
-	i := 1
-	target := "const"
-	if i < len(br.Children) {
-		if mod, ok := br.Children[i].(*ast.PLeaf); ok && mod.Value == "var" {
-			target = "var"
-			i++
-		}
-	}
-	out := make([]ast.PNode, 0, len(br.Children))
-	out = append(out, &ast.PLeaf{Value: target, Span: head.Span})
-	for i < len(br.Children) {
-		// Expect a `name = value` triple. If the `=` marker is absent or the
-		// value is missing, splice the remainder through unchanged so the
-		// const/var arity check reports a malformed binding list.
-		if i+2 < len(br.Children) {
-			if eq, ok := br.Children[i+1].(*ast.PLeaf); ok && eq.Value == "=" {
-				out = append(out, br.Children[i], br.Children[i+2])
-				i += 3
-				continue
-			}
-		}
-		out = append(out, br.Children[i:]...)
-		break
-	}
-	return &ast.PBranch{Open: br.Open, Close: br.Close, Children: out, Span: br.Span}
 }
 
 // parseSigil consumes the sigil and recursively parses the next

@@ -793,6 +793,17 @@ func declBuiltins() map[string]core.StackEntry {
 			return core.TvNil
 		}),
 
+		// (let name = value [name = value]*)      — immutable bindings.
+		// (let var name = value [name = value]*)  — mutable module/local state.
+		// The canonical declaration form: `let` binds constants, `let var` binds
+		// mutable state (the same semantics const/var carry). The optional `var`
+		// modifier and the `=` markers are structural punctuation stripped here;
+		// names and values reuse the var/const binding logic.
+		"let": global(func(ctx core.Context, argv []core.Node) core.Value {
+			declareLet(ctx, argv)
+			return core.TvNil
+		}),
+
 		// (type Name T) — a named type alias: binds Name to the type value T
 		// (any type expression — a connective, a parametric, a literal singleton
 		// like (Or "GET" "POST"), or another type name). Name then works
@@ -952,5 +963,43 @@ func declarePairs(ctx core.Context, argv []core.Node, isConst bool, caller strin
 			ctx.Errorf(core.ErrRedeclare, "'%s' cannot shadow the builtin '%s'", caller, name)
 			return
 		}
+	}
+}
+
+// isBareLeaf reports whether a node is the bare word `word` (the `var` modifier
+// or an `=` marker in a `let` form), not a value to evaluate.
+func isBareLeaf(n core.Node, word string) bool {
+	leaf, ok := core.AsLeaf(n)
+	return ok && string(leaf) == word
+}
+
+// declareLet implements the first-class `let` / `let var` declaration. The form
+// is an optional `var` modifier followed by `name = value` triples; the `=`
+// markers are stripped and each (name, value) is bound exactly as var/const
+// would — immutable for `let`, mutable for `let var`.
+func declareLet(ctx core.Context, argv []core.Node) {
+	i := 0
+	isConst := true
+	if i < len(argv) && isBareLeaf(argv[i], "var") {
+		isConst = false
+		i++
+	}
+	for i+2 < len(argv) {
+		if !isBareLeaf(argv[i+1], "=") {
+			ctx.Errorf(core.ErrArity, "'let' binding expects 'name = value'; missing '=' before %s", core.Inspect(argv[i+1]))
+			return
+		}
+		name, ok := declBindName(ctx, argv[i], "let")
+		if !ok {
+			return
+		}
+		if !ctx.Rebind(name, argv[i+2].Evaluate(ctx), isConst) {
+			ctx.Errorf(core.ErrRedeclare, "'let' cannot shadow the builtin '%s'", name)
+			return
+		}
+		i += 3
+	}
+	if i != len(argv) {
+		ctx.Errorf(core.ErrArity, "'let' has a malformed binding list; expected 'name = value' triples")
 	}
 }

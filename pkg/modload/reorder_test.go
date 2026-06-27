@@ -47,9 +47,9 @@ func TestLiftDefinitionsPartition(t *testing.T) {
 (fun helper () 1)`
 	got := heads(liftDefinitions(parseForms(t, src)))
 
-	// All definitions come first (in source order), then all const/var
-	// (in source order).
-	want := []string{"method", "struct", "fun", "const", "var", "const"}
+	// All definitions come first (in source order), then all let bindings
+	// (module state, in source order).
+	want := []string{"method", "struct", "fun", "let", "let", "let"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("partition order:\n got  %v\n want %v", got, want)
 	}
@@ -75,7 +75,7 @@ func TestLiftDefinitionsStable(t *testing.T) {
 (method Point.sum (self) (+ self.x self.y))
 (let origin = Point.{ 'X' 0 'Y' 0 })`
 	got := heads(liftDefinitions(parseForms(t, src)))
-	want := []string{"struct", "method", "const"}
+	want := []string{"struct", "method", "let"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("stable order expected %v; got %v", want, got)
 	}

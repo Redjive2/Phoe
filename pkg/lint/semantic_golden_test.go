@@ -40,8 +40,9 @@ func TestSemanticTokensGolden(t *testing.T) {
 		{4, 12, 13, SemTokParameter}, // a
 		{4, 16, 24, SemTokFunction},  // identity
 		{4, 25, 27, SemTokKeyword},   // do
-		{5, 3, 6, SemTokKeyword},     // var
-		{5, 11, 12, SemTokVariable},  // p (now preceded by `let var`)
+		{5, 3, 6, SemTokKeyword},     // let
+		{5, 7, 10, SemTokKeyword},    // var (mutability modifier)
+		{5, 11, 12, SemTokVariable},  // p
 		{5, 15, 20, SemTokType},      // Point (constructor call)
 		{6, 3, 10, SemTokKeyword},    // foreach
 		{6, 11, 12, SemTokVariable},  // i (loop var)

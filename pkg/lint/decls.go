@@ -312,6 +312,31 @@ func declOf(form ast.PNode) (topLevelDecl, bool) {
 		}
 		return d, true
 
+	case "let":
+		// (let [var] name = value [name = value]*) — the first-class declaration
+		// form. Normalize to the const/var shape the rest of the linter already
+		// consumes: `let` → const (immutable), `let var` → var (mutable). The `=`
+		// markers are structural and dropped. d.Branch keeps the original `let`
+		// form, so hover and document-symbols render the surface syntax.
+		i := 1
+		d.Head = "const"
+		if i < len(br.Children) {
+			if mod, ok := br.Children[i].(*ast.PLeaf); ok && mod.Value == "var" {
+				d.Head = "var"
+				i++
+			}
+		}
+		for i+2 < len(br.Children) {
+			if eq, ok := br.Children[i+1].(*ast.PLeaf); !ok || eq.Value != "=" {
+				break // malformed; the shape checker reports it
+			}
+			if name, sp, ok := bindName(br.Children[i]); ok {
+				d.Binds = append(d.Binds, bindDecl{name, sp, br.Children[i+2]})
+			}
+			i += 3
+		}
+		return d, true
+
 	case "type":
 		// (type Name T) — Name is a bare identifier @1, T the type expr @2
 		// (stored in Body so the checker can resolve the alias).

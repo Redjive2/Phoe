@@ -359,25 +359,19 @@ func isNumLiteral(v string) bool {
 // shapes of earlier bindings.
 func (w *walker) assignDeclShapes(scope *Scope, forms []ast.PNode) {
 	for _, form := range forms {
-		br, ok := asList(form)
-		if !ok {
+		// declOf normalizes both const/var pairs and the `let` triple form into
+		// d.Binds, so a `let`/`let var` declaration gets shapes like const/var.
+		decl, ok := declOf(form)
+		if !ok || (decl.Head != "var" && decl.Head != "const") {
 			continue
 		}
-		head := headIdent(br)
-		if head != "var" && head != "const" {
-			continue
-		}
-		for i := 1; i+1 < len(br.Children); i += 2 {
-			name, _, ok := declIdent(br.Children[i])
-			if !ok {
-				continue
-			}
-			def, exists := scope.Defs[name]
+		for _, b := range decl.Binds {
+			def, exists := scope.Defs[b.Name]
 			if !exists || (def.Kind != DefVar && def.Kind != DefConst) {
 				continue
 			}
-			def.Shape = w.inferShape(scope, br.Children[i+1])
-			scope.Defs[name] = def
+			def.Shape = w.inferShape(scope, b.Value)
+			scope.Defs[b.Name] = def
 		}
 	}
 }

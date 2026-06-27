@@ -108,6 +108,38 @@ func (w *walker) checkSpecialFormShape(br *ast.PBranch) {
 		// be any expression. The check pass (checkDeclName) flags an unquoted
 		// bare identifier, which is almost always a forgotten quote.
 
+	case "let":
+		// (let [var] name = value [name = value]*) — an optional `var` modifier
+		// leads, then name/value pairs joined by `=` markers.
+		args := br.Children[1:]
+		if len(args) >= 1 {
+			if mod, ok := args[0].(*ast.PLeaf); ok && mod.Value == "var" {
+				args = args[1:]
+			}
+		}
+		if len(args) < 3 || len(args)%3 != 0 {
+			w.emit(Diagnostic{
+				File:     w.file,
+				Span:     headSpan(br),
+				Severity: SeverityError,
+				Code:     "bad-form-arity",
+				Message:  "'let' expects 'name = value' bindings (an optional 'var' modifier may lead)",
+			})
+			return
+		}
+		for j := 1; j < len(args); j += 3 {
+			if eq, ok := args[j].(*ast.PLeaf); !ok || eq.Value != "=" {
+				w.emit(Diagnostic{
+					File:     w.file,
+					Span:     args[j-1].GetSpan(),
+					Severity: SeverityError,
+					Code:     "bad-form-arity",
+					Message:  "'let' binding expects 'name = value' (missing '=')",
+				})
+				return
+			}
+		}
+
 	case "if", "unless":
 		// (if cond then expr [elif cond then expr]* [else expr]) and the
 		// elif-less (unless cond then expr [else expr]). parseIfForm validates

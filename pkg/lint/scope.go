@@ -180,7 +180,7 @@ var builtinNames = []string{
 	// Control flow.
 	"if", "unless", "foreach", "while", "until", "do", "return", "break", "continue",
 	// Declarations / bindings.
-	"fun", "macro", "method", "struct", "property", "static", "trait", "var", "const", "type", "=", "block",
+	"fun", "macro", "method", "struct", "property", "static", "trait", "let", "var", "const", "type", "=", "block",
 	// Collections. (slice/map are intentionally absent: they are mangled —
 	// `[…]`/`{…}` are the only surface forms — so a bare `(slice …)`/`(map …)`
 	// is an unresolved call, not a builtin.)

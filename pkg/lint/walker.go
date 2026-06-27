@@ -883,11 +883,13 @@ func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 		}
 	case "Trait", "trait":
 		w.checkTrait(scope, br)
-	case "var", "const":
-		// (var a 1 b 2 ...) — names are declarations; values are
-		// expressions that may reference other names.
-		for i := 1; i+1 < len(br.Children); i += 2 {
-			w.checkExpr(scope, br.Children[i+1], true)
+	case "var", "const", "let":
+		// names are declarations; values are expressions that may reference
+		// other names. declOf normalizes the `let` triple form (name = value)
+		// to the same binds as const/var pairs.
+		decl, _ := declOf(br)
+		for _, b := range decl.Binds {
+			w.checkExpr(scope, b.Value, true)
 		}
 		// Re-record shapes at the decl's lexical position: the hoisting
 		// pre-pass ran before any reassignments, so this refresh keeps
