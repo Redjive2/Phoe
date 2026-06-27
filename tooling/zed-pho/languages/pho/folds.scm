@@ -10,6 +10,7 @@
 [
   (list)
   (macro_call)
+  (macro_definition)
   (array)
   (dict)
 ] @fold

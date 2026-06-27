@@ -59,6 +59,17 @@
 ((list . (identifier) @_kw . (identifier) @local.definition.var)
  (#any-of? @_kw "var" "const"))
 
+; `let` / `let var` are the canonical binding forms: `(let x = v)` binds x;
+; `(let var x = v)` binds x (the name follows the `var` modifier). Both are
+; best-effort single-binding captures, like var/const (see header note).
+((list . (identifier) @_kw . (identifier) @local.definition.var)
+ (#eq? @_kw "let")
+ (#not-eq? @local.definition.var "var"))
+
+((list . (identifier) @_kw . (identifier) @_var . (identifier) @local.definition.var)
+ (#eq? @_kw "let")
+ (#eq? @_var "var"))
+
 
 ; ----- Function / method parameters -----
 ;

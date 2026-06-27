@@ -28,23 +28,24 @@
 
 
 ; ----- Capitalized identifiers as types/constructors -----
-; Pho convention: package exports must be capitalized, and
-; structs use PascalCase. Anything starting with an uppercase
-; letter is most likely a type / constructor / public function.
+; Post-cutover, CASING marks the type/value split (it no longer marks
+; visibility — that is the `#` prefix now): a Title_Snake_Case name is a type
+; or constructor, a snake_case name is a value/function. An optional leading
+; `#` (a private type) doesn't change the casing test.
 ;
 ; This is a heuristic — `locals.scm` (Phase 1b) will refine.
 
 ((identifier) @type
- (#match? @type "^[A-Z]"))
+ (#match? @type "^#?[A-Z]"))
 
-; A capitalized identifier in list-HEAD position is a call to an exported
-; function (Pho requires exported names to capitalize), not a type — recolor it
+; A capitalized identifier in list-HEAD position is a type used as a
+; constructor/call (e.g. `(Point …)`), not a plain type reference — recolor it
 ; from the @type heuristic above. Capitalized type-VALUE names in argument
 ; position keep @type; the capitalized type operators (Or/And/…) are re-tagged
 ; @function.builtin in the builtin-functions block below (which comes later and
 ; therefore wins for those specific names).
 ((list . (identifier) @function.call)
- (#match? @function.call "^[A-Z]"))
+ (#match? @function.call "^#?[A-Z]"))
 
 
 ; ----- Symbol operators -----
@@ -63,6 +64,9 @@
 "." @punctuation.delimiter
 
 (range_separator) @punctuation.special
+
+; `->` is the map-literal key/value separator inside `[ k -> v ]`.
+(map_arrow) @punctuation.special
 
 
 ; ----- Sigils for sugar forms -----
@@ -83,7 +87,7 @@
 ((list . (identifier) @keyword)
  (#any-of? @keyword
    "fun" "method" "struct" "property" "static" "trait" "type"
-   "var" "const"
+   "let" "var" "const"
    "if" "unless" "foreach" "while" "until" "do" "block"
    "return" "break" "continue"
    "import" "goimport"
@@ -156,11 +160,12 @@
 
 ; ----- User-defined function calls -----
 ;
-; CAPITALIZED call heads ARE tagged @function.call (the rule next to the
-; capitalized-@type heuristic near the top) — Pho requires exported names to
-; capitalize, so a capitalized list head is an exported-function call.
+; Title_Snake_Case call heads ARE tagged @function.call (the rule next to the
+; capitalized-@type heuristic near the top) — a capitalized list head is a type
+; used as a constructor/call.
 ;
-; LOWERCASE user-call heads are deliberately left at the default @variable: the
+; LOWERCASE (snake_case) user-call heads are deliberately left at the default
+; @variable — public or private (`#`) is irrelevant to highlighting here: the
 ; param-list-aware ancestor filtering that would let us tag them safely isn't
 ; available, and a bare `(list . (identifier) @function.call)` would mis-tag the
 ; first identifier of other lists. Builtins and special forms are still picked
@@ -192,7 +197,7 @@
   .
   (identifier) @type
   (dict))
- (#match? @type "^[A-Z]"))
+ (#match? @type "^#?[A-Z]"))
 
 
 ; ----- Decimal literals -----
@@ -235,10 +240,9 @@
 
 
 ; ----- Universal membership methods -----
-; `Is?` / `In?` are the universal type-test methods (x.Is? T, x.In? coll). Give
+; `is?` / `in?` are the universal type-test methods (x.is? T, x.in? coll). Give
 ; them one consistent color in every position — without this they'd be tagged
-; @property after a dot but @type via the capitalized heuristic at the prefix.
-; Last so it wins over both.
+; @property after a dot. Last so it wins.
 
 ((identifier) @function.method
- (#any-of? @function.method "Is?" "In?"))
+ (#any-of? @function.method "is?" "in?"))
