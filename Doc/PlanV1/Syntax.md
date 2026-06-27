@@ -15,10 +15,12 @@ privacy (`self.#pid`), `none`/`true`/`false`, `let`/`let var` + `=`, `[k -> v]`
 maps, `self` receiver, struct `.{ field = val }` init.
 
 **Remaining (optional, non-blocking — main is green):**
-- **Phase 8 tree-sitter grammar/corpus** still encodes the OLD surface
-  (grammar.js, corpus, most of highlights). Only the `atomName`→`atom_name`
-  builtin-name was synced (for the subset-of-lint test). Zed editor highlighting
-  of new-syntax files lags until the grammar is migrated + SHA-bumped.
+- **Phase 8 tree-sitter — DONE** (committed): `grammar.js` migrated
+  (none/true/false, `#`-private idents, `[k -> v]` `map_arrow`, value-literal dot
+  receivers), corpus **74/74** green, every real stdlib `.phl`/`.pho` parses
+  clean, queries synced to `zed-pho`, gitlink + `extension.toml` SHA bumped to the
+  migrated grammar commit. The only step left is the Zed-side **extension rebuild**
+  (the user runs it; node/grammar skew kills the language until then).
 - **`StrictNames` is still off** and the runtime/lint still *tolerate* the old
   forms (const/var, Nil/True/False, `{k v}` maps). Nothing uses them; flipping
   `StrictNames` on + removing old-form acceptance is a future hardening step.
@@ -305,14 +307,22 @@ Annotation-vocabulary caveat (found earlier, still relevant): `annot.phl`'s
 `~doc`/`~flag`/`~sig` functions are lowercase-but-public protocol names — a
 PARTIAL migration breaks them; the cutover must be whole-tree and atomic.
 
-### Phase 8 — tree-sitter + Zed + LSP
-- `grammar.js`: value-vs-type ident + `#`, `none/true/false`, `->`, `[]`
-  map-vs-list, `{}` struct body, `.{ f = v }`, `let`/`var`.
-- Rewrite all 74 corpus tests; keep 74/74 green.
-- Update both synced copies of `highlights/locals/outline/indents/folds.scm` +
-  `brackets.scm`; commit tree-sitter, bump SHA in `extension.toml`, rebuild
-  extension (node/grammar skew kills the language).
-- LSP hover/completion/semantic-token spelling + `#` visibility.
+### Phase 8 — tree-sitter + Zed + LSP — DONE
+- `grammar.js`: `identifier` allows a leading `#`; `none`/`true`/`false` (was
+  Nil/True/False); `->` `map_arrow` inside `[]` (list-vs-map); value literals
+  (string/char/bool) admitted as dot receivers (`'abc'.size`, `` `r`.in? ``).
+  `.{ }` construction and `{}` dicts parse as a `dict` node as before — contents
+  are just expressions, so `.{ field value }` (no `=`) and the `=`-marked form
+  both parse.
+- Corpus rewritten and **74/74 green**; every real stdlib `.phl`/`.pho` parses
+  with zero ERROR/MISSING (only the deliberate `testdata/parse_err.pho` errors).
+- Both synced copies of `highlights`/`locals` updated (let, `->`, is?/in?,
+  `#?[A-Z]` type match) + `folds` synced; `outline`/`indents`/`brackets` needed
+  no syntax change. Committed the (local `file://`) tree-sitter-pho repo and
+  bumped its SHA in `extension.toml` + the main-repo gitlink. **Remaining: rebuild
+  the Zed extension** (user's step — node/grammar skew kills the language).
+- LSP hover/completion/semantic-token spelling + `#` visibility already landed on
+  the Go side (Phases 1–7 + the let/prefix work).
 
 ### Phase 9 — Verify
 `go test ./...`, lint golden/drift suites, `tree-sitter test` (74/74), and a
