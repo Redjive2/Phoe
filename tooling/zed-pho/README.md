@@ -7,11 +7,12 @@ auto-indent — all driven by the
 
 ## What you get
 
-- **Syntax highlighting** — every form: lists, arrays, dicts, quotes,
-  blocks, macro calls, dot chains, slice forms, comments, etc.
-- **Bracket matching / auto-pairing** for `(` `)` `[` `]` `{` `}` and `"`.
+- **Syntax highlighting** — every form: lists, arrays, `[k -> v]` maps,
+  `.{}` construction, blocks, macro calls, dot chains, slice forms, comments, etc.
+- **Bracket matching / auto-pairing** for `(` `)` `[` `]` `{` `}` and `'`.
 - **Comment toggle** — Cmd-/ toggles `--` line comments.
-- **Outline view** — `fun`, `struct`, and `method` definitions.
+- **Outline view** — `fun`, `struct`, `method`, `property`, and static-member
+  definitions.
 - **Auto-indent** inside lists / arrays / dicts.
 - **Diagnostics** (via the Pho LSP) — top-level `var`, `.phl` side
   effects, redeclarations, set-on-constant, unresolved identifiers.
@@ -157,22 +158,21 @@ When `grammar.js` changes, you need to:
 
 Open one of:
 
-- `main/main.pho` — the binary's entry program.
 - `tooling/tree-sitter-pho/examples/showcase.pho` — synthetic file that
   exercises every grammar form.
-- `std/io/write.pho` — short stdlib file.
+- `script/std/io/io.phl` — a real stdlib file.
 
 You should see:
 
 - Comments in the dim/comment color.
-- `"strings"` and `` `c` `` chars in the string color.
+- `'strings'` and `` `c` `` chars in the string color.
 - Numbers (including `-5`) in the number color.
-- `True` / `False` / `Nil` styled as constants.
-- The `'`, `&`, `!` sigils colored as keyword operators.
-- The head of each list (`fun`, `if`, `import`, `+`, `io.PrintLine`, …)
+- `none` / `true` / `false` styled as constants.
+- The `&` and `~` sigils colored as keyword operators.
+- The head of each list (`fun`, `if`, `import`, `+`, `io.print_line`, …)
   treated as a function call / keyword / operator depending on which.
 - After a `.`, the right-hand identifier styled as a property/field.
-- Capitalized identifiers (`Point`, `PrintLine`) styled as types.
+- Title_Snake_Case identifiers (`Point`, `Number`) styled as types.
 
 If a category looks wrong, the fix is in
 `languages/pho/highlights.scm` (mirror of

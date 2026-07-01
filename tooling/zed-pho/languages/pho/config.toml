@@ -7,14 +7,23 @@ path_suffixes = ["pho", "phl"]
 # rather than just `--`, matching common style.
 line_comments = ["-- "]
 
+# Characters that are part of an identifier beyond the default alphanumerics +
+# `_`. Pho identifiers carry a leading `#` (private), a trailing `?` (predicate)
+# or `!` (effect), e.g. `#secret`, `atom?`, `append!` — so the editor must treat
+# those as word constituents (double-click selection, word motions, completion
+# boundaries) rather than splitting the token.
+word_characters = ["#", "?", "!"]
+
 # Auto-pair these characters when the user types the opener. `not_in`
 # entries suppress auto-pairing inside string / comment contexts.
 brackets = [
     { start = "(", end = ")", close = true, newline = true },
     { start = "[", end = "]", close = true, newline = true },
     { start = "{", end = "}", close = true, newline = true },
-    { start = "\"", end = "\"", close = true, newline = false, not_in = ["string", "comment"] },
+    # Post-cutover, strings are single-quoted (`'...'`); `"` is an ordinary
+    # character. Auto-pair `'` (suppressed inside an existing string/comment).
+    { start = "'", end = "'", close = true, newline = false, not_in = ["string", "comment"] },
 ]
 
 # Characters that, when typed, will let an auto-paired closer step over them.
-autoclose_before = ".,;:)]}\""
+autoclose_before = ".,;:)]}'"

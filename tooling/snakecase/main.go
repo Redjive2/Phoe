@@ -54,11 +54,6 @@ type edit struct {
 	text       string // replacement (empty end==start means pure insertion)
 }
 
-func startOf(src string, n ast.PNode) int {
-	s := n.GetSpan()
-	return offsetOf(src, s.StartLine, s.StartCol)
-}
-
 func endOf(src string, n ast.PNode) int {
 	s := n.GetSpan()
 	return offsetOf(src, s.EndLine, s.EndCol)

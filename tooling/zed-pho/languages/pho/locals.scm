@@ -117,6 +117,21 @@
  (#any-of? @_kw "import" "goimport"))
 
 
+; ----- Static members -----
+;
+; (static method Owner.Name (params) body) / (static property Owner.Name get …).
+; The `static` modifier shifts everything one slot past a plain method/property:
+; the body is a fresh scope, and a static method's parameter list binds.
+
+((list . (identifier) @_static . (identifier) @_kind . (dot_chain))
+ (#eq? @_static "static")
+ (#any-of? @_kind "method" "property")) @local.scope
+
+((list . (identifier) @_static . (identifier) @_kind . (dot_chain) . (list (identifier) @local.definition.parameter))
+ (#eq? @_static "static")
+ (#eq? @_kind "method"))
+
+
 ; ----- References -----
 ;
 ; Every identifier not captured as a definition above. The resolver picks

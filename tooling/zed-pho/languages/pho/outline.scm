@@ -60,3 +60,17 @@
   "macro" @context
   name: (identifier) @name
 ) @item
+
+; (static method Owner.Name (args) body) / (static property Owner.Name get …)
+; The `static` modifier leads; the owner shows as context, the member as name —
+; so a static member appears in the outline like a plain method/property.
+(list
+  .
+  (identifier) @_static
+  .
+  (identifier) @_kind
+  .
+  (dot_chain (identifier) @context (identifier) @name)
+  (#eq? @_static "static")
+  (#any-of? @_kind "method" "property")
+) @item

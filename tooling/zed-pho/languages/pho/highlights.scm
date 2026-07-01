@@ -102,6 +102,13 @@
  (#any-of? @keyword "method" "property"))
 
 
+; The `var` mutability modifier in `(let var x = v)` is the SECOND child after
+; the `let` head, so the list-head keyword rule above misses it — tag it too.
+((list . (identifier) @_let . (identifier) @keyword)
+ (#eq? @_let "let")
+ (#eq? @keyword "var"))
+
+
 ; ----- control-form keyword markers -----
 ; then/elif/else (if/unless), in (foreach), and then (while/until) are bare
 ; identifiers that mark the operands of a control form. They aren't list
