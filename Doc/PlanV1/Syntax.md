@@ -183,7 +183,7 @@ needs the codemod).
   `[->]`→empty map. The linter already ignores `->` (`looksLikeIdentifier`
   rejects it), so no lint change. **Done.**
 - Struct init `.{ field = value }` (`positioned.go` `.{` rewrite,
-  `structInitHasEq`/`quoteFieldKey`): accepts the new `=` triple form *and* the
+  `structInitHasEq`/`quoteFieldKey`}: accepts the new `=` triple form *and* the
   old pair form; `#field` keys accepted (`isBareWord` extended). **Done.**
 - Tests: `pkg/syntax/brackets_phase4_test.go`, `pkg/builtins/brackets_phase4_test.go`.
 
@@ -194,7 +194,7 @@ to `{k v}` transitionally.
 **Phase 4b — deferred to the flip (needs the codemod):**
 - `{…}` → new `Brace` mangled head (struct/type body); drop `{…}`-as-map.
 - `structDeclShape` (`decl.go:150`): read the `Brace` body as **type→field**
-  alternation (replaces the `.{` field-first typed form); `#` private fields.
+  alternation (replaces the `.{` field-first typed form}; `#` private fields.
 - `inspect.go`: render maps as `[k -> v]`, struct body `{ Type f }`, init
   `.{ f = v }`; lint `builtinNames`/drift/`infer` for the `Brace` head.
 - Migrate all `{k v}` map literals → `[k -> v]` (codemod).
@@ -312,7 +312,7 @@ PARTIAL migration breaks them; the cutover must be whole-tree and atomic.
   Nil/True/False); `->` `map_arrow` inside `[]` (list-vs-map); value literals
   (string/char/bool) admitted as dot receivers (`'abc'.size`, `` `r`.in? ``).
   `.{ }` construction and `{}` dicts parse as a `dict` node as before — contents
-  are just expressions, so `.{ field value }` (no `=`) and the `=`-marked form
+  are just expressions, so `.{ field = value }` (no `=`) and the `=`-marked form
   both parse.
 - Corpus rewritten and **74/74 green**; every real stdlib `.phl`/`.pho` parses
   with zero ERROR/MISSING (only the deliberate `testdata/parse_err.pho` errors).

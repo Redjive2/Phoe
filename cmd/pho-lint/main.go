@@ -24,6 +24,8 @@ func main() {
 		os.Exit(2)
 	}
 
+	lint.EffectCheck = true // effect discipline is a real language rule now (Effects.md Phase 4)
+
 	exitCode := 0
 
 	for _, arg := range os.Args[1:] {

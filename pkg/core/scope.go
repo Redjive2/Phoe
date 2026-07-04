@@ -172,6 +172,18 @@ func (ctx Context) Set(targetIdent string, newVal Tval) SetResult {
 	return SetMissing
 }
 
+// RecordRecvRebind reports a `(var self)` method's whole-value receiver
+// reassignment to the active RecvRebind slot, if one is installed (the dot
+// accessor installs it around a method call). A no-op otherwise, so a var
+// method invoked without a receiver-lvalue call site (e.g. on a literal) just
+// discards the rebind. See RecvRebind.
+func (ctx Context) RecordRecvRebind(v Tval) {
+	if ctx.Env.RecvRebind != nil {
+		ctx.Env.RecvRebind.Set = true
+		ctx.Env.RecvRebind.Val = v
+	}
+}
+
 // PushFunContext enters a function body: only the frame just pushed for the
 // arguments is visible on env.Stack — everything beneath belongs to the
 // caller and is hidden. defFrames is the definition-site scope chain

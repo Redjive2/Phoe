@@ -87,7 +87,7 @@ x`
 
 func boolLit(b bool) string {
 	if b {
-		return "True"
+		return "true"
 	}
-	return "False"
+	return "false"
 }

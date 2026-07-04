@@ -21,28 +21,28 @@ import (
 // optional, interpolation) so truncation produces a wide range of
 // incomplete shapes.
 var hardeningCorpus = []string{
-	`(fun add (a b) (+ a b))`,
-	`(fun f ((spread xs) (optional o)) (keyof xs))`,
-	`(method Point.shift (self d) (+ self.x d))`,
+	`(let add (a b) = (+ a b))`,
+	`(let f ((spread xs) (optional o)) = (keyof xs))`,
+	`(let Point.shift (self d) = (+ self.x d))`,
 	`(struct Point x #y)`,
-	`(let var p = Point.{ x 1 #y 2 })`,
+	`(let var p = Point.{ x = 1 #y = 2 })`,
 	`(let k = (mod 10 3))`,
 	`(= p.x 10)`,
 	`(= x 5)`,
 	`(if (< n 1) (foo) (bar))`,
-	`(foreach x in [1 2 3] (io.print_line x))`,
+	`(foreach x in [1 2 3] (io/print-line x))`,
 	`(while (< i 10) then (identity do (step)))`,
 	`(identity do (let var a = 1) (+ a 2))`,
 	`(import 'std/io')`,
 	`(goimport ('mathx' m))`,
-	`(io.print_line self.#x.#y)`,
+	`(io/print-line self.#x.#y)`,
 	`(myMacro! a b c)`,
 	`(return (+ 1 2))`,
 	`'hi %name and %(len items) at %obj.field'`,
 	`(+ (mod 10 3) (- 4 (* 2 1)))`,
 	// Multi-form: an incomplete early form must not poison later ones
 	// (the exact shape of the bug this pass follows up on).
-	"(if)\n(fun g (n) (+ n 1))",
+	"(if)\n(let g (n) = (+ n 1))",
 	"(fun a () (do\n(if (< x 1)\n",
 	// Bare special forms — every head reached with a 1-child branch,
 	// the shape that broke `if`. The shape/decl/nav/completion handlers

@@ -35,8 +35,8 @@ func TestTvAtom(t *testing.T) {
 }
 
 func TestIsAtomName(t *testing.T) {
-	ok := []string{"foo", "fast", "x1", "foo_bar", "done?", "01213", "1"}
-	bad := []string{"", "12abc", "_foo", "foo-bar", ":foo", "?"}
+	ok := []string{"foo", "fast", "x1", "foo-bar", "done?", "01213", "1"}
+	bad := []string{"", "12abc", "-foo", "foo--bar", ":foo", "?"}
 	for _, s := range ok {
 		if !IsAtomName(s) {
 			t.Errorf("IsAtomName(%q) = false, want true", s)

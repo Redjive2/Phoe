@@ -147,7 +147,7 @@ func collectTypeNames(tree []ast.PNode) map[string]bool {
 
 // typeDeclName reads the name a struct/type/trait declaration binds. The bare
 // form `(struct Name …)` has a leaf name; the typed struct form `(struct
-// Name.{ … })` was rewritten at parse time to `(struct (Name "F" T …))`, so the
+// Name.{ … })` was rewritten at parse time to `(struct (Name T "F" …))`, so the
 // name is the head leaf of the inner call.
 func typeDeclName(n ast.PNode) string {
 	switch node := n.(type) {

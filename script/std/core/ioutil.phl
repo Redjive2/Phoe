@@ -1,15 +1,17 @@
 (import 'std/fmt'
         'std/pctl')
 
-(fun print_line ((spread args))
-    (pctl.stdout.write (fmt.format (spread args) '\n'))
+(fun print-line! ((spread Unknown)) None)
+(let print-line! ((spread args)) =
+    (pctl/stdout.write! (fmt/format (spread args) '\n'))
 )
 
-(fun print ((spread args))
-    (pctl.stdout.write (fmt.format (spread args)))
+(fun print! ((spread Unknown)) None)
+(let print! ((spread args)) =
+    (pctl/stdout.write! (fmt/format (spread args)))
 )
 
-(fun read_line (prompt)
-    (pctl.stdin.read_line prompt)
+(fun read-line (String) String)
+(let read-line (prompt) =
+    (pctl/stdin.read-line prompt)
 )
-

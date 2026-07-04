@@ -22,6 +22,35 @@ func hasMessageContaining(errs []ParseError, sub string) bool {
 	return false
 }
 
+// An identifier may carry both a predicate '?' and an effect '!', always in the
+// order `name?!`; `name!?` must not lex as a single identifier.
+func TestQuestionBangSuffix(t *testing.T) {
+	vals := func(src string) []string {
+		toks, _ := LexPos(src)
+		var out []string
+		for _, tk := range toks {
+			out = append(out, tk.Value)
+		}
+		return out
+	}
+	for _, name := range []string{"ok?", "flush!", "grab?!"} {
+		got := vals("(" + name + ")")
+		if len(got) != 3 || got[1] != name {
+			t.Fatalf("%q should lex as one identifier, got %v", name, got)
+		}
+	}
+	// `bad!?` splits — the '?' cannot follow the '!'.
+	got := vals("(bad!? x)")
+	if len(got) < 2 || got[1] != "bad!" {
+		t.Fatalf("bad!? should split into 'bad!' + stray '?', got %v", got)
+	}
+	for _, v := range got {
+		if v == "bad!?" {
+			t.Fatalf("bad!? must not be one identifier, got %v", got)
+		}
+	}
+}
+
 // #1 — unterminated string is reported, not silently consumed.
 func TestUnterminatedString(t *testing.T) {
 	errs := parseAll(`(print 'hello`)

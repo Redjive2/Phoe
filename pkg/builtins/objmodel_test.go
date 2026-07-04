@@ -52,24 +52,24 @@ func TestPrimitiveMethod(t *testing.T) {
 	}{
 		{
 			"zero-arg method on a literal",
-			"(method Number.double (self) do (* self 2))\n(5.double)",
+			"(let Number.double (self) = (* self 2))\n(5.double)",
 			10,
 		},
 		{
 			"method with an argument",
-			"(method Number.plus (self n) do (+ self n))\n(10.plus 5)",
+			"(let Number.plus (self n) = (+ self n))\n(10.plus 5)",
 			15,
 		},
 		{
 			"method on a bound variable",
-			"(method Number.square (self) do (* self self))\n(let n = 7)\n(n.square)",
+			"(let Number.square (self) = (* self self))\n(let n = 7)\n(n.square)",
 			49,
 		},
 		{
 			// `x.M` yields a bound method reference; each (…) call applies it,
 			// so a method's result can take another method call.
 			"call on a method result",
-			"(method Number.inc (self) do (+ self 1))\n(((3.inc).inc).inc)",
+			"(let Number.inc (self) = (+ self 1))\n(((3.inc).inc).inc)",
 			6,
 		},
 	}
@@ -87,16 +87,16 @@ func TestPrimitiveMethod(t *testing.T) {
 }
 
 func TestPrimitiveProperty(t *testing.T) {
-	// A read-only computed property on Number, backed by an anonymous method.
+	// A read-only computed property on Number, backed by a (get …) accessor.
 	// A property is read WITHOUT a call — `n.Zero?` is the value directly
 	// (unlike a method `(n.Method)`, which is a call on a method reference).
-	const decl = "(property Number.zero? get (method Number (self) do (== self 0)))\n"
+	const decl = "(property Number.zero? (get (self) (== self 0)))\n"
 
 	if got := evalInPackage(t, decl+"0.zero?", nil); got.Kind != core.KindBool || got.Val.(bool) != true {
-		t.Fatalf("0.Zero? = %v (%s), want True", got.Val, got.Kind)
+		t.Fatalf("0.Zero? = %v (%s), want true", got.Val, got.Kind)
 	}
 	if got := evalInPackage(t, decl+"5.zero?", nil); got.Kind != core.KindBool || got.Val.(bool) != false {
-		t.Fatalf("5.Zero? = %v (%s), want False", got.Val, got.Kind)
+		t.Fatalf("5.Zero? = %v (%s), want false", got.Val, got.Kind)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestPrimitiveMethodUnknownMember(t *testing.T) {
 	var codes []string
 	got := evalInPackage(t, "(5.nope)", func(c string) { codes = append(codes, c) })
 	if got.Kind != core.KindNil {
-		t.Fatalf("(5.Nope) = %v (%s), want Nil after diagnostic", got.Val, got.Kind)
+		t.Fatalf("(5.Nope) = %v (%s), want none after diagnostic", got.Val, got.Kind)
 	}
 	if len(codes) == 0 {
 		t.Errorf("expected a diagnostic for an undefined member")
@@ -117,7 +117,7 @@ func TestPrimitiveMethodDuplicate(t *testing.T) {
 	// Declaring the same (type, member) twice in one package is rejected.
 	var codes []string
 	evalInPackage(t,
-		"(method Number.dup (self) do self)\n(method Number.dup (self) do self)",
+		"(method Number.dup (Self) Number)\n(method Number.dup (Self) Number)",
 		func(c string) { codes = append(codes, c) })
 	if !hasCode(codes, core.ErrRedeclare) {
 		t.Fatalf("expected a %q diagnostic for a duplicate primitive method; got %v", core.ErrRedeclare, codes)
@@ -150,10 +150,10 @@ func TestBuiltinModuleCollectionMethods(t *testing.T) {
 	}
 
 	if got := evalInPackage(t, "[].empty?", nil); got.Kind != core.KindBool || !got.Val.(bool) {
-		t.Errorf("[].Empty? = %v, want True", got.Val)
+		t.Errorf("[].Empty? = %v, want true", got.Val)
 	}
 	if got := evalInPackage(t, "[1].empty?", nil); got.Kind != core.KindBool || got.Val.(bool) {
-		t.Errorf("[1].Empty? = %v, want False", got.Val)
+		t.Errorf("[1].Empty? = %v, want false", got.Val)
 	}
 }
 

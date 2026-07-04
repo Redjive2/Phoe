@@ -41,4 +41,11 @@ var (
 	// to `[…]` / `{…}`.
 	Slice = "slice" + ManglerSuffix
 	Map   = "map" + ManglerSuffix
+
+	// Slash is the package/subpackage navigation accessor behind the `a/b/c`
+	// path syntax. The lower pass rewrites a `/` chain to (Slash …). It walks
+	// an imported package (or goop module), resolving each segment as an export
+	// or a lazily-loaded subpackage. Mangled like Dot so `/` is the only way to
+	// reach it; Inspect renders it back to `a/b`.
+	Slash = "slash" + ManglerSuffix
 )

@@ -17,8 +17,8 @@ func num(t *testing.T, src string, want float64) {
 // foreach iterates arrays, strings (by rune), and dicts (by key); `in` is a
 // required keyword. while/until are the conditional loops with `then`.
 func TestLoopForms(t *testing.T) {
-	num(t, "(let var s = 0)\n(foreach n in [1 2 3 4] (= s (+ s n)))\ns", 10)        // array
-	num(t, "(let var c = 0)\n(foreach ch in 'abcde' (= c (+ c 1)))\nc", 5)        // string (runes)
+	num(t, "(let var s = 0)\n(foreach n in [1 2 3 4] (= s (+ s n)))\ns", 10)              // array
+	num(t, "(let var c = 0)\n(foreach ch in 'abcde' (= c (+ c 1)))\nc", 5)                // string (runes)
 	num(t, "(let var k = 0)\n(foreach key in [ 1 -> 10 2 -> 20 ] (= k (+ k key)))\nk", 3) // dict keys (1+2)
 
 	num(t, "(let var i = 0)\n(while (< i 5) then (= i (+ i 1)))\ni", 5)  // while: loop while true
@@ -31,7 +31,7 @@ func TestLoopForms(t *testing.T) {
 // The noop keywords are mandatory and foreach is iteration-only.
 func TestLoopFormErrors(t *testing.T) {
 	for _, src := range []string{
-		"(foreach x of [1 2 3] (= x x))",          // wrong keyword (not `in`)
+		"(foreach x of [1 2 3] (= x x))",                // wrong keyword (not `in`)
 		"(let var i = 0)\n(while (< i 1) when (= i 1))", // wrong keyword (not `then`)
 		"(let var i = 0)\n(until (< i 1) when (= i 1))", // wrong keyword (not `then`)
 	} {

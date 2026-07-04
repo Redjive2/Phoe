@@ -69,6 +69,12 @@ type walker struct {
 	// member checks stay honest on both sides of the branch.
 	inBranch bool
 
+	// clauseParams marks that the param list being collected belongs to a
+	// `(let name (patterns) …)` implementation CLAUSE: entries are PATTERNS
+	// (literals, type tests, destructures) whose BINDERS define params —
+	// literals are matched, not declared (Features.md §2).
+	clauseParams bool
+
 	// methodOwner is the struct name whose method body is being
 	// walked ("" outside methods). Lets `self` carry a privileged
 	// instance shape.
@@ -119,6 +125,12 @@ type walker struct {
 	// carries ready-rendered hover markdown rather than a definition site.
 	onBuiltinMember func(span span.Span, hoverMD string)
 	onDefine        func(span span.Span, def Definition)
+	// onShapeAssigned fires when assignDeclShapes records an inferred shape for a
+	// var/const/let binding, carrying the binding NAME span. onDefine fires during
+	// collect (before shapes are inferred), so a declaration hit captures a
+	// shapeless Definition; this hook lets navigation backfill the inferred shape
+	// so hovering a binding AT its declaration shows its type, like a reference.
+	onShapeAssigned func(sp span.Span, sh Shape)
 
 	// onAnnotation, if set, is called once per annotated top-level form
 	// with the evaluated annotation results (one per `--@`, in source
@@ -136,6 +148,12 @@ type walker struct {
 	// against — the file scope at top level, a function body's scope while
 	// checking inside it. Swapped (save/restore) as the checker descends.
 	checkScope *Scope
+
+	// tvarBoundStruct maps a generic type variable (interned) to the NAME of the
+	// struct that bounds it, when the bound is a struct. The variable's bound
+	// PhoType is a structural record (fields only); the name reaches the nominal
+	// struct's method table so bound METHOD access `(b.method …)` resolves.
+	tvarBoundStruct map[*core.PhoType]string
 }
 
 func newWalker(file string) *walker {
@@ -186,6 +204,9 @@ func (w *walker) walkFile(tree []ast.PNode, parent *Scope) {
 	w.collect(fileScope, tree)
 	// Every inline type signature must have a matching implementation.
 	w.checkMissingImpls(fileScope)
+	// Clause-set layout + exhaustiveness + const-dispatch call sites
+	// (Features.md §1/§2/§9). After collect so cross-file sigs are visible.
+	w.checkClauses(fileScope, tree)
 	// Record struct-typed fields' owners so shape inference can navigate through
 	// them (recursive/nested member access). Must precede the reference walk.
 	w.harvestFieldShapes(fileScope, tree)
@@ -230,8 +251,17 @@ func (w *walker) walkFile(tree []ast.PNode, parent *Scope) {
 // it. Phase 2 of the inline type-signature plan (TypeSignatures.md §4).
 func (w *walker) checkMissingImpls(scope *Scope) {
 	for _, s := range w.sigSites {
-		if def, _, ok := scope.Lookup(s.Name); ok && def.Kind == s.Kind {
-			continue
+		if def, _, ok := scope.Lookup(s.Name); ok {
+			if def.Kind == s.Kind {
+				continue
+			}
+			// A 0-argument function's implementation is a value binding
+			// `(let name = body)`: the collector records it as a const/var, but it
+			// implements the function signature (the runtime binds it as a 0-arg
+			// function via isZeroArgClause).
+			if s.Kind == DefFun && (def.Kind == DefConst || def.Kind == DefVar) {
+				continue
+			}
 		}
 		kind := "function"
 		if s.Kind == DefMethod {
@@ -329,8 +359,16 @@ func (w *walker) collectOne(scope *Scope, form ast.PNode) {
 			// anonymous — nothing to collect
 		case d.IsSig:
 			// A type SIGNATURE binds nothing; record it so checkMissingImpls
-			// can require a matching implementation (Phase 2).
+			// can require a matching implementation (Phase 2), and mark the
+			// scope so the clause checker sees cross-file signatures.
 			w.sigSites = append(w.sigSites, sigSite{d.Name, d.NameSpan, DefFun})
+			scope.markSig(d.Name)
+		case d.IsClause:
+			// Implementation CLAUSES of one function coexist (Features.md §1):
+			// define the name once; later clauses attach to the same binding.
+			if _, _, exists := scope.Lookup(d.Name); !exists {
+				w.define(scope, d.Name, DefFun, d.NameSpan)
+			}
 		default:
 			w.define(scope, d.Name, DefFun, d.NameSpan)
 		}
@@ -360,10 +398,24 @@ func (w *walker) collectOne(scope *Scope, form ast.PNode) {
 		if d.Owner != "" && d.Name != "" && d.IsSig {
 			// A method type SIGNATURE binds nothing — record it so
 			// checkMissingImpls can require a matching implementation (Phase 2).
+			// (Effect checks read the sig's receiver mutability straight off the
+			// clause set's adjacentSig — see checkClauseSetEffects.)
 			w.sigSites = append(w.sigSites, sigSite{d.Owner + "." + d.Name, d.NameSpan, DefMethod})
+			scope.markSig(d.Owner + "." + d.Name)
 		}
 		if d.Owner != "" && d.Name != "" && !d.IsSig {
-			w.define(scope, d.Owner+"."+d.Name, DefMethod, d.NameSpan)
+			full := d.Owner + "." + d.Name
+			// Implementation CLAUSES of one method coexist (Features.md §1):
+			// define the qualified name once; later clauses attach to the same
+			// entry. A (retired) combined method takes the ordinary path, where
+			// a second definition is a redeclaration.
+			if d.IsClause {
+				if _, _, exists := scope.Lookup(full); !exists {
+					w.define(scope, full, DefMethod, d.NameSpan)
+				}
+			} else {
+				w.define(scope, full, DefMethod, d.NameSpan)
+			}
 			// Attach to the owner's member table. Lookup first: the
 			// struct may have been collected into an outer (package)
 			// scope by a sibling file, and splitting its table across
@@ -420,6 +472,12 @@ func (w *walker) collectOne(scope *Scope, form ast.PNode) {
 		// same static member declared twice on the same owner.
 		if d.Owner != "" && d.Name != "" {
 			w.define(scope, d.Owner+".static."+d.Name, DefMethod, d.NameSpan)
+			// A static-method SIGNATURE is the declared interface a
+			// `(let Owner.name …)` clause attaches to — mark it so the clause
+			// checker finds it under the same qualified key as instance sigs.
+			if d.Sub == "method" && d.IsSig {
+				scope.markSig(d.Owner + "." + d.Name)
+			}
 			for _, owner := range memberOwners(d.Owner) {
 				si, ok := scope.LookupStruct(owner)
 				if !ok {
@@ -473,9 +531,27 @@ func (w *walker) collectOne(scope *Scope, form ast.PNode) {
 			w.define(scope, d.Name, DefType, d.NameSpan)
 		}
 
+	case "template":
+		// Type parameters become gradual type names so references to them in the
+		// following struct/method (field types, receiver, sig slots) resolve.
+		// Defined idempotently: the same parameter name recurs across templates
+		// and must not read as a redeclaration. Scoping is loose for Phase 1
+		// (file-wide); since the names are gradual, the imprecision is harmless.
+		for _, p := range d.TemplateParams {
+			if _, _, found := scope.Lookup(p.Name); !found {
+				w.define(scope, p.Name, DefType, p.Span)
+			}
+		}
+
 	case "const":
 		for _, b := range d.Binds {
-			w.define(scope, b.Name, DefConst, b.Span)
+			// A plain `let` binds const, but a per-binder `(var x)` in a
+			// destructuring target is reassignable.
+			kind := DefConst
+			if b.Mutable {
+				kind = DefVar
+			}
+			w.define(scope, b.Name, kind, b.Span)
 		}
 
 	case "var":
@@ -539,14 +615,14 @@ func (w *walker) collectImports(scope *Scope, br *ast.PBranch) {
 // treats an empty path as "external, can't validate" and stays
 // silent.
 func (w *walker) defineImport(scope *Scope, alias string, span span.Span, path string, isGoImport bool) {
-	w.define(scope, alias, DefImport, span)
-	if isGoImport {
-		return
+	// `goimport` paths aren't on the Pho filesystem — leave Path empty. A Pho
+	// `import` resolves its path up front so the entry (and the onDefine hit
+	// navigation/hover reads) carry it from the start.
+	resolved := ""
+	if !isGoImport {
+		resolved = w.resolveImport(path)
 	}
-	if d, ok := scope.Defs[alias]; ok {
-		d.Path = w.resolveImport(path)
-		scope.Defs[alias] = d
-	}
+	w.defineFull(scope, alias, DefImport, span, resolved)
 }
 
 // resolveImport is resolveImportPath relative to the file being
@@ -586,6 +662,14 @@ func pathBasename(path string) string {
 // Always installs the new binding regardless, so subsequent lookups in
 // this scope resolve to the just-declared name.
 func (w *walker) define(scope *Scope, name string, kind DefKind, span span.Span) {
+	w.defineFull(scope, name, kind, span, "")
+}
+
+// defineFull is define with an explicit Definition.Path — set on the entry
+// BEFORE the onDefine hook fires, so navigation and hover see it. Imports
+// resolve their path through here rather than patching it on afterward (which
+// left the onDefine hit, and thus the import's hover, with an empty path).
+func (w *walker) defineFull(scope *Scope, name string, kind DefKind, span span.Span, path string) {
 	var prior Definition
 	var foundIn *Scope
 	var existed bool
@@ -598,7 +682,7 @@ func (w *walker) define(scope *Scope, name string, kind DefKind, span span.Span)
 		prior, foundIn, existed = scope.Lookup(name)
 	}
 
-	def := Definition{Name: name, Kind: kind, Span: span, File: w.file}
+	def := Definition{Name: name, Kind: kind, Span: span, File: w.file, Path: path}
 	scope.Defs[name] = def
 	if w.onDefine != nil {
 		w.onDefine(span, def)
@@ -708,6 +792,14 @@ func (w *walker) checkExpr(scope *Scope, n ast.PNode, inCode bool) {
 		if def.Kind == DefImport {
 			w.usedImports[node.Value] = true
 		}
+		// §10: a reference that resolves to a type (a struct or a named type
+		// alias/trait) must spell that type in Title-Kebab-Case — this catches
+		// type references in every walked position (`.is?`/`.as`, `subtype?`,
+		// construction, type-alias RHS, pattern type tests). Signature slots are
+		// erased and unwalked, so they get a separate pass (checkSigTypeNames).
+		if def.Kind == DefStruct || def.Kind == DefType {
+			w.checkTypeName(node.Value, node.Span)
+		}
 
 	case *ast.PSigil:
 		// `'expr` quotes its content — data, not a reference.
@@ -739,6 +831,14 @@ func (w *walker) checkExpr(scope *Scope, n ast.PNode, inCode bool) {
 		if br, ok := bracketRHS(node.RHS); ok {
 			w.checkExpr(scope, br, inCode)
 		}
+
+	case *ast.PSlash:
+		// `pkg/member` (or nested `pkg/sub/member`) — package/subpackage
+		// navigation. Walking the LHS resolves the alias (marking the import
+		// used); checkPackageSlash resolves a one-level `alias/name` export
+		// for hover/nav and stays tolerant of subpackages.
+		w.checkExpr(scope, node.LHS, inCode)
+		w.checkPackageSlash(scope, node)
 
 	case *ast.PMacroCall:
 		// (name! args) — runtime quotes args, so they're data. The macro
@@ -805,6 +905,52 @@ func (w *walker) checkPackageMember(scope *Scope, dot *ast.PDot) {
 	})
 }
 
+// checkPackageSlash resolves a one-level `alias/name` package navigation for
+// hover / go-to-definition, without false-flagging: `name` may be an export OR
+// a subpackage. When the LHS is a bare import alias and `name` is a known
+// export, it fires onExportResolve; anything else (a non-export name — possibly
+// a subpackage — or a nested `a/b/c` LHS whose deeper package the linter does
+// not statically resolve) is deferred to the runtime rather than risk a false
+// diagnostic.
+func (w *walker) checkPackageSlash(scope *Scope, sl *ast.PSlash) {
+	leaf, ok := sl.LHS.(*ast.PLeaf)
+	if !ok {
+		return
+	}
+	def, _, found := scope.Lookup(leaf.Value)
+	if !found || def.Kind != DefImport || def.Path == "" {
+		return
+	}
+	rhs, ok := sl.RHS.(*ast.PLeaf)
+	if !ok {
+		return
+	}
+	exports := w.exportsFor(def.Path)
+	if exports == nil {
+		// Can't read the package — stay quiet (mirrors checkPackageMember).
+		return
+	}
+	if export, ok := exports[rhs.Value]; ok {
+		if w.onExportResolve != nil {
+			w.onExportResolve(rhs.Span, export)
+		}
+		return
+	}
+	// Not an export. It may be a SUBPACKAGE directory (`pkg/sub/…`), navigated at
+	// runtime and not statically resolved here — leave those alone. A name that is
+	// neither an export nor a subpackage is a real error.
+	if isSubpackage(def.Path, rhs.Value) {
+		return
+	}
+	w.emit(Diagnostic{
+		File:     w.file,
+		Span:     rhs.Span,
+		Severity: SeverityError,
+		Code:     "unknown-export",
+		Message:  fmt.Sprintf("'%s' is not exported by package '%s'", rhs.Value, leaf.Value),
+	})
+}
+
 // nonHeadDoIndex returns the index of the first bare `do` element that is
 // not the form's head (position >= 1), or -1. It marks a `do` notation
 // block — `(identity do …)` — whose tail sequences in the current scope.
@@ -860,36 +1006,101 @@ func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 
 	switch head {
 	case "fun":
+		w.checkComboImpl(br)
 		w.checkFun(scope, br)
 	case "macro":
 		// A macro body is reference-checked exactly like a fun body —
 		// declOf hands back its param list and body the same way.
 		w.checkFun(scope, br)
-	case "method":
+	case "method", "operator":
+		// `operator` is an operator-overload signature — structurally a method
+		// sig (declOf normalizes its Head to "method"), so it is walked the same.
+		w.checkComboImpl(br)
 		w.checkMethod(scope, br)
+	case "lambda", "lambda?", "lambda!", "lambda=", "lambda?!", "lambda?=", "lambda!=", "lambda?!=":
+		w.checkLambda(scope, br)
+		return
 	case "property":
 		w.checkProperty(scope, br)
 	case "static":
 		w.checkStatic(scope, br)
 	case "struct":
 		// (struct Name f0 f1 …) — name + fields are declarations,
-		// nothing to reference-check.
+		// nothing to reference-check beyond the §10 type-name rule.
+		if d, ok := declOf(br); ok {
+			w.checkTypeName(d.Name, d.NameSpan)
+		}
+		return
+	case "template":
+		// (template P (Bound Q) …) — a type-parameter declaration for the
+		// following form. Its children are type parameters and bounds
+		// (declarations / type positions), not value references; the parameter
+		// names are types and obey the §10 kebab rule.
+		if d, ok := declOf(br); ok {
+			for _, p := range d.TemplateParams {
+				w.checkTypeName(p.Name, p.Span)
+			}
+		}
 		return
 	case "type":
 		// (type Name T) — Name is a declaration; T is a type expression that
 		// may reference builtin type names, connectives, and other aliases.
+		if d, ok := declOf(br); ok {
+			w.checkTypeName(d.Name, d.NameSpan)
+		}
 		if len(br.Children) >= 3 {
 			w.checkExpr(scope, br.Children[2], true)
 		}
 	case "Trait", "trait":
+		if d, ok := declOf(br); ok {
+			w.checkTypeName(d.Name, d.NameSpan)
+		}
 		w.checkTrait(scope, br)
+	case "select":
+		// (select scrutinee case PAT -> RESULT …) — the match expression
+		// (Features.md §3). The scrutinee is code; each case's pattern BINDERS
+		// scope to that case's result; `case`/`->` are structural markers.
+		if len(br.Children) >= 2 {
+			w.checkExpr(scope, br.Children[1], true)
+		}
+		for i := 2; i+3 < len(br.Children); i += 4 {
+			kw, kwOK := br.Children[i].(*ast.PLeaf)
+			arrow, arOK := br.Children[i+2].(*ast.PLeaf)
+			if !kwOK || kw.Value != "case" || !arOK || arrow.Value != "->" {
+				w.emit(Diagnostic{
+					File: w.file, Span: br.Children[i].GetSpan(), Severity: SeverityError, Code: "bad-select",
+					Message: "'select' is written (select value case pattern -> result …)",
+				})
+				return
+			}
+			caseScope := newScope(scope)
+			w.collectPatternBinders(caseScope, br.Children[i+1], true)
+			w.checkExpr(caseScope, br.Children[i+3], true)
+		}
+		return
+
 	case "var", "const", "let":
+		// A `(let name (patterns) [where g] = body)` IMPLEMENTATION CLAUSE
+		// (declOf normalizes it to Head fun/method) routes to the fun/method
+		// walkers — patterns bind, the guard and body walk in the clause scope.
+		if d, ok := declOf(br); ok && d.IsClause {
+			if d.Head == "method" {
+				w.checkMethod(scope, br)
+			} else {
+				w.checkFun(scope, br)
+			}
+			return
+		}
 		// names are declarations; values are expressions that may reference
 		// other names. declOf normalizes the `let` triple form (name = value)
 		// to the same binds as const/var pairs.
 		decl, _ := declOf(br)
 		for _, b := range decl.Binds {
-			w.checkExpr(scope, b.Value, true)
+			// A destructuring target attaches its RHS to the first binder only;
+			// the extra binders carry no value.
+			if b.Value != nil {
+				w.checkExpr(scope, b.Value, true)
+			}
 		}
 		// Re-record shapes at the decl's lexical position: the hoisting
 		// pre-pass ran before any reassignments, so this refresh keeps
@@ -937,6 +1148,9 @@ func (w *walker) checkBranch(scope *Scope, br *ast.PBranch) {
 		}
 		w.checkUnreachable(br.Children[1:])
 	case "=":
+		// `=` is reassignment only: `(= target value)`. The old define form
+		// `(= name (params) body)` is not recognized (the shape checker flags its
+		// arity); an implementation is a `let` clause `(let name (params) = body)`.
 		w.checkAssign(scope, br)
 	case "import", "goimport":
 		// All children handled in the collect pass. Nothing to check
@@ -1216,6 +1430,36 @@ func (w *walker) checkCondLoop(scope *Scope, br *ast.PBranch) {
 	w.checkExpr(scope, br.Children[3], true) // body
 }
 
+// checkComboImpl rejects the OLD combined signature+implementation form
+// `(fun name (params) body)` / `(method Owner.name (params) body)`. Under the
+// clause system, `fun`/`method` declare only SIGNATURES (all-type params + a
+// type return); the implementation is one or more `(let name (patterns) = body)`
+// clauses (Features.md §1). So a NAMED `fun`/`method` with a value (non-type)
+// parameter list is the pre-split combined form and is no longer valid — the
+// writer must split it.
+//
+// Only literal `fun`/`method` forms reach here (the clause form dispatches
+// separately). A signature (IsSig) and the anonymous `fun`/method delegate
+// forms (no Name) are left alone.
+func (w *walker) checkComboImpl(br *ast.PBranch) {
+	d, ok := declOf(br)
+	if !ok || d.IsSig || d.Name == "" || d.ArgList == nil || d.Body == nil {
+		return
+	}
+	impl := d.Name
+	if d.Owner != "" {
+		impl = d.Owner + "." + d.Name
+	}
+	w.emit(Diagnostic{
+		File:     w.file,
+		Span:     headSpan(br),
+		Severity: SeverityError,
+		Code:     "combined-impl",
+		Message: fmt.Sprintf("'%s' declares a signature only; write the implementation as '(let %s (params) = body)'",
+			d.Head, impl),
+	})
+}
+
 // checkFun walks (fun name (args) body) or (fun (args) body).
 func (w *walker) checkFun(scope *Scope, br *ast.PBranch) {
 	d, _ := declOf(br)
@@ -1224,27 +1468,97 @@ func (w *walker) checkFun(scope *Scope, br *ast.PBranch) {
 	// implementation (that would collect the types as params and reference-
 	// check them as code). See decls.go IsSig.
 	if d.IsSig {
+		w.checkVarParams(d.ArgList, true) // (var Self) receiver only
+		w.checkSigTypeNames(d)            // §10: type slots + result are Title-Kebab
 		return
 	}
 	if d.ArgList == nil || d.Body == nil {
 		return
 	}
+	prevClause := w.clauseParams
+	w.clauseParams = d.IsClause
 	w.walkFunctionBody(scope, d.ArgList, d.Body, "" /* not a method */)
+	w.clauseParams = prevClause
+	w.walkClauseGuard(d)
+	w.checkClauseGuardEffect(scope, d)
+	// The `!`/`=` name contract is checked once per callable, over the UNION of
+	// its clauses and anchored on its signature — see checkClauseSetEffects,
+	// driven from checkClauses. (A per-clause check here would falsely flag a
+	// pure clause of an otherwise-effectful function.)
 }
 
-// checkProperty walks (property <Receiver.>Name get getter [set setter]). For
-// a struct-field property the receiver (the dot's LHS) is a reference; the
-// field name (the dot's RHS) and a free-standing bare Name are declarations,
-// not references. `get`/`set` are positional keywords. The getter (child 3)
-// and setter (child 5) are anonymous fun/method forms walked normally.
+// walkClauseGuard reference-checks a clause's `where` guard in the clause's
+// own body scope (params + patterns bound) — stashed by walkFunctionBody.
+func (w *walker) walkClauseGuard(d topLevelDecl) {
+	if d.Guard == nil {
+		return
+	}
+	if bs, ok := w.bodyScopes[d.Body]; ok && bs != nil {
+		w.checkExpr(bs, d.Guard, true)
+	}
+}
+
+// checkProperty walks (property <Receiver.>Name (get (params) body)
+// [(set (params) body)]). For a struct-field property the receiver (the dot's
+// LHS) is a reference; the field name (the dot's RHS) and a free-standing bare
+// Name are declarations, not references. Each accessor body is walked with its
+// params (+ `self` for a struct property) bound.
 func (w *walker) checkProperty(scope *Scope, br *ast.PBranch) {
+	// The receiver (dot LHS) is a real reference.
 	if len(br.Children) >= 2 {
 		if dot, ok := br.Children[1].(*ast.PDot); ok {
 			w.checkExpr(scope, dot.LHS, true)
 		}
 	}
-	for i := 3; i < len(br.Children); i += 2 {
-		w.checkExpr(scope, br.Children[i], true)
+
+	// (property Target (get (params) body) [(set (params) body)]) — walk each
+	// accessor body in its own scope binding its params (+ `self` for a struct
+	// property). A getter is auto-invoked on read, so it must be pure. A getter
+	// slot that is NOT a `(get …)` accessor is the rejected old flat form, already
+	// flagged by checkSpecialFormShape; nothing more to walk.
+	if len(br.Children) < 3 || !isAccessorSublist(br.Children[2], "get") {
+		return
+	}
+	d, _ := declOf(br)
+	for _, ch := range br.Children[2:] {
+		acc, ok := asList(ch)
+		if !ok || len(acc.Children) != 3 {
+			continue
+		}
+		params, body := acc.Children[1], acc.Children[2]
+		w.walkFunctionBody(scope, params, body, d.Owner)
+		if h, ok := acc.Children[0].(*ast.PLeaf); ok && h.Value == "get" {
+			w.checkPureBody(scope, params, body, "a property getter", br.Children[1].GetSpan())
+		}
+	}
+}
+
+// isAccessorSublist reports whether n is a `(get …)` / `(set …)` property-delegate
+// sub-form (a list headed by the keyword) — the property accessor syntax.
+func isAccessorSublist(n ast.PNode, kw string) bool {
+	br, ok := asList(n)
+	if !ok || len(br.Children) < 1 {
+		return false
+	}
+	h, ok := br.Children[0].(*ast.PLeaf)
+	return ok && h.Value == kw
+}
+
+// checkPureBody is checkPureContext for an accessor whose params/body are already
+// extracted (the new `(get …)` form, which declOf doesn't wrap into a decl).
+func (w *walker) checkPureBody(scope *Scope, argList, body ast.PNode, what string, at span.Span) {
+	if !EffectCheck || body == nil {
+		return
+	}
+	r := scanEffects(body, true, varParamNames(argList), freeVarClassifier(scope, argList, body))
+	if !r.set.pure() {
+		w.emit(Diagnostic{
+			File:     w.file,
+			Span:     at,
+			Severity: SeverityError,
+			Code:     "effect-in-pure-context",
+			Message:  fmt.Sprintf("%s must be pure, but has an effect (%s)", what, r.set),
+		})
 	}
 }
 
@@ -1255,6 +1569,16 @@ func (w *walker) checkMethod(scope *Scope, br *ast.PBranch) {
 	// and its "body" is the return type, so it must not be walked as an
 	// implementation. See decls.go IsSig.
 	if d.IsSig {
+		w.checkVarParams(d.ArgList, true) // (var Self) receiver only
+		w.checkVarSelfNeedsEquals(d)      // (var Self) ⟹ name ends in '='
+		w.checkSigTypeNames(d)            // §10: type slots + result are Title-Kebab
+		// The receiver type named in the dotted head (String.to) is a type
+		// reference too; the erased-sig path never walks it, so check it here.
+		if dot, ok := br.Children[1].(*ast.PDot); ok {
+			if lhs, ok := dot.LHS.(*ast.PLeaf); ok {
+				w.checkTypeName(lhs.Value, lhs.Span)
+			}
+		}
 		return
 	}
 	if d.ArgList == nil || d.Body == nil {
@@ -1269,14 +1593,24 @@ func (w *walker) checkMethod(scope *Scope, br *ast.PBranch) {
 	} else if len(br.Children) >= 2 {
 		w.checkExpr(scope, br.Children[1], true)
 	}
+	prevClause := w.clauseParams
+	w.clauseParams = d.IsClause
 	w.walkFunctionBody(scope, d.ArgList, d.Body, d.Owner)
+	w.clauseParams = prevClause
+	w.walkClauseGuard(d)
+	w.checkClauseGuardEffect(scope, d)
+	// The `!`/`=` name contract (including receiver mutability from the sig's
+	// `(var Self)`) is checked once per callable, over the UNION of its clauses
+	// and anchored on its signature — see checkClauseSetEffects, driven from
+	// checkClauses.
 }
 
 // checkStatic walks a `(static method Recv.Name (args) body)` or `(static
-// property Recv.Name get …)` declaration. The receiver names the owning struct
-// (a reference, checked). A static method's body sees the explicit params plus
-// `Self` (the receiver TYPE); a static property's getter/setter are anonymous
-// `(method Recv (Self) body)` forms walked the same way.
+// property Recv.Name (get (self) body) [(set (self v) body)])` declaration. The
+// receiver names the owning struct (a reference, checked). A static method's
+// body sees the explicit params plus `Self` (the receiver TYPE); a static
+// property's accessors are `(get …)`/`(set …)` sub-forms whose `self` is the
+// receiver type. The old flat `get getter [set setter]` form is rejected.
 func (w *walker) checkStatic(scope *Scope, br *ast.PBranch) {
 	d, ok := declOf(br)
 	if !ok {
@@ -1287,22 +1621,38 @@ func (w *walker) checkStatic(scope *Scope, br *ast.PBranch) {
 			w.checkExpr(scope, dot.LHS, true)
 		}
 	}
+	// A static method SIGNATURE `(static method Recv.M (T…) R)` binds nothing and
+	// has no body to check — its param/return slots are TYPES, not code. Walking
+	// it as an implementation would misread each type as a parameter (firing
+	// capitalized-param on `String`/`Atom`). The plain-method walk skips a sig the
+	// same way (see decls.go IsSig).
+	if d.IsSig {
+		return
+	}
 	switch d.Sub {
 	case "method":
 		if d.ArgList != nil && d.Body != nil {
 			w.walkStaticBody(scope, d.ArgList, d.Body, d.Owner)
 		}
 	case "property":
+		if len(br.Children) < 4 || !isAccessorSublist(br.Children[3], "get") {
+			w.emit(Diagnostic{
+				File:     w.file,
+				Span:     headSpan(br),
+				Severity: SeverityError,
+				Code:     "bad-form-shape",
+				Message:  "'static property' takes (Recv.Name (get (params) body) [(set (params) body)]); the getter must be a (get …) accessor",
+			})
+			return
+		}
 		for _, c := range br.Children[3:] {
-			if cb, ok := c.(*ast.PBranch); ok && cb.Open == "(" && headIdent(cb) == "method" && len(cb.Children) >= 4 {
-				// The getter `(method Recv (self) body)` has its receiver type at
-				// child 1; pass it as owner so `self` is allowed and resolves.
-				owner := ""
-				if recv, ok := cb.Children[1].(*ast.PLeaf); ok {
-					owner = recv.Value
-				}
-				w.walkFunctionBody(scope, cb.Children[2], cb.Children[3], owner)
+			acc, ok := asList(c)
+			if !ok || len(acc.Children) != 3 {
+				continue
 			}
+			// `self` in the accessor body is the receiver TYPE; pass the owner so
+			// it is allowed and resolves.
+			w.walkFunctionBody(scope, acc.Children[1], acc.Children[2], d.Owner)
 		}
 	}
 }
@@ -1418,11 +1768,17 @@ func (w *walker) walkFunctionBody(parent *Scope, argList, body ast.PNode, owner 
 	w.bodyScope = bodyScope
 	defer func() { w.bodyScope = prevBody }()
 
+	var paramItems []ast.PNode
 	if items, ok := declList(argList); ok {
+		paramItems = items
 		for _, item := range items {
 			w.collectParam(bodyScope, item)
 		}
 	}
+
+	// A `(var …)` param may only be the receiver `(var self)` in an impl — a
+	// value parameter cannot be declared mutable.
+	w.checkVarParams(argList, false)
 
 	if owner != "" {
 		// Shape the receiver `self` from the owner type. A struct owner makes
@@ -1435,6 +1791,13 @@ func (w *walker) walkFunctionBody(parent *Scope, argList, body ast.PNode, owner 
 			d.Shape = selfShapeForOwner(parent, owner)
 			bodyScope.Defs["self"] = d
 		}
+	}
+
+	// Walk any (or name default) DEFAULT expressions now that every parameter
+	// (and a shaped self) is in scope — matching the runtime's body-scope
+	// evaluation of defaults.
+	for _, item := range paramItems {
+		w.walkParamDefault(bodyScope, item)
 	}
 
 	// The body is a single expression — at runtime BindFun evaluates it as one
@@ -1450,6 +1813,10 @@ func (w *walker) walkFunctionBody(parent *Scope, argList, body ast.PNode, owner 
 //	(spread name)         — name bound, captures rest-args
 //	(optional name)       — name bound, omittable (defaults to Nil)
 func (w *walker) collectParam(scope *Scope, item ast.PNode) {
+	if w.clauseParams {
+		w.collectPatternBinders(scope, item, true)
+		return
+	}
 	if leaf, ok := item.(*ast.PLeaf); ok {
 		if looksLikeIdentifier(leaf.Value) {
 			w.flagCapitalizedParam(leaf)
@@ -1457,14 +1824,183 @@ func (w *walker) collectParam(scope *Scope, item ast.PNode) {
 		}
 		return
 	}
-	if br, ok := item.(*ast.PBranch); ok && br.Open == "(" && len(br.Children) == 2 {
-		if h, ok := br.Children[0].(*ast.PLeaf); ok && (h.Value == "spread" || h.Value == "optional") {
-			if name, ok := br.Children[1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) {
+	br, ok := item.(*ast.PBranch)
+	if !ok || br.Open != "(" || len(br.Children) == 0 {
+		return
+	}
+	h, ok := br.Children[0].(*ast.PLeaf)
+	if !ok {
+		return
+	}
+
+	// (or name default) — a DEFAULTED optional: binds `name`; when the argument
+	// is `none` it takes `default` instead. The DEFAULT expression is walked
+	// separately (walkParamDefault), once every param is in scope.
+	if h.Value == "or" {
+		if len(br.Children) != 3 {
+			w.emit(Diagnostic{
+				File: w.file, Span: br.Span, Severity: SeverityError, Code: "bad-default-param",
+				Message: "a defaulted parameter is written '(or name default)'",
+			})
+			return
+		}
+		name, ok := br.Children[1].(*ast.PLeaf)
+		if !ok || !looksLikeIdentifier(name.Value) {
+			w.emit(Diagnostic{
+				File: w.file, Span: br.Children[1].GetSpan(), Severity: SeverityError, Code: "bad-default-param",
+				Message: "a defaulted parameter needs a plain name: '(or name default)'",
+			})
+			return
+		}
+		w.flagCapitalizedParam(name)
+		w.define(scope, name.Value, DefParam, name.Span)
+		return
+	}
+
+	if len(br.Children) != 2 {
+		return
+	}
+	// RETIRED: `(disc X)` — dispatch moved to `(const T)` signature slots +
+	// literal patterns in the clauses (Features.md). Point the writer there.
+	if h.Value == "disc" {
+		w.emit(Diagnostic{
+			File: w.file, Span: br.Span, Severity: SeverityError, Code: "retired-disc",
+			Message: "(disc X) is retired — declare the parameter (const T) in the signature and dispatch with literal patterns in the clauses",
+		})
+		return
+	}
+	if h.Value == "spread" || h.Value == "optional" || h.Value == "var" {
+		if name, ok := br.Children[1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) {
+			// A `(var name)` receiver/param is conventionally lowercase
+			// `self`; don't run the capitalized-param check for it (the
+			// sig form uses `(var Self)`, which is handled on the sig path).
+			if h.Value != "var" {
 				w.flagCapitalizedParam(name)
-				w.define(scope, name.Value, DefParam, name.Span)
 			}
+			w.define(scope, name.Value, DefParam, name.Span)
 		}
 	}
+}
+
+// collectPatternBinders defines every BINDER a clause pattern introduces
+// (Features.md §2): a lowercase leaf binds; literals (numbers, strings,
+// atoms, bools, none, Capitalized type values) match and bind nothing; a
+// `(var x)`/`(spread x)` wrapper binds x; a `(Type name)` type test binds
+// name; `[p…]` list patterns and `Type.{ field = pat }` struct patterns
+// (pre-desugared to `(Type 'field' pat …)`) recurse. top marks a top-level
+// param slot (where var/spread wrappers are legal).
+func (w *walker) collectPatternBinders(scope *Scope, item ast.PNode, top bool) {
+	switch node := item.(type) {
+	case *ast.PLeaf:
+		v := node.Value
+		if !looksLikeIdentifier(v) || v == "true" || v == "false" || v == "none" {
+			return // a literal — matched, not bound
+		}
+		c := v[0]
+		if c >= 'A' && c <= 'Z' {
+			return // a type value used disc-style — matched by identity
+		}
+		w.define(scope, v, DefParam, node.Span)
+
+	case *ast.PBranch:
+		if node.Open == "[" {
+			for _, ch := range node.Children {
+				w.collectPatternBinders(scope, ch, false)
+			}
+			return
+		}
+		if node.Open != "(" || len(node.Children) == 0 {
+			return
+		}
+		head, ok := node.Children[0].(*ast.PLeaf)
+		if !ok {
+			return
+		}
+		// (var name) / (var Type name) — a mutable binder at ANY depth (the
+		// self-mutation receiver at top, or a nested `(var x)` in a list/struct
+		// pattern). The name is the last child; any type is erased.
+		if head.Value == "var" && len(node.Children) >= 2 {
+			if name, ok := node.Children[len(node.Children)-1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) {
+				w.define(scope, name.Value, DefParam, name.Span)
+			}
+			return
+		}
+		// (spread name) — a top-level rest-param binder only.
+		if top && head.Value == "spread" && len(node.Children) == 2 {
+			if name, ok := node.Children[1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) {
+				w.define(scope, name.Value, DefParam, name.Span)
+			}
+			return
+		}
+		// (name) — the capture operator: a parenthesized binder (mainly a struct
+		// field key `(field)`, but accepted anywhere for uniformity).
+		if len(node.Children) == 1 && looksLikeIdentifier(head.Value) && head.Value[0] >= 'a' && head.Value[0] <= 'z' {
+			w.define(scope, head.Value, DefParam, head.Span)
+			return
+		}
+		// The RETIRED param wrappers get pointed redirects (the runtime rejects
+		// them too): `(disc X)` moved to `(const T)` in the signature; a default
+		// `(or name D)` / an `(optional name)` slot moved to the signature's
+		// `(optional Type [else default])`. Any other lowercase-headed branch
+		// isn't a pattern (a pattern head must be a Capitalized type).
+		if head.Value != "" && head.Value[0] >= 'a' && head.Value[0] <= 'z' {
+			switch head.Value {
+			case "disc":
+				w.emit(Diagnostic{
+					File: w.file, Span: node.Span, Severity: SeverityError, Code: "retired-disc",
+					Message: "(disc X) is retired — declare the parameter (const T) in the signature and dispatch with literal patterns in the clauses",
+				})
+			case "or", "optional":
+				w.emit(Diagnostic{
+					File: w.file, Span: node.Span, Severity: SeverityError, Code: "bad-default-param",
+					Message: "optional parameters and defaults are declared in the SIGNATURE — (optional Type [else default]) — the clause binds a plain name",
+				})
+				// Still bind the name so the body doesn't cascade unresolved errors.
+				if len(node.Children) >= 2 {
+					if name, ok := node.Children[1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) {
+						w.define(scope, name.Value, DefParam, name.Span)
+					}
+				}
+			default:
+				w.emit(Diagnostic{
+					File: w.file, Span: node.Span, Severity: SeverityError, Code: "bad-pattern",
+					Message: "cannot read this as a pattern — expected a name, literal, [list], (Type name), or Type.{ field = pattern }",
+				})
+			}
+			return
+		}
+		// (Type name) — type test; (Type 'field' pat …) — struct destructure.
+		if len(node.Children) == 2 {
+			if name, ok := node.Children[1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) && name.Value[0] >= 'a' && name.Value[0] <= 'z' {
+				w.define(scope, name.Value, DefParam, name.Span)
+			}
+			return
+		}
+		// (Type 'field' pat …) struct destructure: a key at an odd index is a
+		// `'field'` string-lit selector (binds nothing) or a `(field)` capture
+		// (binds the whole field value); the pattern at the next index recurses.
+		for i := 1; i+1 < len(node.Children); i += 2 {
+			if _, isStr := stringLiteral(node.Children[i]); !isStr {
+				w.collectPatternBinders(scope, node.Children[i], false) // (field) capture
+			}
+			w.collectPatternBinders(scope, node.Children[i+1], false)
+		}
+	}
+}
+
+// walkParamDefault walks the DEFAULT expression of an `(or name default)`
+// parameter. Called after every parameter is collected into the body scope, so
+// the default's references resolve against its siblings and the closure —
+// mirroring the runtime's body-scope evaluation (core.applyDefaults).
+func (w *walker) walkParamDefault(scope *Scope, item ast.PNode) {
+	br, ok := item.(*ast.PBranch)
+	if !ok || br.Open != "(" || len(br.Children) != 3 {
+		return
+	}
+	if h, ok := br.Children[0].(*ast.PLeaf); !ok || h.Value != "or" {
+		return
+	}
+	w.checkExpr(scope, br.Children[2], true)
 }
 
 // flagCapitalizedParam enforces the §3 casing split: a Capitalized identifier
@@ -1487,6 +2023,79 @@ func (w *walker) flagCapitalizedParam(leaf *ast.PLeaf) {
 		Code:     "capitalized-param",
 		Message:  fmt.Sprintf("parameter '%s' is capitalized — a Capitalized name reads as a type; lowercase it, or (if you meant a type signature) drop the body", v),
 	})
+}
+
+// checkTypeName enforces Features.md §10: a type's declared name must be
+// Title-Kebab-Case (My-Type, Integer, Vec-3d), never PascalCase (MyType),
+// SCREAMING, or lowercase-as-a-type. The reader-level rejection
+// (syntax.StrictNames) stays off until the goimport re-casing lands (§12), so
+// the linter is the enforcement surface: a bad name is flagged but still parses.
+func (w *walker) checkTypeName(name string, sp span.Span) {
+	if name == "" || syntax.ClassifyIdent(name) == syntax.IdentType {
+		return
+	}
+	w.emit(Diagnostic{
+		File:     w.file,
+		Span:     sp,
+		Severity: SeverityError,
+		Code:     "bad-type-name",
+		Message:  fmt.Sprintf("type name '%s' must be Title-Kebab-Case (e.g. My-Type) — PascalCase, acronyms, and lowercase type names are rejected", name),
+	})
+}
+
+// checkTypeExpr flags every type NAME in a type-position expression (a
+// signature slot or a result type) that is not Title-Kebab-Case (§10). Wrapper
+// forms carry their type inside: (var Self), (spread T) and (const T) recurse
+// into their operands; (optional T else DEFAULT) checks only T, since DEFAULT
+// is an ordinary value. A capitalized head is a type constructor/connective
+// (List, Map, Or, And), so it and its arguments are all types; a
+// lowercase-headed `(` form is a keyword we don't model as a type and is left
+// alone, so its keyword is never mistaken for a bad type name. A `[…]` form is
+// a list/map type literal whose elements are types (its `->`/`:` separators
+// aren't identifiers, so the leaf guard skips them).
+func (w *walker) checkTypeExpr(n ast.PNode) {
+	switch t := n.(type) {
+	case *ast.PLeaf:
+		if looksLikeIdentifier(t.Value) {
+			w.checkTypeName(t.Value, t.Span)
+		}
+	case *ast.PBranch:
+		switch t.Open {
+		case "[":
+			for _, c := range t.Children {
+				w.checkTypeExpr(c)
+			}
+		case "(":
+			switch head := headIdent(t); head {
+			case "var", "spread", "const":
+				for _, c := range t.Children[1:] {
+					w.checkTypeExpr(c)
+				}
+			case "optional":
+				if len(t.Children) >= 2 {
+					w.checkTypeExpr(t.Children[1])
+				}
+			default:
+				if head != "" && head[0] >= 'A' && head[0] <= 'Z' {
+					for _, c := range t.Children {
+						w.checkTypeExpr(c)
+					}
+				}
+			}
+		}
+	}
+}
+
+// checkSigTypeNames enforces §10 across a type SIGNATURE's slots and result —
+// the type references the erased-signature path (checkFun/checkMethod IsSig)
+// never walks as expressions.
+func (w *walker) checkSigTypeNames(d topLevelDecl) {
+	if bl, ok := asList(d.ArgList); ok {
+		for _, slot := range bl.Children {
+			w.checkTypeExpr(slot)
+		}
+	}
+	w.checkTypeExpr(d.Body)
 }
 
 // checkAssign handles `(= LHS RHS)`. The LHS may be a bare name (variable

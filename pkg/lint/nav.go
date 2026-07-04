@@ -68,6 +68,17 @@ func collectHits(path string, src []byte) []hit {
 	w.onDefine = func(span span.Span, def Definition) {
 		hits = append(hits, hit{Span: span, Def: def, IsDecl: true})
 	}
+	// Backfill a declaration hit's inferred shape: onDefine fired during collect,
+	// before shapes were assigned, so the recorded Definition has ShapeUnknown.
+	// Match by the binding name span and copy the shape in, so hovering a binding
+	// at its declaration shows its type (references already resolve post-inference).
+	w.onShapeAssigned = func(sp span.Span, sh Shape) {
+		for i := range hits {
+			if hits[i].IsDecl && hits[i].Span == sp {
+				hits[i].Def.Shape = sh
+			}
+		}
+	}
 	w.walkFile(tree, PackageScope(path))
 	return hits
 }
@@ -169,11 +180,49 @@ func HoverAt(path string, src []byte, line, col int) (md string, sp span.Span, o
 	case DefBuiltin:
 		return fmt.Sprintf("```pho\n%s\n```\nbuiltin", def.Name), h.Span, true
 	case DefImport:
-		return fmt.Sprintf("```pho\n(import \"%s\")\n```\nimported package", def.Path), h.Span, true
+		return fmt.Sprintf("```pho\n(import '%s')\n```\nimported package", def.Path), h.Span, true
+	case DefParam:
+		// Show ONLY the parameter (where it is declared) — not the whole function
+		// form it sits inside — with its declared type from the enclosing
+		// callable's signature, if any.
+		text := fmt.Sprintf("```pho\n%s\n```\nparameter", def.Name)
+		if pt := paramTypeFor(path, src, def.Span); pt != "" {
+			text += " — " + pt
+		}
+		return text, h.Span, true
+	}
+
+	// A TYPE symbol (struct / trait / type alias) declared in this file gets a
+	// rich body: its kind, generic parameters, and members or alias target.
+	if (def.Kind == DefStruct || def.Kind == DefType) && (def.File == "" || def.File == path) {
+		tokens, _ := syntax.LexPos(string(src))
+		tree, _ := syntax.ParsePos(tokens)
+		tree = syntax.NormalizeDo(tree)
+		if rich := typeHover(def, tree); rich != "" {
+			out := "```pho\n" + def.Name + "\n```\n" + rich
+			if _, doc := declHeader(orPath(def.File, path), path, src, def.Span); doc != "" {
+				out += "\n\n" + doc
+			}
+			return out, h.Span, true
+		}
 	}
 
 	file := orPath(def.File, path)
-	header, doc := declHeader(file, path, src, def.Span)
+	// Hover on a fun/method shows its SIGNATURE (the declared interface —
+	// parameter and result types), not its `(= …)` implementation body. Prefer a
+	// matching sig's span for the rendered header; the effect surface below still
+	// reads the impl via def.Span.
+	headerSpan := def.Span
+	if def.Kind == DefFun || def.Kind == DefMethod {
+		owner, name := "", def.Name
+		if i := strings.LastIndex(name, "."); i >= 0 {
+			owner, name = name[:i], name[i+1:]
+		}
+		if sigSpan, ok := funSigNameSpan(file, path, src, owner, name); ok {
+			headerSpan = sigSpan
+		}
+	}
+	header, doc := declHeader(file, path, src, headerSpan)
 	if header == "" {
 		// Fallback when the declaration form can't be located (e.g. a
 		// mid-edit parse). Strip any internal "Owner." qualifier —
@@ -185,9 +234,20 @@ func HoverAt(path string, src []byte, line, col int) (md string, sp span.Span, o
 		}
 		header = name
 	}
-	text := fmt.Sprintf("```pho\n%s\n```\n%s", header, def.Kind)
+	text := fmt.Sprintf("```pho\n%s\n```\n%s", header, hoverKindLabel(def.Kind))
 	if def.Shape.Kind != ShapeUnknown {
 		text += " — " + shapeLabel(def.Shape)
+	}
+	// Effect surface for a fun/method declared in this file (Effects.md Phase 6).
+	if def.Kind == DefFun || def.Kind == DefMethod {
+		if def.File == "" || def.File == path {
+			tokens, _ := syntax.LexPos(string(src))
+			tree, _ := syntax.ParsePos(tokens)
+			tree = syntax.NormalizeDo(tree)
+			if label := callableEffectLabel(tree, def.Span); label != "" {
+				text += "\n\n**effects**: " + label
+			}
+		}
 	}
 	if doc != "" {
 		text += "\n\n" + doc
@@ -232,9 +292,33 @@ func annotationHover(path string, src []byte, defSpan span.Span) string {
 	return "**annotations**  \n" + b.String()
 }
 
+// hoverKindLabel renders a definition's kind for hover. A `let` binding
+// normalizes to DefConst and `let var` to DefVar (declOf reads the surface
+// `let`/`let var` into const/var), so render them with the surface keyword the
+// user actually wrote rather than the internal kind. Other kinds are unchanged.
+func hoverKindLabel(k DefKind) string {
+	switch k {
+	case DefConst:
+		return "let"
+	case DefVar:
+		return "let var"
+	}
+	return k.String()
+}
+
+// shapeLabel renders an inferred shape as a Pho TYPE name for hover — the
+// struct name for an instance, or the built-in type (Number/String/List/Map/
+// Boolean/Char/Atom/None/Function) for a primitive. Falls back to the coarse
+// shape word only when there is no canonical type name.
 func shapeLabel(sh Shape) string {
-	if sh.Kind == ShapeInstance && sh.Owner != "" {
-		return "instance of " + sh.Owner
+	if sh.Kind == ShapeInstance {
+		if sh.Owner != "" {
+			return sh.Owner
+		}
+		return "struct instance"
+	}
+	if tn := shapeTypeName(sh.Kind); tn != "" {
+		return tn
 	}
 	return sh.Kind.String()
 }
@@ -247,7 +331,14 @@ func hoverMember(h hit, path string) string {
 		if file == "" {
 			file = si.File
 		}
-		header, doc := declHeader(orPath(file, path), path, nil, si.Methods[h.Member])
+		hdrFile := orPath(file, path)
+		// Prefer the method's SIGNATURE (declared interface) over its `(= …)`
+		// implementation, matching how a free function hovers.
+		hdrSpan := si.Methods[h.Member]
+		if sigSpan, ok := funSigNameSpan(hdrFile, path, nil, si.Name, h.Member); ok {
+			hdrSpan = sigSpan
+		}
+		header, doc := declHeader(hdrFile, path, nil, hdrSpan)
 		if header == "" {
 			header = fmt.Sprintf("(method %s.%s ...)", si.Name, h.Member)
 		}
@@ -264,6 +355,78 @@ func hoverMember(h hit, path string) string {
 // and returns a one-line rendering of its header plus any doc comment
 // above it. `src` is the in-memory text when file == path (unsaved
 // edits); other files are read from disk.
+// funSigNameSpan returns the name-span of a `(fun name …)` / `(method
+// Owner.name …)` type SIGNATURE matching the given owner+name in the declaring
+// file, if one exists. Hover prefers it over the `(= name …)` implementation so
+// a callable's hover shows its declared interface (parameter + result types),
+// not its body. `owner` is "" for a free function; for a method it is the
+// receiver struct's name, so a same-named method on another struct won't match.
+func funSigNameSpan(file, path string, src []byte, owner, name string) (span.Span, bool) {
+	var text []byte
+	if file == path && src != nil {
+		text = src
+	} else if read, err := readSource(file); err == nil {
+		text = read
+	} else {
+		return span.Span{}, false
+	}
+	tokens, _ := syntax.LexPos(string(text))
+	tree, _ := syntax.ParsePos(tokens)
+	tree = syntax.NormalizeDo(tree)
+	for _, node := range tree {
+		d, ok := declOf(node)
+		if ok && d.IsSig && d.Name == name && d.Owner == owner && (d.Head == "fun" || d.Head == "method") {
+			return d.NameSpan, true
+		}
+	}
+	return span.Span{}, false
+}
+
+// paramTypeFor returns the declared type text of the parameter at paramSpan,
+// read from the enclosing callable's inline signature (funSignatureIndex), or ""
+// when the parameter is untyped or has no signature. The receiver slot is
+// aligned: a method impl's parameter list includes `self` at index 0, which the
+// signature — whose receiver slot funSignatureIndex drops — does not.
+func paramTypeFor(path string, src []byte, paramSpan span.Span) string {
+	tokens, _ := syntax.LexPos(string(src))
+	tree, _ := syntax.ParsePos(tokens)
+	tree = syntax.NormalizeDo(tree)
+
+	form := declFormContaining(tree, paramSpan)
+	if form == nil {
+		return ""
+	}
+	d, ok := declOf(form)
+	if !ok || d.Name == "" {
+		return ""
+	}
+	al, ok := d.ArgList.(*ast.PBranch)
+	if !ok {
+		return ""
+	}
+	idx := -1
+	for i, p := range al.Children {
+		if spanCovers(p.GetSpan(), paramSpan) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return ""
+	}
+	if d.Head == "method" {
+		if idx == 0 {
+			return d.Owner // the receiver `self` — its type is the owner struct
+		}
+		idx-- // the impl's `self` isn't in the receiver-dropped signature params
+	}
+	entries := funSignatureIndex(tree)[d.Name]
+	if len(entries) == 0 || idx >= len(entries[0].Params) {
+		return ""
+	}
+	return entries[0].Params[idx]
+}
+
 func declHeader(file, path string, src []byte, nameSpan span.Span) (header, doc string) {
 	if nameSpan == (span.Span{}) {
 		return "", ""
@@ -315,6 +478,12 @@ func declFormContaining(tree []ast.PNode, span span.Span) *ast.PBranch {
 				switch headIdent(node) {
 				case "fun", "macro", "method", "struct", "property", "var", "const", "let":
 					found = node
+				case "=":
+					// A 4-child `(= …)` is a fun/method IMPLEMENTATION (a decl form);
+					// a 2-arg `=` is reassignment, not a declaration.
+					if d, ok := declOf(node); ok && (d.Head == "fun" || d.Head == "method") {
+						found = node
+					}
 				}
 			}
 			for _, c := range node.Children {
@@ -346,22 +515,25 @@ func spanCovers(outer, inner span.Span) bool {
 // everything except function bodies.
 func renderDeclHeader(br *ast.PBranch) string {
 	switch headIdent(br) {
-	case "fun":
-		switch len(br.Children) {
-		case 4:
-			return fmt.Sprintf("(fun %s %s ...)", pnodeText(br.Children[1]), pnodeText(br.Children[2]))
-		case 3:
-			return fmt.Sprintf("(fun %s ...)", pnodeText(br.Children[1]))
+	case "fun", "method", "operator":
+		// A flat type SIGNATURE — `(fun name Type… -> Result)` /
+		// `(method Recv.name Self Type… -> Result)`. These heads are
+		// signature-only now, so render the form verbatim.
+		parts := make([]string, len(br.Children))
+		for i, c := range br.Children {
+			parts[i] = pnodeText(c)
 		}
+		return "(" + strings.Join(parts, " ") + ")"
 	case "macro":
 		// (macro ~name (params) body) — `~`@1, name@2, params@3.
 		if len(br.Children) >= 4 {
 			return fmt.Sprintf("(macro ~%s %s ...)", pnodeText(br.Children[2]), pnodeText(br.Children[3]))
 		}
-	case "method":
-		if len(br.Children) >= 3 {
-			// child 1 is the `Receiver[.Name]` pattern, child 2 the arg list.
-			return fmt.Sprintf("(method %s %s ...)",
+	case "=":
+		// A 4-child `(= name (params) body)` / `(= Owner.name …)` impl — render its
+		// header like a fun/method decl. (A 2-arg reassign never reaches here.)
+		if len(br.Children) == 4 {
+			return fmt.Sprintf("(= %s %s ...)",
 				pnodeText(br.Children[1]), pnodeText(br.Children[2]))
 		}
 	case "property":
@@ -408,7 +580,7 @@ func renderStructHeader(br *ast.PBranch) string {
 			parts = append(parts, f.Name)
 		}
 	}
-	// Render the typed-field form `(struct Name.{ F T … })` when any field
+	// Render the typed-field form `(struct Name.{ T F … })` when any field
 	// carries a type, else the bare `(struct Name f …)`.
 	if typed {
 		return fmt.Sprintf("(struct %s.{ %s })", d.Name, strings.Join(parts, " "))
@@ -432,6 +604,8 @@ func pnodeText(n ast.PNode) string {
 		return node.Sigil + pnodeText(node.Inner)
 	case *ast.PDot:
 		return pnodeText(node.LHS) + "." + pnodeText(node.RHS)
+	case *ast.PSlash:
+		return pnodeText(node.LHS) + "/" + pnodeText(node.RHS)
 	case *ast.PMacroCall:
 		parts := make([]string, 0, len(node.Args))
 		for _, a := range node.Args {
@@ -444,6 +618,222 @@ func pnodeText(n ast.PNode) string {
 		return out + ")"
 	}
 	return ""
+}
+
+// typeHover renders the rich hover body for a TYPE symbol declared in this
+// file: its precise KIND, any generic TEMPLATE parameters, and — for a struct
+// its fields + methods, for a trait its required methods + properties, for a
+// type alias what it EQUALS. Returns "" when def.Name isn't a struct/trait/type
+// declared in the tree.
+func typeHover(def Definition, tree []ast.PNode) string {
+	var form *ast.PBranch
+	var d topLevelDecl
+	idx := -1
+	for i, node := range tree {
+		dd, ok := declOf(node)
+		if !ok || dd.Name != def.Name {
+			continue
+		}
+		if dd.Head == "struct" || dd.Head == "trait" || dd.Head == "type" {
+			form, _ = node.(*ast.PBranch)
+			d, idx = dd, i
+			break
+		}
+	}
+	if form == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	kind := map[string]string{"struct": "struct", "trait": "trait", "type": "type alias"}[d.Head]
+	b.WriteString("**" + kind + "**")
+	if gp := genericParamText(tree, idx); gp != "" {
+		b.WriteString("  ·  generic `" + gp + "`")
+	}
+
+	switch d.Head {
+	case "struct":
+		if len(d.Fields) > 0 {
+			b.WriteString("\n\n**fields**\n")
+			for _, f := range d.Fields {
+				if f.Type != nil {
+					fmt.Fprintf(&b, "- `%s`: %s\n", f.Name, pnodeText(f.Type))
+				} else {
+					fmt.Fprintf(&b, "- `%s`\n", f.Name)
+				}
+			}
+		}
+		if ms := structMethodLines(tree, def.Name); len(ms) > 0 {
+			b.WriteString("\n**methods**\n")
+			for _, m := range ms {
+				b.WriteString("- `" + m + "`\n")
+			}
+		}
+	case "trait":
+		writeTraitMembers(&b, form)
+	case "type":
+		if d.Body != nil {
+			b.WriteString("\n\n= `" + pnodeText(d.Body) + "`")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// genericParamText renders the parameters of a `(template …)` immediately
+// preceding the declaration at idx, or "" if there is none. A bounded parameter
+// shows its bound: `B <: Some_Type`.
+func genericParamText(tree []ast.PNode, idx int) string {
+	if idx <= 0 {
+		return ""
+	}
+	d, ok := declOf(tree[idx-1])
+	if !ok || d.Head != "template" {
+		return ""
+	}
+	ps := make([]string, 0, len(d.TemplateParams))
+	for _, p := range d.TemplateParams {
+		if p.Bound != nil {
+			ps = append(ps, p.Name+" <: "+pnodeText(p.Bound))
+		} else {
+			ps = append(ps, p.Name)
+		}
+	}
+	return strings.Join(ps, ", ")
+}
+
+// structMethodLines renders one line per method declared on `structName`,
+// preferring a type SIGNATURE (which carries the parameter TYPES and result
+// type) over the implementation (which has only argument names). Both instance
+// `(method Owner.name …)` and `(static method Owner.name …)` declarations count.
+func structMethodLines(tree []ast.PNode, structName string) []string {
+	sig := map[string]string{}
+	var order []string
+	for _, node := range tree {
+		d, ok := declOf(node)
+		if !ok || d.Owner != structName || d.Name == "" {
+			continue
+		}
+		if d.Head != "method" && !(d.Head == "static" && d.Sub == "method") {
+			continue
+		}
+		_, seen := sig[d.Name]
+		if !seen {
+			order = append(order, d.Name)
+		}
+		// A signature wins over an implementation regardless of source order.
+		if !seen || d.IsSig {
+			sig[d.Name] = methodSigText(d)
+		}
+	}
+	out := make([]string, 0, len(order))
+	for _, n := range order {
+		out = append(out, sig[n])
+	}
+	return out
+}
+
+// methodSigText renders a method declaration as `(name type…) [→ result]` — the
+// raw signature shape: the parameter TYPES (from a signature) or argument names
+// (from an impl fallback), and the result type when it's a signature. The
+// receiver is dropped for an INSTANCE method (its param 0 is `Self`), but kept
+// for a STATIC method, whose receiver type is implicit so param 0 is a real
+// argument (see declOf's static case).
+func methodSigText(d topLevelDecl) string {
+	dropReceiver := d.Head != "static"
+	var params []string
+	if al, ok := d.ArgList.(*ast.PBranch); ok {
+		for i, c := range al.Children {
+			if i == 0 && dropReceiver {
+				continue
+			}
+			params = append(params, pnodeText(c))
+		}
+	}
+	s := "(" + d.Name
+	if len(params) > 0 {
+		s += " " + strings.Join(params, " ")
+	}
+	s += ")"
+	if d.IsSig && d.Body != nil {
+		s += " → " + pnodeText(d.Body)
+	}
+	return s
+}
+
+// writeTraitMembers renders a trait form's required methods and properties.
+func writeTraitMembers(b *strings.Builder, form *ast.PBranch) {
+	_, members := traitFormParts(form)
+	var methods, props []string
+	for _, sub := range members {
+		sb, ok := sub.(*ast.PBranch)
+		if !ok {
+			continue
+		}
+		name := traitMemberName(sb)
+		if name == "" {
+			continue
+		}
+		switch headIdent(sb) {
+		case "method":
+			methods = append(methods, traitMethodText(sb, name))
+		case "property":
+			props = append(props, traitPropText(sb, name))
+		}
+	}
+	if len(methods) > 0 {
+		b.WriteString("\n\n**methods**\n")
+		for _, m := range methods {
+			b.WriteString("- `" + m + "`\n")
+		}
+	}
+	if len(props) > 0 {
+		b.WriteString("\n**properties**\n")
+		for _, p := range props {
+			b.WriteString("- `" + p + "`\n")
+		}
+	}
+}
+
+// traitMethodText renders `name(param…) [→ result]` for a trait method sub-form
+// `(method self.name (self param…) result)`.
+func traitMethodText(sb *ast.PBranch, name string) string {
+	var params []string
+	if len(sb.Children) >= 3 {
+		if al, ok := sb.Children[2].(*ast.PBranch); ok {
+			for i, c := range al.Children {
+				if i == 0 {
+					continue // receiver
+				}
+				params = append(params, pnodeText(c))
+			}
+		}
+	}
+	s := name + "(" + strings.Join(params, " ") + ")"
+	if len(sb.Children) >= 4 {
+		s += " → " + pnodeText(sb.Children[3])
+	}
+	return s
+}
+
+// traitPropText renders `name[: Type] (get[/set])` for a trait property
+// sub-form, unwrapping a typed `(Type self.name)` name to show the type.
+func traitPropText(sb *ast.PBranch, name string) string {
+	s := name
+	if len(sb.Children) >= 2 {
+		if tb, ok := sb.Children[1].(*ast.PBranch); ok && len(tb.Children) == 2 {
+			s += ": " + pnodeText(tb.Children[0])
+		}
+	}
+	var acc []string
+	for _, c := range sb.Children[2:] {
+		if lf, ok := c.(*ast.PLeaf); ok && (lf.Value == "get" || lf.Value == "set") {
+			acc = append(acc, lf.Value)
+		}
+	}
+	if len(acc) > 0 {
+		s += " (" + strings.Join(acc, "/") + ")"
+	}
+	return s
 }
 
 // docCommentAbove collects the contiguous `--` comment block directly
@@ -669,7 +1059,8 @@ func DocumentSymbols(path string, src []byte) (syms []Symbol) {
 	tree = syntax.NormalizeDo(tree)
 
 	var out []Symbol
-	structIdx := map[string]int{} // struct name → index in out
+	structIdx := map[string]int{}   // struct name → index in out
+	clauseSeen := map[string]bool{} // "Owner.name" of clause sets already emitted
 
 	for _, form := range tree {
 		br, ok := asList(form)
@@ -683,6 +1074,26 @@ func DocumentSymbols(path string, src []byte) (syms []Symbol) {
 					out = append(out, Symbol{Name: name, Kind: DefFun, Span: br.Span, SelectionSpan: span})
 				}
 			}
+		case "=":
+			// A 4-child `(= name (params) body)` / `(= Owner.name …)` is a fun/method
+			// IMPLEMENTATION (declOf normalizes it to Head fun/method); emit a symbol
+			// like the fun/method cases. A 2-arg reassign yields no symbol.
+			if d, ok := declOf(br); ok && d.Name != "" {
+				switch d.Head {
+				case "fun":
+					out = append(out, Symbol{Name: d.Name, Kind: DefFun, Span: br.Span, SelectionSpan: d.NameSpan})
+				case "method":
+					sym := Symbol{Name: d.Name, Kind: DefMethod, Span: br.Span, SelectionSpan: d.NameSpan}
+					if idx, ok := structIdx[d.Owner]; ok {
+						out[idx].Children = append(out[idx].Children, sym)
+					} else {
+						if d.Owner != "" {
+							sym.Name = d.Owner + "." + d.Name
+						}
+						out = append(out, sym)
+					}
+				}
+			}
 		case "macro":
 			// (macro ~name (params) body) — `~`@1, the name is child 2.
 			if len(br.Children) >= 3 {
@@ -692,7 +1103,7 @@ func DocumentSymbols(path string, src []byte) (syms []Symbol) {
 			}
 		case "struct":
 			// declOf reads both the bare `(struct Name f …)` and the typed-field
-			// `(struct Name.{ F T … })` forms, so the outline covers either.
+			// `(struct Name.{ T F … })` forms, so the outline covers either.
 			if d, ok := declOf(br); ok && d.Name != "" {
 				sym := Symbol{Name: d.Name, Kind: DefStruct, Span: br.Span, SelectionSpan: d.NameSpan}
 				for _, f := range d.Fields {
@@ -752,8 +1163,33 @@ func DocumentSymbols(path string, src []byte) (syms []Symbol) {
 				}
 			}
 		case "var", "const", "let":
-			// declOf normalizes a `let`/`let var` form to const/var + binds.
-			decl, _ := declOf(br)
+			// declOf normalizes a `let`/`let var` form to const/var + binds — or an
+			// IMPLEMENTATION CLAUSE `(let name (patterns) [where g] = body)` to Head
+			// fun/method. A clause SET (several clauses of one name) yields ONE
+			// symbol, at the first clause.
+			decl, ok := declOf(br)
+			if ok && decl.IsClause && decl.Name != "" {
+				key := decl.Owner + "." + decl.Name
+				if clauseSeen[key] {
+					continue
+				}
+				clauseSeen[key] = true
+				switch decl.Head {
+				case "fun":
+					out = append(out, Symbol{Name: decl.Name, Kind: DefFun, Span: br.Span, SelectionSpan: decl.NameSpan})
+				case "method":
+					sym := Symbol{Name: decl.Name, Kind: DefMethod, Span: br.Span, SelectionSpan: decl.NameSpan}
+					if idx, ok := structIdx[decl.Owner]; ok {
+						out[idx].Children = append(out[idx].Children, sym)
+					} else {
+						if decl.Owner != "" {
+							sym.Name = decl.Owner + "." + decl.Name
+						}
+						out = append(out, sym)
+					}
+				}
+				continue
+			}
 			kind := DefVar
 			if decl.Head == "const" {
 				kind = DefConst

@@ -1,5 +1,6 @@
 (goimport ('stdDependencies' dep))
 
-(fun num (str)
-    (dep.ParseAtoi str)
+(fun num (String) Number)
+(let num (str) =
+    (dep/ParseAtoi str)
 )

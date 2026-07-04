@@ -77,7 +77,7 @@ func TestPackageScopeResolvesCrossFile(t *testing.T) {
 
 func TestUnusedImport(t *testing.T) {
 	src := []byte(`(import 'std/io')
-(io.print_line 'hi')
+(io/print-line 'hi')
 `)
 	used := AnalyzeFile("test.pho", src)
 	if hasDiag(used, "unused-import") {
@@ -85,7 +85,7 @@ func TestUnusedImport(t *testing.T) {
 	}
 
 	src = []byte(`(import 'std/io')
-(fun main () (identity do))
+(let main () = (identity do))
 `)
 	unused := AnalyzeFile("test.pho", src)
 	if !hasDiag(unused, "unused-import") {
@@ -95,7 +95,7 @@ func TestUnusedImport(t *testing.T) {
 
 func TestInvalidSelfUsage(t *testing.T) {
 	// `self` outside any method body is flagged.
-	src := []byte(`(io.print_line self)
+	src := []byte(`(io/print-line self)
 `)
 	diags := AnalyzeFile("test.pho", src)
 	if !hasDiag(diags, "invalid-self-usage") {
@@ -104,7 +104,7 @@ func TestInvalidSelfUsage(t *testing.T) {
 
 	// `self` inside a method body is not flagged.
 	src = []byte(`(struct T #x)
-(method T.#foo (self) (identity do (io.print_line self.#x)))
+(let T.#foo (self) = (identity do (io/print-line self.#x)))
 `)
 	diags = AnalyzeFile("test.pho", src)
 	if hasDiag(diags, "invalid-self-usage") {
@@ -114,8 +114,8 @@ func TestInvalidSelfUsage(t *testing.T) {
 	// `self` inside a fun nested in a method is allowed (closure
 	// captures the receiver).
 	src = []byte(`(struct T #x)
-(method T.#foo (self) (identity do
-  (fun inner () (io.print_line self.#x))
+(let T.#foo (self) = (identity do
+  (fun inner () (io/print-line self.#x))
   (inner)
 ))
 `)
@@ -194,7 +194,7 @@ func TestSigilShape(t *testing.T) {
 
 	// `=` accepts a bare ident or a dot target — the user's mixed
 	// style across the cards/ scripts must keep linting clean.
-	d = AnalyzeFile("test.pho", []byte(`(fun main () (identity do
+	d = AnalyzeFile("test.pho", []byte(`(let main () = (identity do
   (let var x = 0)
   (= x 5)
   (= x 10)
@@ -221,35 +221,35 @@ func TestControlFlowScoping(t *testing.T) {
 	if !hasDiag(d, "continue-outside-loop") {
 		t.Errorf("expected continue-outside-loop on top-level (continue), got %#v", d)
 	}
-	d = AnalyzeFile("test.pho", []byte(`(fun f () (break))`))
+	d = AnalyzeFile("test.pho", []byte(`(let f () = (break))`))
 	if !hasDiag(d, "break-outside-loop") {
 		t.Errorf("expected break-outside-loop on (break) inside fun outside for, got %#v", d)
 	}
 
 	// (return) inside a fun / method body — fine.
-	d = AnalyzeFile("test.pho", []byte(`(fun f (x) (identity do (return x)))`))
+	d = AnalyzeFile("test.pho", []byte(`(let f (x) = (identity do (return x)))`))
 	if hasDiag(d, "return-outside-function") {
 		t.Errorf("did not expect return-outside-function inside fun body, got %#v", d)
 	}
 	d = AnalyzeFile("test.pho", []byte(`(struct P #x)
-(method P.m (self) (return self.#x))`))
+(let P.m (self) = (return self.#x))`))
 	if hasDiag(d, "return-outside-function") {
 		t.Errorf("did not expect return-outside-function inside method body, got %#v", d)
 	}
 
 	// (break) / (continue) inside a for body — fine, both shapes.
-	d = AnalyzeFile("test.pho", []byte(`(fun f () (foreach i in [1 2 3] (break)))`))
+	d = AnalyzeFile("test.pho", []byte(`(let f () = (foreach i in [1 2 3] (break)))`))
 	if hasDiag(d, "break-outside-loop") {
 		t.Errorf("did not expect break-outside-loop inside for body, got %#v", d)
 	}
-	d = AnalyzeFile("test.pho", []byte(`(fun f () (foreach true in (continue)))`))
+	d = AnalyzeFile("test.pho", []byte(`(let f () = (foreach true in (continue)))`))
 	if hasDiag(d, "continue-outside-loop") {
 		t.Errorf("did not expect continue-outside-loop inside for body, got %#v", d)
 	}
 
 	// A fun nested inside a for breaks the lexical loop chain —
 	// (break) inside the inner fun is still invalid.
-	d = AnalyzeFile("test.pho", []byte(`(fun outer () (foreach i in [1 2 3]
+	d = AnalyzeFile("test.pho", []byte(`(let outer () = (foreach i in [1 2 3]
     (identity do
         (let var inner = (fun () (break)))
         (inner)
@@ -259,11 +259,11 @@ func TestControlFlowScoping(t *testing.T) {
 	}
 
 	// Arity violations.
-	d = AnalyzeFile("test.pho", []byte(`(fun f () (return 1 2))`))
+	d = AnalyzeFile("test.pho", []byte(`(let f () = (return 1 2))`))
 	if !hasDiag(d, "bad-form-arity") {
 		t.Errorf("expected bad-form-arity on (return 1 2), got %#v", d)
 	}
-	d = AnalyzeFile("test.pho", []byte(`(fun f () (foreach true in (break x)))`))
+	d = AnalyzeFile("test.pho", []byte(`(let f () = (foreach true in (break x)))`))
 	if !hasDiag(d, "bad-form-arity") {
 		t.Errorf("expected bad-form-arity on (break x), got %#v", d)
 	}
@@ -275,7 +275,7 @@ func TestControlFlowScoping(t *testing.T) {
 // clean.
 func TestInterpolationReferenceChecks(t *testing.T) {
 	d := AnalyzeFile("test.pho", []byte(`(let name = 'ok')
-(io.print_line 'hi %name')`))
+(io/print-line 'hi %name')`))
 	if hasDiag(d, "unresolved-identifier") {
 		// `name` is defined, `io` resolves via the import surface only,
 		// so io may or may not be defined here — but a real test
@@ -288,24 +288,24 @@ func TestInterpolationReferenceChecks(t *testing.T) {
 	}
 
 	// Unresolved bare-name interpolation.
-	d = AnalyzeFile("test.pho", []byte(`(io.print_line 'hi %who')`))
+	d = AnalyzeFile("test.pho", []byte(`(io/print-line 'hi %who')`))
 	if !hasDiagWithName(d, "unresolved-identifier", "who") {
 		t.Errorf("expected unresolved-identifier 'who' inside %%who, got %#v", d)
 	}
 
 	// Unresolved name inside %(call ...).
-	d = AnalyzeFile("test.pho", []byte(`(io.print_line 'got %(len missing)')`))
+	d = AnalyzeFile("test.pho", []byte(`(io/print-line 'got %(len missing)')`))
 	if !hasDiagWithName(d, "unresolved-identifier", "missing") {
 		t.Errorf("expected unresolved-identifier 'missing' inside %%(len missing), got %#v", d)
 	}
 
 	// Bad interpolation shape — trailing %, empty %(), %X for X not a
 	// valid start — surfaces as bad-interpolation.
-	d = AnalyzeFile("test.pho", []byte(`(io.print_line 'trailing %')`))
+	d = AnalyzeFile("test.pho", []byte(`(io/print-line 'trailing %')`))
 	if !hasDiag(d, "bad-interpolation") {
 		t.Errorf("expected bad-interpolation on trailing %%, got %#v", d)
 	}
-	d = AnalyzeFile("test.pho", []byte(`(io.print_line 'empty %()')`))
+	d = AnalyzeFile("test.pho", []byte(`(io/print-line 'empty %()')`))
 	if !hasDiag(d, "bad-interpolation") {
 		t.Errorf("expected bad-interpolation on empty %%(), got %#v", d)
 	}
@@ -330,8 +330,8 @@ func TestUnknownExport(t *testing.T) {
 	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(pkgDir, "lib.phl"), []byte(`(fun square (x) (* x x))
-(fun #cube (x) (* x (* x x)))
+	if err := os.WriteFile(filepath.Join(pkgDir, "lib.phl"), []byte(`(let square (x) = (* x x))
+(let #cube (x) = (* x (* x x)))
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func TestUnknownExportSkipsGoImport(t *testing.T) {
 
 func TestSetOnImportAlias(t *testing.T) {
 	d := AnalyzeFile("test.pho", []byte(`(import 'std/io')
-(fun main () (= io 5))
+(let main () = (= io 5))
 `))
 	if !hasDiag(d, "set-on-constant") {
 		t.Errorf("expected set-on-constant on import alias, got %#v", d)
@@ -431,8 +431,8 @@ func TestPackageScopeDoesNotShadowOnRedeclare(t *testing.T) {
 func TestMethodDoesNotShadowFunOrOtherReceiver(t *testing.T) {
 	// method vs fun of the same name — no redeclaration.
 	d := AnalyzeFile("test.pho", []byte(`(struct Process #pid)
-(fun stdout () (none))
-(method Process.stdout (self) (self.#pid))
+(let stdout () = (none))
+(let Process.stdout (self) = (self.#pid))
 `))
 	if hasDiag(d, "redeclaration") {
 		t.Errorf("method must not shadow a fun of the same name, got %#v", d)
@@ -441,20 +441,23 @@ func TestMethodDoesNotShadowFunOrOtherReceiver(t *testing.T) {
 	// two methods named Stdout on DIFFERENT receivers — no redeclaration.
 	d = AnalyzeFile("test.pho", []byte(`(struct Process #pid)
 (struct File #fd)
-(method Process.stdout (self) (self.#pid))
-(method File.stdout (self) (self.#fd))
+(let Process.stdout (self) = (self.#pid))
+(let File.stdout (self) = (self.#fd))
 `))
 	if hasDiag(d, "redeclaration") {
 		t.Errorf("methods named the same on different receivers must not collide, got %#v", d)
 	}
 
-	// the SAME method on the SAME receiver twice — still a redeclaration.
+	// the SAME method declared twice on the SAME receiver — the clauses of one
+	// method COEXIST (Features.md §1): both attach to Process.stdout, no
+	// redeclaration. (An unreachable duplicate clause is a matter for the
+	// clause checker, not the scope collector.)
 	d = AnalyzeFile("test.pho", []byte(`(struct Process #pid)
-(method Process.stdout (self) (self.#pid))
-(method Process.stdout (self) (self.#pid))
+(let Process.stdout (self) = (self.#pid))
+(let Process.stdout (self) = (self.#pid))
 `))
-	if !hasDiag(d, "redeclaration") {
-		t.Errorf("a method redefined on the same receiver should be flagged, got %#v", d)
+	if hasDiag(d, "redeclaration") {
+		t.Errorf("clauses of one method must coexist, got %#v", d)
 	}
 }
 

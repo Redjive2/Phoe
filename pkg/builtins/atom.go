@@ -8,7 +8,7 @@ import "pho/pkg/core"
 //
 //	(atom? x)         -> True if x is an atom
 //	(atom "foo")      -> :foo   (errors if "foo" isn't a legal atom form)
-//	(atom_name :foo)  -> "foo"
+//	(atom-name :foo)  -> "foo"
 //
 // `atom` mirrors the bare-word constructor convention of `slice` / `map`.
 func atomBuiltins() map[string]core.StackEntry {
@@ -35,13 +35,13 @@ func atomBuiltins() map[string]core.StackEntry {
 			return core.TvAtom(s)
 		}),
 
-		"atom_name": global(func(ctx core.Context, argv []core.Node) core.Value {
+		"atom-name": global(func(ctx core.Context, argv []core.Node) core.Value {
 			if len(argv) != 1 {
-				return ctx.Errorf(core.ErrArity, "'atom_name' requires exactly 1 argument; got %d", len(argv))
+				return ctx.Errorf(core.ErrArity, "'atom-name' requires exactly 1 argument; got %d", len(argv))
 			}
 			v := argv[0].Evaluate(ctx)
 			if v.Kind != core.KindAtom {
-				return ctx.Errorf(core.ErrType, "'atom_name' expected an 'atom' argument, got '%s'", v.Kind)
+				return ctx.Errorf(core.ErrType, "'atom-name' expected an 'atom' argument, got '%s'", v.Kind)
 			}
 			return core.TvStr(v.Val.(*core.Atom).Name())
 		}),

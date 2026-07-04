@@ -74,6 +74,26 @@ type PhoType struct {
 	// pointer (each `(Trait …)` is distinct, like a struct); subtyping is
 	// structural (requirement coverage).
 	trait *TraitInfo
+
+	// tvar marks this type as a generic TYPE VARIABLE (Doc/PlanV1 generics
+	// Phase 2). A type variable is set-theoretically GRADUAL — its base is the
+	// top type with dyn set — so the standard operators (Subtype/And/Or) and the
+	// gradual mismatch checker treat it permissively and never false-positive on
+	// it. Its precision lives in the metadata: an identity (so a variable is a
+	// subtype only of itself and its bound, and instantiation substitutes it
+	// consistently) and an upper Bound (so a use where a bound-DISJOINT type is
+	// expected is a provable mismatch, and a bound member resolves). Identity is
+	// by (name, bound): references to the same parameter share one interned type;
+	// a different name or bound is a different variable. Interning by structure
+	// (not a fresh id) means re-analysing a file reuses the same variables rather
+	// than growing the type pool.
+	tvar *tvarInfo
+}
+
+// tvarInfo is the identity and bound of a generic type variable.
+type tvarInfo struct {
+	name  string   // display name (e.g. "B", "U") — part of identity
+	bound *PhoType // upper bound (TypeUnknown when the parameter is unbounded)
 }
 
 // TraitInfo is a Trait's FLATTENED requirement set (supertraits already folded
@@ -107,6 +127,47 @@ type TraitProperty struct {
 type arrowType struct {
 	Params []*PhoType
 	Result *PhoType
+}
+
+// TypeVar returns the generic type variable named `name` with upper bound
+// `bound` (TypeUnknown when unbounded). The result is set-theoretically Dynamic
+// (top + gradual) so no standard operation or the gradual checker ever
+// false-positives on it; its identity and bound carry the generic precision,
+// read by the checker for bound checks, member access, and instantiation.
+// Interned by (name, bound), so the same parameter always yields the same
+// pointer — no need for callers to cache it, and re-analysis doesn't grow the
+// pool.
+func TypeVar(name string, bound *PhoType) *PhoType {
+	if bound == nil {
+		bound = TypeUnknown
+	}
+	return internType(&PhoType{
+		base:   baseAll,
+		allStr: true,
+		dyn:    true,
+		tvar:   &tvarInfo{name: name, bound: bound},
+	})
+}
+
+// IsTypeVar reports whether t is a generic type variable.
+func IsTypeVar(t *PhoType) bool { return t != nil && t.tvar != nil }
+
+// ArrowResult returns a specific function type's result type and true, or
+// (nil, false) if t is not a function arrow (a bare Function has none).
+func ArrowResult(t *PhoType) (*PhoType, bool) {
+	if t == nil || t.arrow == nil {
+		return nil, false
+	}
+	return t.arrow.Result, true
+}
+
+// TypeVarBound returns a type variable's upper bound and true, or (nil, false)
+// if t is not a type variable.
+func TypeVarBound(t *PhoType) (*PhoType, bool) {
+	if t == nil || t.tvar == nil {
+		return nil, false
+	}
+	return t.tvar.bound, true
 }
 
 // ArrowType is the type of functions (params…) -> result; ArrowType(nil-ish,
@@ -731,6 +792,11 @@ func (t *PhoType) canonicalKey() string {
 		// Identity by pointer: each (Trait …) declaration is a distinct type.
 		fmt.Fprintf(&b, "|Trait%p", t.trait)
 	}
+	if t.tvar != nil {
+		// Identity by (name, bound): references to one parameter share it; a
+		// different name or bound is a different variable.
+		fmt.Fprintf(&b, "|tv:%s(%s)", t.tvar.name, t.tvar.bound.key)
+	}
 	return b.String()
 }
 
@@ -767,10 +833,10 @@ func init() {
 	TypeChar = prim(bChr, "Char")
 	TypeAtom = prim(bAtom, "Atom")
 	TypeFunction = prim(bFun, "Function")
-	TypeNil = prim(bNil, "Nil")
+	TypeNil = prim(bNil, "None")
 	TypeType = prim(bType, "Type")
 	TypeUnknown = internType(&PhoType{base: baseAll, allStr: true, name: "Unknown"})
-	TypeNone = internType(&PhoType{name: "None"})
+	TypeNone = internType(&PhoType{name: "Never"})
 
 	// Collection is the union of the iterable kinds; Dynamic is the top type
 	// flagged gradual (it contains every value, so `(x.Is? Dynamic)` is always
@@ -798,8 +864,12 @@ func (t *PhoType) Name() string {
 // Stage A1 every constructed type is named, so this is a forward-compatible
 // fallback (exercised once unions/negation land in Stage C).
 func (t *PhoType) render() string {
+	// A type variable renders as its parameter name.
+	if t.tvar != nil {
+		return t.tvar.name
+	}
 	if t.base == 0 && len(t.structs) == 0 && !t.allStr && t.fields == nil {
-		return "None"
+		return "Never"
 	}
 	// A trait renders as `(Trait <member names>)`.
 	if t.trait != nil {
@@ -911,10 +981,10 @@ func (t *PhoType) singletonNames(bit baseBits) []string {
 		}
 		out := make([]string, 0, 2)
 		if _, ok := t.bools[false]; ok {
-			out = append(out, "False")
+			out = append(out, "false")
 		}
 		if _, ok := t.bools[true]; ok {
-			out = append(out, "True")
+			out = append(out, "true")
 		}
 		return out
 	}
@@ -926,7 +996,7 @@ var baseNames = []struct {
 	name string
 }{
 	{bNum, "Number"}, {bList, "List"}, {bDict, "Map"}, {bStr, "String"},
-	{bChr, "Char"}, {bAtom, "Atom"}, {bBool, "Boolean"}, {bNil, "Nil"},
+	{bChr, "Char"}, {bAtom, "Atom"}, {bBool, "Boolean"}, {bNil, "None"},
 	{bFun, "Function"}, {bType, "Type"},
 }
 
@@ -1428,15 +1498,15 @@ func buildFromType(ctx Context, pt *PhoType, args []ttnode) (Tval, bool) {
 			}
 		}
 	case TypeStruct:
-		// `Struct.{ X Number Y Number }` parses to (Struct "X" Number "Y" …):
-		// alternating field-name string + field-type. Builds an open record.
+		// `Struct.{ Number x String y }` parses to (Struct Number "x" String "y"):
+		// alternating field-TYPE + field-name string. Builds an open record.
 		if len(args)%2 != 0 {
 			return TvNil, false
 		}
 		fields := make(map[string]*PhoType, len(args)/2)
 		for i := 0; i < len(args); i += 2 {
-			name := args[i].Evaluate(ctx)
-			ft, ok := coerceToType(ctx, args[i+1])
+			ft, ok := coerceToType(ctx, args[i])
+			name := args[i+1].Evaluate(ctx)
 			if name.Kind != KindStr || !ok {
 				return TvNil, false
 			}
@@ -1471,9 +1541,8 @@ func coerceToType(ctx Context, n ttnode) (*PhoType, bool) {
 		return StrSingleton(v.Val.(string)), true
 	case KindBool:
 		return BoolSingleton(v.Val.(bool)), true
-	case KindNil:
-		return TypeNil, true
 	}
+	// A `none` VALUE is NOT a type — the nil TYPE is the capitalized `None`.
 	return nil, false
 }
 
@@ -1498,13 +1567,13 @@ func TypeByName(name string) (*PhoType, bool) {
 		return TypeAtom, true
 	case "Function":
 		return TypeFunction, true
-	case "Nil", "NilT":
+	case "None":
 		return TypeNil, true
 	case "Type":
 		return TypeType, true
 	case "Unknown":
 		return TypeUnknown, true
-	case "None":
+	case "Never":
 		return TypeNone, true
 	case "Collection":
 		return TypeCollection, true

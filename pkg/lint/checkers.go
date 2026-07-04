@@ -26,8 +26,14 @@ var libraryForms = map[string]bool{
 	"property": true,
 	// `static method`/`static property` declare type-level members.
 	"static": true,
+	// `(operator Recv.OP …)` declares an operator overload on a type
+	// (Features.md §7) — a signature, like `method`.
+	"operator": true,
 	// `(trait Name …)` declares a named trait type.
 	"trait": true,
+	// `(template …)` declares type parameters for the following generic
+	// struct/method declaration.
+	"template": true,
 }
 
 // checkPhlSideEffects flags any top-level form in a .phl file that
@@ -50,6 +56,13 @@ func checkPhlSideEffects(file string, tree []ast.PNode) []Diagnostic {
 		}
 		head := headIdent(br)
 		if libraryForms[head] {
+			continue
+		}
+		// A 4-child `(= name (params) body)` / `(= Owner.name …)` is a fun/method
+		// IMPLEMENTATION — a pure definition permitted at a library's top level (the
+		// decl/impl split). A 3-child `(= target value)` reassignment stays a side
+		// effect, rejected below. Mirrors modload.isLibraryForm (load.go).
+		if head == "=" && len(br.Children) == 4 {
 			continue
 		}
 

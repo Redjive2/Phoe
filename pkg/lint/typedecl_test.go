@@ -11,7 +11,7 @@ import (
 func TestTypeDeclLintsClean(t *testing.T) {
 	clean := []string{
 		"(type Status (Or 200 404 500))\n(let x = (200.is? Status))\n",
-		"(type Status (Or 200 404))\n(type Maybe_Status (Or Status none))\n(let x = (none.is? Maybe_Status))\n",
+		"(type Status (Or 200 404))\n(type Maybe-Status (Or Status None))\n(let x = (none.is? Maybe-Status))\n",
 		"(type Method (Or 'GET' 'POST'))\n(let x = ('GET'.is? Method))\n",
 	}
 	for _, src := range clean {
@@ -41,21 +41,21 @@ func TestNamedTypeChecking(t *testing.T) {
 	}{
 		// A named enum in a function signature.
 		{"sig arg in named enum", "(type Method (Or 'GET' 'POST'))\n" +
-			"(fun handle (Method) Method)\n(fun handle (m) m)\n(handle 'GET')", false},
+			"(fun handle (Method) Method)\n(let handle (m) = m)\n(handle 'GET')", false},
 		{"sig arg outside named enum", "(type Method (Or 'GET' 'POST'))\n" +
-			"(fun handle (Method) Method)\n(fun handle (m) m)\n(handle 'DELETE')", true},
+			"(fun handle (Method) Method)\n(let handle (m) = m)\n(handle 'DELETE')", true},
 		// A named alias in a (~type …) var annotation.
 		{"type annot named alias clean", "(type Status (Or 200 404))\n(let var (Status s) = 200)", false},
 		{"type annot named alias mismatch", "(type Status (Or 200 404))\n(let var (Status s) = 500)", true},
 		// Occurrence typing narrows a named-union binding in each arm.
 		{"narrow named union then/else ok", "(type Ns (Or Number String))\n" +
-			"(fun need_n (Number) Number)\n(fun need_n (n) n)\n" +
-			"(fun need_s (String) String)\n(fun need_s (s) s)\n" +
-			"(let var (Ns x) = 5)\n(if (x.is? Number) then (need_n x) else (need_s x))", false},
+			"(fun need-n (Number) Number)\n(fun need-n (n) n)\n" +
+			"(fun need-s (String) String)\n(fun need-s (s) s)\n" +
+			"(let var (Ns x) = 5)\n(if (x.is? Number) then (need-n x) else (need-s x))", false},
 		{"narrow named union wrong arm", "(type Ns (Or Number String))\n" +
-			"(fun need_n (Number) Number)\n(fun need_n (n) n)\n" +
-			"(fun need_s (String) String)\n(fun need_s (s) s)\n" +
-			"(let var (Ns x) = 5)\n(if (x.is? Number) then (need_s x) else (need_n x))", true},
+			"(fun need-n (Number) Number)\n(fun need-n (n) n)\n" +
+			"(fun need-s (String) String)\n(fun need-s (s) s)\n" +
+			"(let var (Ns x) = 5)\n(if (x.is? Number) then (need-s x) else (need-n x))", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

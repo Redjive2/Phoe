@@ -24,34 +24,42 @@ func (w *walker) checkSpecialFormShape(br *ast.PBranch) {
 
 	switch head {
 	case "fun":
-		// (fun 'name '(args) '(body))   — named
-		// (fun '(args) '(body))         — anonymous
-		// The body can be any quoted form, not just `'(...)`: bodies
-		// like `'value` (the identity function `(fun '(value) 'value)`)
-		// or `'42` are valid — the runtime just evaluates whatever
-		// node Derepr returns. Only the argument list must be
-		// parenthesized.
-		switch nargs {
-		case 2:
-			w.expectQuotedList(br.Children[1], "fun: argument list")
-			w.expectQuoted(br.Children[2], "fun: body")
-		case 3:
-			w.expectQuotedIdent(br.Children[1], "fun: name")
-			w.expectQuotedList(br.Children[2], "fun: argument list")
-			w.expectQuoted(br.Children[3], "fun: body")
-		default:
-			w.emitArity(br, head, "2 or 3", nargs)
+		// (fun name Type… -> Result) — a type SIGNATURE: a name, flat parameter
+		// types, then `->`, then the return type. `fun` is signature-only now.
+		if nargs < 2 {
+			w.emitArity(br, head, "at least 2 (name … -> Result)", nargs)
+			return
+		}
+		w.expectQuotedIdent(br.Children[1], "fun: name")
+		if _, _, ok := arrowSplit(br.Children[2:]); !ok {
+			w.emit(Diagnostic{
+				File:     w.file,
+				Span:     headSpan(br),
+				Severity: SeverityError,
+				Code:     "bad-form-shape",
+				Message:  "a 'fun' signature is written (fun name Type… -> Result); missing '->' before the return type",
+			})
 		}
 
-	case "method":
-		// (method Receiver.Name (args) body) — Receiver.Name is a dot PATTERN
-		// (not code): the receiver names the owning struct, the name the method.
-		if nargs != 3 {
-			w.emitArity(br, head, "3 (Receiver.Name args body)", nargs)
+	case "method", "operator":
+		// (method Recv.Name Self Type… -> Result) — a method SIGNATURE.
+		// Recv.Name is a dot PATTERN (the receiver names the owning struct);
+		// the receiver + parameter types are flat, then `->`, then the return.
+		if nargs < 2 {
+			w.emitArity(br, head, "at least 2 (Recv.Name … -> Result)", nargs)
 			return
 		}
 		w.expectMethodPattern(br.Children[1])
-		w.expectQuotedList(br.Children[2], "method: argument list")
+		if _, _, ok := arrowSplit(br.Children[2:]); !ok {
+			w.emit(Diagnostic{
+				File:     w.file,
+				Span:     headSpan(br),
+				Severity: SeverityError,
+				Code:     "bad-form-shape",
+				Message:  "a '" + head + "' signature is written (" + head + " Recv.Name Self Type… -> Result); missing '->' before the return type",
+			})
+		}
+		return
 		// Body (Children[3]) is any expression — no shape check.
 
 	case "struct":
@@ -59,8 +67,8 @@ func (w *walker) checkSpecialFormShape(br *ast.PBranch) {
 			w.emitArity(br, head, "at least 1 (a name)", nargs)
 			return
 		}
-		// Typed-field form `(struct Name.{ F T … })` parses to
-		// `(struct (Name "F" T …))` — a single branch whose head is the struct
+		// Typed-field form `(struct Name.{ T F … })` parses to
+		// `(struct (Name T "F" …))` — a single branch whose head is the struct
 		// name and whose rest are quoted-name / type pairs. The names are string
 		// literals and the types are expressions, neither a bare identifier, so
 		// check only that the branch head names the struct (declOf reads the
@@ -71,6 +79,15 @@ func (w *walker) checkSpecialFormShape(br *ast.PBranch) {
 			}
 			break
 		}
+		// Generic typed-field form `(struct Name { T0 f0 T1 f1 … })` — a `{}` brace
+		// of Type/name pairs (Phase 1 generics); the contents are declarations
+		// (types and field names), not bare field identifiers, so don't check them.
+		if nargs == 2 {
+			if brace, ok := br.Children[2].(*ast.PBranch); ok && brace.Open == "{" {
+				w.expectQuotedIdent(br.Children[1], "struct: name")
+				break
+			}
+		}
 		// Bare form `(struct Name f0 f1 …)` — a bare name then bare field idents.
 		w.expectQuotedIdent(br.Children[1], "struct: name")
 		for _, c := range br.Children[2:] {
@@ -78,15 +95,23 @@ func (w *walker) checkSpecialFormShape(br *ast.PBranch) {
 		}
 
 	case "property":
-		// (property Recv.Name get getter)             — read-only
-		// (property Recv.Name get getter set setter)  — read-write
-		if nargs != 3 && nargs != 5 {
-			w.emitArity(br, head, "3 (Name get getter) or 5 (… set setter)", nargs)
+		// (property Target (get (params) body) [(set (params) body)]) — the only
+		// form. The get/set operands are parenthesized accessor sub-forms;
+		// checkProperty validates their bodies. Arity: 2 = read-only, 3 = read-write.
+		// The getter slot MUST be a `(get …)` accessor — the old flat
+		// `get getter [set setter]` keyword form is rejected here.
+		if len(br.Children) < 3 || !isAccessorSublist(br.Children[2], "get") {
+			w.emit(Diagnostic{
+				File:     w.file,
+				Span:     headSpan(br),
+				Severity: SeverityError,
+				Code:     "bad-form-shape",
+				Message:  "'property' takes (target (get (params) body) [(set (params) body)]); the getter must be a (get …) accessor",
+			})
 			return
 		}
-		w.expectKeyword(br.Children[2], "get", "property")
-		if nargs == 5 {
-			w.expectKeyword(br.Children[4], "set", "property")
+		if nargs != 2 && nargs != 3 {
+			w.emitArity(br, head, "2 (target (get …)) or 3 (… (set …))", nargs)
 		}
 
 	case "var", "const":
@@ -109,35 +134,75 @@ func (w *walker) checkSpecialFormShape(br *ast.PBranch) {
 		// bare identifier, which is almost always a forgotten quote.
 
 	case "let":
-		// (let [var] name = value [name = value]*) — an optional `var` modifier
-		// leads, then name/value pairs joined by `=` markers.
+		// A `(let name (patterns) [where guard] = body)` implementation
+		// CLAUSE has its own shape (declOf recognizes it); the value-binding
+		// arity rules below don't apply.
+		if d, ok := declOf(br); ok && d.IsClause {
+			if d.Body == nil {
+				w.emit(Diagnostic{
+					File:     w.file,
+					Span:     headSpan(br),
+					Severity: SeverityError,
+					Code:     "bad-form-shape",
+					Message:  "an implementation clause is written (let name (params) [where guard] = body)",
+				})
+			}
+			return
+		}
+		// (let [var] target = value  …) — an optional `var` modifier leads, then
+		// one or more `target = value` segments. A target is a name, a typed
+		// `(Type name)`, or a destructuring pattern (`[a b …]`, `Type.{ … }`).
 		args := br.Children[1:]
 		if len(args) >= 1 {
 			if mod, ok := args[0].(*ast.PLeaf); ok && mod.Value == "var" {
 				args = args[1:]
 			}
 		}
-		if len(args) < 3 || len(args)%3 != 0 {
+		if len(args) == 0 {
 			w.emit(Diagnostic{
 				File:     w.file,
 				Span:     headSpan(br),
 				Severity: SeverityError,
 				Code:     "bad-form-arity",
-				Message:  "'let' expects 'name = value' bindings (an optional 'var' modifier may lead)",
+				Message:  "'let' expects at least one 'target = value' binding (an optional 'var' modifier may lead)",
 			})
 			return
 		}
-		for j := 1; j < len(args); j += 3 {
-			if eq, ok := args[j].(*ast.PLeaf); !ok || eq.Value != "=" {
+		for i := 0; i < len(args); {
+			// The retired ungrouped typed form `Type name = value` — two bare
+			// leaves before `=` — points at the grouped `(Type name)` form.
+			if i+3 < len(args) && !isEqMarker(args[i+1]) && isEqMarker(args[i+2]) {
 				w.emit(Diagnostic{
 					File:     w.file,
-					Span:     args[j-1].GetSpan(),
+					Span:     args[i].GetSpan(),
 					Severity: SeverityError,
-					Code:     "bad-form-arity",
-					Message:  "'let' binding expects 'name = value' (missing '=')",
+					Code:     "bad-form-shape",
+					Message:  "a typed 'let' binding is written '(Type name) = value', not 'Type name = value'",
 				})
 				return
 			}
+			targetNode, _, next, ok := letBinding(args, i)
+			if !ok {
+				w.emit(Diagnostic{
+					File:     w.file,
+					Span:     args[i].GetSpan(),
+					Severity: SeverityError,
+					Code:     "bad-form-arity",
+					Message:  "'let' binding expects 'target = value' (missing '=')",
+				})
+				return
+			}
+			if len(letTargetBinders(targetNode, true, false)) == 0 {
+				w.emit(Diagnostic{
+					File:     w.file,
+					Span:     targetNode.GetSpan(),
+					Severity: SeverityError,
+					Code:     "bad-form-shape",
+					Message:  "'let' target binds no name — write a name, (Type name), or a [pattern]",
+				})
+				return
+			}
+			i = next
 		}
 
 	case "if", "unless":
@@ -178,6 +243,10 @@ func (w *walker) checkSpecialFormShape(br *ast.PBranch) {
 		//   dot accessor   `(= obj.field 5)`  — Branch{Dot, …}
 		// Anything else (a bare `(...)` form, a `&`-block, etc.)
 		// crashes at the .(Leaf) / .(Branch) type assertions.
+		// `=` is REASSIGNMENT only: `(= target value)`. The old 3-arg define form
+		// `(= name (params) body)` is no longer recognized — an implementation is a
+		// `let` clause `(let name (params) = body)`, so a 3-arg `=` is just a
+		// wrong-arity reassignment.
 		if nargs != 2 {
 			w.emitArity(br, head, "2", nargs)
 			return

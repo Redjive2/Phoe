@@ -25,7 +25,11 @@ func NewEnv() core.Env {
 		collBuiltins(),
 		ctrlBuiltins(),
 		declBuiltins(),
+		lambdaBuiltins(),
+		operatorBuiltins(),
+		selectBuiltins(),
 		dotBuiltins(),
+		slashBuiltins(),
 		metaBuiltins(),
 		modimportBuiltins(),
 		strinterpBuiltins(),
@@ -33,6 +37,17 @@ func NewEnv() core.Env {
 	} {
 		for k, v := range m {
 			builtins[k] = v
+		}
+	}
+
+	// Operator overloading (Features.md §7): wrap each primitive prefix operator
+	// so a struct instance whose type overloads it dispatches to the overload.
+	// The index operators [] / []= are handled in the index read/write paths.
+	for _, op := range arithOverloadNames {
+		if entry, ok := builtins[op]; ok {
+			if fn, isFn := entry.Val.Val.(core.Fun); isFn {
+				builtins[op] = global(withOverload(op, fn))
+			}
 		}
 	}
 

@@ -4,8 +4,9 @@
 
 (import 'std/io')
 
-(fun quit (code message)
-    (dep.PctlQuit code message)
+(fun quit (Number String) None)
+(let quit (code message) =
+    (dep/PctlQuit code message)
 )
 
 -- Just a thin box for a pid; all functionality routed through stdDependencies
@@ -13,39 +14,44 @@
     #pid
 )
 
-(let this_process = Process.{ #pid 0 }
-       stdout =      this_process.stdout
-       stdin =       this_process.stdin
-       stderr =      this_process.stderr)
+(let this-process = Process.{ #pid = 0 }
+       stdout     = this-process.stdout
+       stdin      = this-process.stdin
+       stderr     = this-process.stderr)
 
 -- Starts and returns a `Process` instance
--- Called like so: `(pctl.Spawn "path/to/script" ["arg0" "arg1"] { 'stdout (pctl.Stdout) })`
-(fun spawn (path args config)
-    Process.{ #pid (dep.PctlSpawn path args config) }
+-- Called like so: `(pctl/Spawn "path/to/script" ["arg0" "arg1"] { 'stdout (pctl/Stdout) })`
+(fun spawn (String List Map) Process)
+(let spawn (path args config) =
+    Process.{ #pid = (dep/PctlSpawn path args config) }
 )
 
-(method Process.cancel (self)
-    (dep.PctlCancel self.#pid)
+(method Process.cancel! (Self) None)
+(let Process.cancel! (self) =
+    (dep/PctlCancel self.#pid)
 )
 
 -- Closes the child's stdin so a process that reads to EOF (cat, sort, ...)
 -- can finish instead of blocking forever. Call after writing its input.
-(method Process.close_stdin (self)
-    (dep.PctlCloseStdin self.#pid)
+(method Process.close-stdin! (Self) None)
+(let Process.close-stdin! (self) =
+    (dep/PctlCloseStdin self.#pid)
 )
 
 -- Releases the process's streams and registry entries. The runtime reaps
 -- the child automatically (no zombies), but its streams stay readable
 -- after it exits until you Close it, so call this when fully done.
-(method Process.close (self)
-    (dep.PctlClose self.#pid)
+(method Process.close! (Self) None)
+(let Process.close! (self) =
+    (dep/PctlClose self.#pid)
 )
 
 
 -- Wires a given source stream (in, out, err) to the target stream.
--- Called like so: `(pctl.Wire (process.Stdout) (pctl.Stdout))
-(fun wire (source_stream target_stream)
-    (dep.PctlWire source_stream target_stream)
+-- Called like so: `(pctl/Wire (process.Stdout) (pctl/Stdout))
+(fun wire (Unknown Unknown) None)
+(let wire (source-stream target-stream) =
+    (dep/PctlWire source-stream target-stream)
 )
 
 -- Stream directions depend on the perspective: the host process (pid 0)
@@ -53,28 +59,28 @@
 -- child's stdout/stderr are READ by us and its stdin is WRITTEN by us.
 
 (property Process.stdout
-    get (method Process (self) 
+    (get (self)
         (if (== self.#pid 0)
-            then io.Writer.{ id (dep.PctlStdoutId self.#pid) }
-            else io.Reader.{ id (dep.PctlStdoutId self.#pid) }
+            then io/Writer.{ #id = (dep/PctlStdoutId self.#pid) }
+            else io/Reader.{ #id = (dep/PctlStdoutId self.#pid) }
         )
     )
 )
 
 (property Process.stdin
-    get (method Process (self) 
+    (get (self)
         (if (== self.#pid 0)
-            then io.Writer.{ id (dep.PctlStdinId self.#pid) }
-            else io.Reader.{ id (dep.PctlStdinId self.#pid) }
+            then io/Writer.{ #id = (dep/PctlStdinId self.#pid) }
+            else io/Reader.{ #id = (dep/PctlStdinId self.#pid) }
         )
     )
 )
 
 (property Process.stderr
-    get (method Process (self) 
+    (get (self)
         (if (== self.#pid 0)
-            then io.Writer.{ id (dep.PctlStderrId self.#pid) }
-            else io.Reader.{ id (dep.PctlStderrId self.#pid) }
+            then io/Writer.{ #id = (dep/PctlStderrId self.#pid) }
+            else io/Reader.{ #id = (dep/PctlStderrId self.#pid) }
         )
     )
 )

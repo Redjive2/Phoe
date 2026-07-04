@@ -38,27 +38,27 @@ func TestStructSyntaxFieldResolution(t *testing.T) {
 	}{
 		{
 			"bare fields resolve on member access",
-			"(struct Point x y)\n(let var p = Point.{ x 1 y 2 })\n(let var s = p.x)",
+			"(struct Point x y)\n(let var p = Point.{ x = 1 y = 2 })\n(let var s = p.x)",
 			true, "",
 		},
 		{
 			"unknown member is flagged",
-			"(struct Point x y)\n(let var p = Point.{ x 1 y 2 })\n(let var s = p.z)",
+			"(struct Point x y)\n(let var p = Point.{ x = 1 y = 2 })\n(let var s = p.z)",
 			false, "unknown-member",
 		},
 		{
 			"self.field resolves inside a method",
-			"(struct Point x y)\n(method Point.sum (self) (+ self.x self.y))",
+			"(struct Point x y)\n(method Point.sum (Self) Number)\n(let Point.sum (self) = (+ self.x self.y))",
 			true, "",
 		},
 		{
 			"self.unknown is flagged inside a method",
-			"(struct Point x y)\n(method Point.bad (self) self.q)",
+			"(struct Point x y)\n(let Point.bad (self) = self.q)",
 			false, "unknown-member",
 		},
 		{
 			"multi-line struct definition resolves",
-			"(struct Box\n    width\n    height)\n(let var b = Box.{ width 3 height 4 })\n(let var w = b.width)",
+			"(struct Box\n    width\n    height)\n(let var b = Box.{ width = 3 height = 4 })\n(let var w = b.width)",
 			true, "",
 		},
 		{
@@ -86,8 +86,8 @@ func TestStructSyntaxFieldResolution(t *testing.T) {
 func TestStructSyntaxPropertyDetection(t *testing.T) {
 	prelude := "(struct Temp #celsius)\n" +
 		"(property Temp.fahrenheit\n" +
-		"    get (method Temp (self) (+ self.#celsius 32)))\n" +
-		"(let var t = Temp.{ #celsius 0 })\n"
+		"    (get (self) (+ self.#celsius 32)))\n" +
+		"(let var t = Temp.{ #celsius = 0 })\n"
 
 	// The attached property is detected as a member of the struct.
 	if cs := codes("t.pho", prelude+"(let var f = t.fahrenheit)"); len(cs) != 0 {
@@ -99,7 +99,7 @@ func TestStructSyntaxPropertyDetection(t *testing.T) {
 	}
 	// A free-standing property resolves as a bare name.
 	free := "(let var backing = 0)\n" +
-		"(property tally get (fun () backing) set (fun (v) (= backing v)))\n" +
+		"(property tally (get () backing) (set (v) (= backing v)))\n" +
 		"(let var x = tally)"
 	if cs := codes("t.pho", free); len(cs) != 0 {
 		t.Errorf("free-standing property should be clean, got %v", cs)
@@ -113,14 +113,14 @@ func TestStructSyntaxCrossPackage(t *testing.T) {
 		t.Fatal(err)
 	}
 	lib := "(struct Circle radius center)\n" +
-		"(property Circle.area get (method Circle (self) (* self.radius self.radius)))\n"
+		"(property Circle.area (get (self) (* self.radius self.radius)))\n"
 	if err := os.WriteFile(filepath.Join(pkg, "shapes.phl"), []byte(lib), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	main := filepath.Join(dir, "main.pho")
 	src := "(import 'shapes')\n" +
-		"(let var c = shapes.Circle.{ radius 2 center 0 })\n" +
+		"(let var c = shapes.Circle.{ radius = 2 center = 0 })\n" +
 		"(let var r = c.radius)\n" + // imported struct field
 		"(let var a = c.area)" // imported attached property
 	if cs := codes(main, src); len(cs) != 0 {

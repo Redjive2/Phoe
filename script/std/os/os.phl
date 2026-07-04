@@ -1,4 +1,3 @@
-(import 'std/core')
 (goimport ('stdDependencies' dep))
 
 (struct File
@@ -8,55 +7,61 @@
     #mode
 )
 
-(fun cwd ()
-    (dep.OsGetCwd)
+(fun cwd () String)
+(let cwd () =
+    (dep/OsGetCwd)
 )
 
-(fun chdir (path)
-    (dep.OsChdir path)
+(fun chdir! (String) None)
+(let chdir! (path) =
+    (dep/OsChdir path)
 )
 
 -- Open opens a file at path, accepting a permission string (which can contain `r` and `w` for read and write access), and an optional mode
--- the mode is either left unfilled (Nil - means standard, overwrite the file content) or set to 'append to add onto the file. Only matters with `w` perm.
-(fun open (path perm (optional mode)) do
-    (let explicit_mode = (if (mode.is? none) 
-        then :overwrite 
-        else mode))
-    (let id = (dep.OsOpen path perm explicit_mode))
-    
+-- the mode is either left unfilled (none - means standard, overwrite the file content) or set to :append to add onto the file. Only matters with `w` perm.
+(static method File.open! (String String (optional Atom else :overwrite)) File)
+(let File.open! (path perm mode) = do
+    (let id = (dep/OsOpen path perm mode))
+
     File.{
-        #id id
-        #path path
-        #perm perm
-        #mode explicit_mode
+        #id   = id
+        #path = path
+        #perm = perm
+        #mode = mode
     }
 )
 
-(method File.close (self)
-    (dep.OsClose self.#id)
+(method File.close! (Self) None)
+(let File.close! (self) =
+    (dep/OsClose self.#id)
 )
 
-(method File.read_line (self prompt)
-    (dep.IoReadLine self.#id prompt)
+(method File.read-line (Self (optional String)) String)
+(let File.read-line (self prompt) =
+    (dep/IoReadLine self.#id prompt)
 )
 
-(method File.read (self n) 
-    (dep.IoRead self.#id n)
+(method File.read (Self Number) String)
+(let File.read (self n) =
+    (dep/IoRead self.#id n)
 )
 
-(method File.read_until (self stop)
-    (dep.IoReadUntil self.#id stop)
+(method File.read-until (Self String) String)
+(let File.read-until (self stop) =
+    (dep/IoReadUntil self.#id stop)
 )
 
-(method File.write (self content)
-    (dep.IoWrite self.#id content)
+(method File.write! (Self String) None)
+(let File.write! (self content) =
+    (dep/IoWrite self.#id content)
 )
 
-(method File.can_read? (self) 
+(method File.can-read? (Self) Boolean)
+(let File.can-read? (self) =
     (`r`.in? self.#perm)
 )
 
-(method File.can_write? (self)
+(method File.can-write? (Self) Boolean)
+(let File.can-write? (self) =
     (`w`.in? self.#perm)
 )
-

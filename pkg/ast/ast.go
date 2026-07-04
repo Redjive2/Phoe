@@ -81,6 +81,19 @@ type PDot struct {
 
 func (d *PDot) GetSpan() span.Span { return d.Span }
 
+// PSlash is a left-associative chain of `/` package navigations: `a/b/c`
+// parses as PSlash{LHS: PSlash{LHS: a, RHS: b}, RHS: c}. It is the package /
+// subpackage / export accessor — distinct from PDot (value/type member
+// access). Lowers to the mangled core.Slash accessor. A `/` at list-head
+// position (`(/ a b)`) stays the division operator and never folds here.
+type PSlash struct {
+	LHS  PNode
+	RHS  PNode
+	Span span.Span
+}
+
+func (s *PSlash) GetSpan() span.Span { return s.Span }
+
 // PMacroCall is `(~name arg1 arg2 ...)` — at runtime it lowers to
 // `(core.Macrocall name 'arg1 'arg2 ...)`. Detected at parse time so the
 // `~` prefix sigil isn't a child of a generic PBranch but the shape's

@@ -109,7 +109,7 @@ type *values* instead of strings:
 ```
 
 Today `script/std/annot/annot.phl`'s `sig`/`type` funs attach **strings** via
-`(meta.Attach key value)` (the `!` form quotes args, the `->` arrives as the two
+`(meta/Attach key value)` (the `!` form quotes args, the `->` arrives as the two
 tokens `-` `>`). The one change that realizes "annotations are evaluated type
 expressions": **make `sig`/`type` evaluate each type-expression argument** to a
 `*PhoType` value and attach the value. Keep `sig`'s hand-split on the `-` `>`

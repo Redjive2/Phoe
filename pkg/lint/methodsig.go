@@ -14,8 +14,12 @@ import (
 // `x.M(args)`. The receiver type is omitted from the stored funSig — it is the
 // type of `x`, checked at the call site, not an argument.
 //
-// Local (same-file/package) methods only for now; imported method signatures
-// arrive once PackageStructs grows an annotation harvest of its own.
+// Local methods are harvested here (harvestMethodSigs); imported methods'
+// INLINE signatures are harvested by PackageStructs onto the imported struct's
+// MethodSigs. Both are read at a call site through methodSigForShape, which
+// resolves the receiver's owner across the import boundary via resolveStruct.
+// (The legacy `--@ (~sig …)` annotation form is not harvested across imports —
+// it is inert; inline signatures are the current mechanism.)
 
 // harvestMethodSigs records every top-level method's ~sig signature onto its
 // owner's structInfo, reusing the same memoized annotation evaluator the
@@ -99,12 +103,13 @@ func methodSigFromEntries(entries []annot.Entry, env typeEnv) *funSig {
 	if !isSig {
 		return nil
 	}
-	return &funSig{Params: resolveTypeList(params, env), Result: resolveAnnotType(result, env)}
+	return exactSig(resolveTypeList(params, env), resolveAnnotType(result, env))
 }
 
-// methodSigFor returns the declared signature of method `member` on type
-// `typeName`, or nil when none is in scope (un-annotated, unknown, or — for
-// now — declared in an imported package).
+// methodSigFor returns the declared signature of method `member` on the LOCAL
+// type `typeName`, or nil when none is in scope (un-annotated or unknown). Used
+// while checking a method's own body, where the owner is a local declaration;
+// call sites use methodSigForShape, which also crosses the import boundary.
 func (w *walker) methodSigFor(scope *Scope, typeName, member string) *funSig {
 	if si, ok := scope.LookupStruct(typeName); ok && si.MethodSigs != nil {
 		if sig, found := si.MethodSigs[member]; found {
@@ -112,4 +117,18 @@ func (w *walker) methodSigFor(scope *Scope, typeName, member string) *funSig {
 		}
 	}
 	return nil
+}
+
+// methodSigForShape returns the declared signature of method `member` for a
+// RECEIVER shape, crossing the import boundary: an imported struct instance
+// (OwnerPkg set) reads its owner package's harvested MethodSigs, a local
+// instance reads the scope. This is how a call `x.M(args)` type-checks its args
+// regardless of where M's owner is declared. nil when the receiver's struct or
+// the method signature is unknown (gradual — no check).
+func (w *walker) methodSigForShape(scope *Scope, sh Shape, member string) *funSig {
+	si, ok := w.resolveStruct(scope, sh)
+	if !ok || si.MethodSigs == nil {
+		return nil
+	}
+	return si.MethodSigs[member]
 }

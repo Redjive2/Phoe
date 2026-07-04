@@ -3,8 +3,11 @@
 (import 'std/core'
         'std/fmt')
 
-(fun log (caller (spread args)) do
-    (let data = (args.Map
-        &(fmt.format '<' it '>')))
-    (dep.DebugLog '[debug.Log @ ' caller '] ' '<n=' args.size '> : ' (spread data))
+(fun log! (String (spread Unknown)) None)
+(let log! (caller (spread args)) = do
+    (let data = (args.map
+        &(fmt/format '<' it '>'))
+    )
+    (dep/DebugLog '[debug.Log @ ' caller '] ' '<n=' args.size '> : ' (spread data))
 )
+

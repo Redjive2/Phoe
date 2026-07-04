@@ -19,9 +19,9 @@ func analyze(t *testing.T, src string) []Diagnostic {
 }
 
 const pointPrelude = `(struct Point x #y)
-(method Point.shift (self d) (+ self.x d))
-(method Point.#tweak (self d) (+ self.#y d))
-(let var p = Point.{ x 10 #y 20 })
+(let Point.shift (self d) = (+ self.x d))
+(let Point.#tweak (self d) = (+ self.#y d))
+(let var p = Point.{ x = 10 #y = 20 })
 `
 
 // ----------------------------------------------------------------------
@@ -61,8 +61,8 @@ func TestPrivateMemberOutsideMethod(t *testing.T) {
 
 func TestSelfAccessIsPrivileged(t *testing.T) {
 	diags := analyze(t, `(struct Point x #y)
-(method Point.sum (self) (+ self.x self.#y))
-(method Point.bad (self) self.#zzz)
+(let Point.sum (self) = (+ self.x self.#y))
+(let Point.bad (self) = self.#zzz)
 `)
 	if hasDiag(diags, "private-member-access") {
 		t.Fatalf("self access must not fire privacy, got %#v", diags)
@@ -74,7 +74,7 @@ func TestSelfAccessIsPrivileged(t *testing.T) {
 
 func TestSelfAliasKeepsPrivilege(t *testing.T) {
 	diags := analyze(t, `(struct Point x #y)
-(method Point.roundabout (self) (identity do
+(let Point.roundabout (self) = (identity do
   (let var me = self)
   me.#y))
 `)
@@ -87,13 +87,13 @@ func TestUnknownMemberViaSiblingFile(t *testing.T) {
 	dir := t.TempDir()
 	sibling := filepath.Join(dir, "types.phl")
 	if err := os.WriteFile(sibling, []byte(`(struct Box content)
-(method Box.open (self) self.content)
+(let Box.open (self) = self.content)
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(dir, "use.phl")
-	src := []byte(`(fun use () (identity do
-  (let var b = Box.{ content 1 })
+	src := []byte(`(let use () = (identity do
+  (let var b = Box.{ content = 1 })
   (let var x = b.content)
   (let var y = (b.open))
   (let var z = b.missing)))
@@ -117,8 +117,8 @@ func TestUnknownMemberViaSiblingFile(t *testing.T) {
 func TestReassignmentRetargetsShape(t *testing.T) {
 	diags := analyze(t, `(struct Point x)
 (struct Line length)
-(let var v = Point.{ x 1 })
-(= v Line.{ length 2 })
+(let var v = Point.{ x = 1 })
+(= v Line.{ length = 2 })
 (let var a = v.length)
 (let var b = v.x)
 `)
@@ -132,7 +132,7 @@ func TestReassignmentRetargetsShape(t *testing.T) {
 
 func TestBranchReassignmentInvalidatesShape(t *testing.T) {
 	diags := analyze(t, `(struct Point x)
-(let var v = Point.{ x 1 })
+(let var v = Point.{ x = 1 })
 (if (== 1 1) then (= v 5))
 (let var a = v.whatever)
 `)
@@ -143,8 +143,8 @@ func TestBranchReassignmentInvalidatesShape(t *testing.T) {
 
 func TestFunctionBodyAssignInvalidatesTopLevelShape(t *testing.T) {
 	diags := analyze(t, `(struct Point x)
-(let var v = Point.{ x 1 })
-(fun clobber () (= v 5))
+(let var v = Point.{ x = 1 })
+(let clobber () = (= v 5))
 (let var a = v.anything)
 `)
 	if hasDiag(diags, "unknown-member") {
@@ -283,8 +283,8 @@ func TestIncompleteIfDoesNotPanicTheWalker(t *testing.T) {
 	for _, src := range []string{
 		"(if)",
 		"(if x)",
-		"(fun f () (if))",
-		"(fun g (n) (identity do (if (< n 1)) (+ n 1)))",
+		"(let f () = (if))",
+		"(let g (n) = (identity do (if (< n 1)) (+ n 1)))",
 	} {
 		_ = analyze(t, src)
 		_ = CompletionsAt("main.pho", []byte(src), 1, 2)
@@ -344,7 +344,7 @@ func TestWritePrivateFieldOutside(t *testing.T) {
 
 func TestWriteOwnFieldInMethod(t *testing.T) {
 	diags := analyze(t, `(struct Point x #y)
-(method Point.reset (self) (= self.#y 0))
+(let Point.reset (self) = (= self.#y 0))
 `)
 	if hasDiag(diags, "private-member-access") || hasDiag(diags, "unknown-member") {
 		t.Fatalf("self field writes must be fine, got %#v", diags)
@@ -357,12 +357,12 @@ func TestWriteOwnFieldInMethod(t *testing.T) {
 
 func TestUnknownShapesStaySilent(t *testing.T) {
 	diags := analyze(t, `(struct Point x)
-(fun mk () Point.{ x 1 })
-(fun use (p) (identity do
+(let mk () = Point.{ x = 1 })
+(let use (p) = (identity do
   (let var a = p.whatever)
   (let var b = (mk))
-  (let var c = b.also_whatever)
-  (let var d = b.also_whatever.chained)))
+  (let var c = b.also-whatever)
+  (let var d = b.also-whatever.chained)))
 `)
 	for _, code := range []string{"unknown-member", "invalid-member-access", "unknown-key", "private-member-access"} {
 		if hasDiag(diags, code) {

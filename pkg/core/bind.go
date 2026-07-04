@@ -11,7 +11,11 @@ import "fmt"
 //
 // name labels the call in stack traces; "" becomes "<fun>" for anonymous
 // lambdas.
-func BindFun(name string, repr ttnode, argList []string, defCtx Context) tfun {
+// defaults maps a parameter name to the DEFAULT expression of an
+// `(or name default)` param: when the incoming argument is `none` (omitted or
+// explicitly passed), the parameter takes this expression's value instead of
+// `none`. nil/absent for ordinary params. See parseArgList in pkg/builtins.
+func BindFun(name string, repr ttnode, argList []string, defaults map[string]Node, defCtx Context) tfun {
 	var restArg string
 
 	if len(argList) > 0 {
@@ -87,6 +91,18 @@ func BindFun(name string, repr ttnode, argList []string, defCtx Context) tfun {
 			bodyCtx.Env.Stack[0][argName] = tStackEntry{argValue, false}
 		}
 
+		applyDefaults(bodyCtx, names, defaults)
+
+		// Hand the fully-bound argument frame to a waiting BindClauseBody
+		// (a one-shot mailbox on the caller's env) so it can read this
+		// call's `(var param)` final values after the body runs: `=` mutates
+		// this map in place, so it survives the frame pop below. Cleared
+		// immediately so no unrelated later call consumes it.
+		if sink := callCtx.Env.FrameSink; sink != nil {
+			*sink = bodyCtx.Env.Stack[0]
+			callCtx.Env.FrameSink = nil
+		}
+
 		// Recursion guard: the body evaluates on the Go stack, so without
 		// this unbounded recursion crashes the host with Go's fatal stack
 		// overflow. Checked before pushing this call's frame, so the limit
@@ -117,13 +133,47 @@ func BindFun(name string, repr ttnode, argList []string, defCtx Context) tfun {
 	}
 }
 
+// BindClauseBody binds a `let`-clause body. It is BindFun plus a read-back of
+// the clause's `(var param)` final values: after the body runs, the returned
+// runner reports each varName's ending value alongside the result. `=` mutates
+// the argument-frame map in place, and that map survives the frame pop, so
+// FrameSink lets us recover the final values without disturbing the ordinary
+// call machinery. The dispatcher uses this to propagate a whole-value
+// `(var self)` reassignment back to the caller (Effects.md). With no var
+// params it is BindFun with a nil finals map — no extra work per call.
+func BindClauseBody(name string, repr ttnode, argList, varNames []string, defCtx Context) func(callCtx Context, argv []ttnode) (Tval, map[string]Tval) {
+	f := BindFun(name, repr, argList, nil, defCtx)
+	if len(varNames) == 0 {
+		return func(callCtx Context, argv []ttnode) (Tval, map[string]Tval) {
+			return f(callCtx, argv), nil
+		}
+	}
+	return func(callCtx Context, argv []ttnode) (Tval, map[string]Tval) {
+		// Arm the mailbox immediately before the call: f binds its frame and
+		// consumes it with nothing in between, so this never captures another
+		// call's frame. frame is per-invocation, so nesting/recursion is safe.
+		var frame map[string]tStackEntry
+		callCtx.Env.FrameSink = &frame
+		res := f(callCtx, argv)
+		callCtx.Env.FrameSink = nil // a failed-arity call never consumes it
+
+		finals := make(map[string]Tval, len(varNames))
+		for _, v := range varNames {
+			if e, ok := frame[v]; ok {
+				finals[v] = e.Val
+			}
+		}
+		return res, finals
+	}
+}
+
 var debugBind = false
 
 // BindMethod is BindFun with self-injection: argList[0] is bound from the
 // instance pushed onto callCtx.Env.InstStack by the Dot accessor's wrapper.
 //
 // name labels the call in stack traces (e.g. "Point.Shift").
-func BindMethod(name string, repr ttnode, argList []string, defCtx Context) tfun {
+func BindMethod(name string, repr ttnode, argList []string, defaults map[string]Node, defCtx Context) tfun {
 	var restArg string
 
 	if len(argList) > 0 {
@@ -205,6 +255,8 @@ func BindMethod(name string, repr ttnode, argList []string, defCtx Context) tfun
 			bodyCtx.Env.Stack[0][argName] = tStackEntry{argValue, false}
 		}
 
+		applyDefaults(bodyCtx, names, defaults)
+
 		// Grant the receiver private access for the body — but only when the
 		// receiver is a struct instance. A primitive (or other non-instance)
 		// receiver, used by methods attached to primitive types, has no private
@@ -228,6 +280,27 @@ func BindMethod(name string, repr ttnode, argList []string, defCtx Context) tfun
 		result = repr.Evaluate(bodyCtx)
 		callCtx.PopCallFrame()
 		return result
+	}
+}
+
+// applyDefaults fills `(or name default)` parameters. After the ordinary
+// bindings are installed, any defaulted param whose value is `none` (it was
+// omitted, or an explicit `none` was passed — none-coalescing) takes the value
+// of its DEFAULT expression, evaluated in the body scope so it sees the closure
+// and the sibling params already bound. Processed in parameter order, so a
+// later default may read an earlier one. A no-op when defaults is empty.
+func applyDefaults(bodyCtx Context, names []string, defaults map[string]Node) {
+	if len(defaults) == 0 {
+		return
+	}
+	for _, nm := range names {
+		def, ok := defaults[nm]
+		if !ok {
+			continue
+		}
+		if bodyCtx.Env.Stack[0][nm].Val.Kind == KindNil {
+			bodyCtx.Env.Stack[0][nm] = tStackEntry{def.Evaluate(bodyCtx), false}
+		}
 	}
 }
 

@@ -1,20 +1,25 @@
 (goimport ('stdDependencies' dep))
 (import 'std/core')
 
-(fun range (min max)
-    (dep.RandomInt min max)
+(fun int-in-range! (Number Number) Number)
+(let int-in-range! (min max) =
+    (dep/RandomInt min max)
 )
 
-(fun float ()
-    (dep.RandomFloat)
+(fun float! () Number)
+(let float! () =
+    (dep/RandomFloat)
 )
 
-(fun shuffle (list) do
+(fun shuffle (List) List)
+(let shuffle (list) = do
     (let var shuffled = [])
+
     (while (> list.size 0) then do
-        (let var position = (range 0 list.size))
-        (= shuffled (append shuffled list.[position]))
+        (let position = (range 0 list.size))
+        (shuffled.append= list.[position])
         (= list (list.[: position].concat list.[(+ position 1) :]))
     )
+
     shuffled
 )

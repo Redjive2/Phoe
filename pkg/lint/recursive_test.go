@@ -12,13 +12,13 @@ func TestRecursiveStructNavigation(t *testing.T) {
 		src      string
 		wantFire bool
 	}{
-		{"self-ref resolves", "(struct Node.{ value Number next Node })\n(let n = Node.{ value 1 next none })\n(let a = n.next.value)\n", false},
-		{"self-ref typo fires", "(struct Node.{ value Number next Node })\n(let n = Node.{ value 1 next none })\n(let a = n.next.bogus)\n", true},
-		{"deep chain typo fires", "(struct Node.{ value Number next Node })\n(let n = Node.{ value 1 next none })\n(let a = n.next.next.nope)\n", true},
-		{"nested resolves", "(struct B.{ x Number })\n(struct A.{ inner B })\n(let x = A.{ inner B.{ x 1 } })\n(let y = x.inner.x)\n", false},
-		{"nested typo fires", "(struct B.{ x Number })\n(struct A.{ inner B })\n(let x = A.{ inner B.{ x 1 } })\n(let y = x.inner.zap)\n", true},
-		{"nullable link resolves", "(struct Node.{ value Number next (Or Node none) })\n(let n = Node.{ value 1 next none })\n(let a = n.next.value)\n", false},
-		{"nullable link typo fires", "(struct Node.{ value Number next (Or Node none) })\n(let n = Node.{ value 1 next none })\n(let a = n.next.glorp)\n", true},
+		{"self-ref resolves", "(struct Node.{ Number value Node next })\n(let n = Node.{ value = 1 next = none })\n(let a = n.next.value)\n", false},
+		{"self-ref typo fires", "(struct Node.{ Number value Node next })\n(let n = Node.{ value = 1 next = none })\n(let a = n.next.bogus)\n", true},
+		{"deep chain typo fires", "(struct Node.{ Number value Node next })\n(let n = Node.{ value = 1 next = none })\n(let a = n.next.next.nope)\n", true},
+		{"nested resolves", "(struct B.{ Number x })\n(struct A.{ B inner })\n(let x = A.{ inner = B.{ x = 1 } })\n(let y = x.inner.x)\n", false},
+		{"nested typo fires", "(struct B.{ Number x })\n(struct A.{ B inner })\n(let x = A.{ inner = B.{ x = 1 } })\n(let y = x.inner.zap)\n", true},
+		{"nullable link resolves", "(struct Node.{ Number value (Or Node None) next })\n(let n = Node.{ value = 1 next = none })\n(let a = n.next.value)\n", false},
+		{"nullable link typo fires", "(struct Node.{ Number value (Or Node None) next })\n(let n = Node.{ value = 1 next = none })\n(let a = n.next.glorp)\n", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

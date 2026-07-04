@@ -12,8 +12,8 @@ import (
 //   - str:  passed through verbatim (no requoting).
 //   - num:  Go's default float formatting; whole numbers print
 //     without a trailing ".0".
-//   - bool: "True" / "False" — matches the source-syntax atoms.
-//   - nil:  "Nil".
+//   - bool: "true" / "false" — matches the source-syntax value literals.
+//   - nil:  "none".
 //   - chr:  the rune as a one-rune string.
 //   - atom: the source form, ":" + the atom's name.
 //   - array/dict: bracketed forms with recursive stringification,
@@ -42,11 +42,11 @@ func stringify(v Tval, seen map[any]bool) string {
 		return fmt.Sprintf("%v", v.Val.(float64))
 	case KindBool:
 		if v.Val.(bool) {
-			return "True"
+			return "true"
 		}
-		return "False"
+		return "false"
 	case KindNil:
-		return "Nil"
+		return "none"
 	case KindChr:
 		return string(v.Val.(rune))
 	case KindAtom:
@@ -98,11 +98,11 @@ func stringify(v Tval, seen map[any]bool) string {
 
 		// Iterate the declared field order (a slice), not the Fields map,
 		// so repeated renders of the same instance are deterministic.
-		str := "(" + name + " {"
+		str := name + ".{"
 		for _, fieldName := range instance.Struct.Fields {
-			str += " '" + fieldName + " " + stringify(instance.Fields[fieldName], seen)
+			str += " " + fieldName + " = " + stringify(instance.Fields[fieldName], seen)
 		}
-		return str + " })"
+		return str + " }"
 	case KindType:
 		return v.Val.(*PhoType).Name()
 	}
@@ -134,6 +134,10 @@ func Inspect(code ttnode) string {
 
 		if len(branch) == 3 && branch[0] == ttleaf(Dot) {
 			return Inspect(branch[1]) + "." + Inspect(branch[2])
+		}
+
+		if len(branch) == 3 && branch[0] == ttleaf(Slash) {
+			return Inspect(branch[1]) + "/" + Inspect(branch[2])
 		}
 
 		if branch[0] == ttleaf(Slice) {
@@ -265,6 +269,16 @@ func synthBranch(b *strings.Builder, branch ttbranch) ttbranch {
 		out[0] = branch[0]
 		out[1] = synth(b, branch[1])
 		b.WriteByte('.')
+		out[2] = synth(b, branch[2])
+		return out
+	}
+
+	// Slash chain: a/b — package navigation; head stays an (unwrapped) leaf.
+	if len(branch) == 3 && branch[0] == ttleaf(Slash) {
+		out := make(ttbranch, 3)
+		out[0] = branch[0]
+		out[1] = synth(b, branch[1])
+		b.WriteByte('/')
 		out[2] = synth(b, branch[2])
 		return out
 	}

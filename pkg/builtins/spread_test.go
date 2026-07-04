@@ -14,11 +14,11 @@ func TestSpreadIntoCalls(t *testing.T) {
 		src  string
 		want float64
 	}{
-		{"(let ns = [1 2 3])\n(+ (spread ns))", 6},              // spread is the only arg
-		{"(+ 1 (spread [2 3]) 4)", 10},                          // spread between fixed args
-		{"[0 (spread [1 2 3]) 4].size", 5},                      // array literal (slice)
-		{"(append [0] (spread [1 2 3])).size", 4},               // append
-		{"(fun f (a b c) (+ a b c))\n(f (spread [4 5 6]))", 15}, // user fun
+		{"(let ns = [1 2 3])\n(+ (spread ns))", 6},            // spread is the only arg
+		{"(+ 1 (spread [2 3]) 4)", 10},                        // spread between fixed args
+		{"[0 (spread [1 2 3]) 4].size", 5},                    // array literal (slice)
+		{"(append [0] (spread [1 2 3])).size", 4},             // append
+		{"(let f (a b c) = (+ a b c))\n(f (spread [4 5 6]))", 15}, // user fun
 	} {
 		v := evalProgram(t, tc.src)
 		if v.Kind != core.KindNum || v.Val.(float64) != tc.want {

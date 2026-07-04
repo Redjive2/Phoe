@@ -93,7 +93,7 @@ Comments run from `--` to end of line:
 
 ```pho
 -- top-level comment
-(io.PrintLine "hello") -- trailing comment
+(io/PrintLine "hello") -- trailing comment
 ```
 
 That's the whole grammar. Everything else is sugar over these forms.
@@ -128,12 +128,13 @@ The accessor splits by the shape of the right-hand side:
   index or key. Use it to index a dict, array, or string. Slices are the
   colon forms inside the brackets: `a.[i : j]`, `a.[: j]`, `a.[i :]`,
   `a.[:]`.
-- **`T.{ field value ... }`** — *struct construction*. A dot followed by a
-  brace group builds a `T`, reading the brace as alternating bare field names
-  and their values: `Point.{ X 10 y 20 }` makes a `Point` with `X` = 10 and
-  `y` = 20. The field names are bare identifiers (not quoted, not strings) —
-  they name fields, they aren't evaluated. There is no other construction
-  form; the old `(T { ... })` call form has been removed.
+- **`T.{ field = value ... }`** — *struct construction*. A dot followed by a
+  brace group builds a `T`, reading the brace as `field = value` pairs:
+  `Point.{ x = 10 y = 20 }` makes a `Point` with `x` = 10 and `y` = 20. The
+  field names are bare identifiers (not quoted, not strings) — they name
+  fields, they aren't evaluated. The `=` is required; the older bare
+  `T.{ field value ... }` form and the `(T { ... })` call form have both been
+  removed.
 
 | LHS | valid form | meaning |
 |---|---|---|
@@ -141,7 +142,7 @@ The accessor splits by the shape of the right-hand side:
 | array | `a.[i]` / `a.[i : j]` | index, or slice |
 | string | `s.[i]` / `s.[i : j]` | the rune at `i`, or a rune slice |
 | struct instance | `inst.field` | field, or method |
-| struct (constructor) | `T.{ field v ... }` | construct a `T` from bare field names |
+| struct (constructor) | `T.{ field = v ... }` | construct a `T` from `field = value` pairs |
 | package | `pkg.Export` | the export named `Export` |
 | Go-package | `pkg.Method` | the Go method, wrapped as a callable |
 | number | `12.34` | reassemble as a decimal |
@@ -193,8 +194,8 @@ At the *head* of a form, `do` sequences in place — `(do x y z)` evaluates
 
 ```pho
 (do
-    (io.PrintLine "step one")
-    (io.PrintLine "step two")
+    (io/PrintLine "step one")
+    (io/PrintLine "step two")
     42)
 -- prints both lines, yields 42
 ```
@@ -205,9 +206,9 @@ without an extra wrapping quote:
 
 ```pho
 (fun add (a b) do
-    (io.PrintLine "adding %a and %b")
+    (io/PrintLine "adding %a and %b")
     (+ a b))
--- desugars to: (fun add (a b) (do … (io.PrintLine …) (+ a b)))
+-- desugars to: (fun add (a b) (do … (io/PrintLine …) (+ a b)))
 ```
 
 (`do …` is an internal mangled name, hidden from user code like the dot
@@ -246,7 +247,7 @@ the caller's trailing args into the array `name`:
 
 ```pho
 (fun PrintAll ((spread args))
-    (io.PrintLine (spread args)))
+    (io/PrintLine (spread args)))
 ```
 
 ### Optional — `(optional name)`
@@ -264,6 +265,83 @@ is rejected.
 
 (greet "Sam")        -- "Hello, Sam"  (greeting defaulted to Nil)
 (greet "Sam" "Hi")   -- "Hi, Sam"
+```
+
+### Default — `(optional Type else default)`
+
+A defaulted optional lives in the SIGNATURE: `(optional Type else default)`
+declares a parameter the caller may omit; when the argument is `none` — omitted
+*or* passed explicitly — it takes `default` instead. Only `none` triggers the
+substitution (a real `0`/`''` is kept: `??`-style, not `||`). The default is a
+closed expression evaluated in the declaring scope.
+
+```pho
+(fun add (Number (optional Number else 0)) Number)
+(let add (a b) = (+ a b))
+
+(add 5)       -- 5   (b omitted → 0)
+(add 5 3)     -- 8
+(add 5 none)  -- 5   (an explicit none coalesces to the default too)
+```
+
+## Implementations — `let` clauses, patterns, and overloading
+
+A named function or method is declared by its SIGNATURE and implemented by one
+or more `let` CLAUSES that directly follow it:
+
+```pho
+(fun add (Number Number) Number)          -- the declaration (types)
+(let add (a b) where (== b 0) = a)        -- a guarded clause
+(let add (a 0) = a)                       -- a pattern clause
+(let add (a b) = (+ a b))                 -- the catch-all clause
+```
+
+Clauses are tried in order; the first whose PATTERNS match and whose `where`
+guard (if any) is true runs. When the linter cannot prove the clauses cover
+every input, the last clause must be an unguarded catch-all (all bare names).
+Signatures are required in libraries (`.phl`); a script (`.pho`) may omit one
+when it can be inferred from the clauses' patterns.
+
+**Patterns** (clause parameters and `select` cases):
+
+- `name` — binds anything (a bare lowercase identifier)
+- `(var name)` — binds reassignably (a plain binder is immutable); `(var Type name)` adds a type
+- `0`, `'str'`, `:atom`, `true`, `none` — literals, matched by equality
+- `Number` (a Capitalized name) — the TYPE VALUE itself, matched by identity —
+  static dispatch on a `(const T)` signature slot
+- `(Type name)` — a runtime type test that binds `name`
+- `[p1 p2]` — list destructure, exact length
+- `Type.{ field = pat }` — instance-of `Type` + field destructure; a `(field)`
+  key also binds the field's whole value (the `()` capture operator)
+
+**select** — the match expression; `do` results stop at the next `case`:
+
+```pho
+(select [a b]
+    case [0 rhs] -> rhs
+    case [lhs 0] -> lhs
+    case [lhs rhs] -> (+ lhs rhs))
+```
+
+**Overloading** — one name may declare several signatures, each followed by its
+clauses; a call picks the overload whose parameter types accept the runtime
+arguments, preferring the MOST SPECIFIC (an ambiguous call is an error):
+
+```pho
+(fun add (Number Number) Number)
+(let add (a b) = (+ a b))
+(fun add (String String) String)
+(let add (a b) = (+ a b))
+```
+
+**const parameters** — `(const T)` in a signature marks a slot whose call-site
+argument must be a parse-time constant (a literal or type name); clauses
+dispatch on its value with literal patterns and need not cover all of `T`:
+
+```pho
+(fun conv ((const Type) Number) Number)
+(let conv (Number x) = (+ x 1))     -- (conv Number 5)
+(let conv (t x) = 0)                -- any other type
 ```
 
 ## Main builtins
@@ -410,16 +488,44 @@ name is also a type. One casing convention drives everything: a
 
 ### Typed bindings
 
-Wrap the bound name in its type:
+A `let` binding groups its type **before** the name in parens — `(Type name)` —
+using the same type-first order struct fields and signatures use:
 
 ```pho
-(const (Number n) 5)
-(var (String name) 'ada')
-(const ((Or Number String) id) 42)   -- the type can be any type expression
+(let (Number n) = 5)
+(let var (String name) = 'ada')          -- `let var` for a mutable binding
+(let ((Or Number String) id) = 42)       -- the type can be any type expression
+(let (Number a) = 1  (String b) = 'z')   -- multiple bindings, each optionally typed
 ```
 
 The initializer is checked against the declared type; a mismatch is a lint
-error. The type is erased at runtime — `(const (Number n) 5)` just binds `n`.
+error. The type is erased at runtime — `(let (Number n) = 5)` just binds `n`.
+
+### Destructuring bindings
+
+A `let` target may be a **pattern** that pulls the value apart, binding several
+names at once. Bare binders are immutable; wrap one in `(var …)` to make it
+reassignable, or lead the whole binding with `var` to make them all mutable:
+
+```pho
+(let [a b c] = [1 2 3])              -- a=1, b=2, c=3 (all const)
+(let [(var x) y] = [10 20])          -- x is mutable, y is const
+(let var [p q] = coords)             -- every binder mutable
+(let [first [inner]] = [1 [2]])      -- patterns nest
+(let [(Number a) (Number b)] = pair) -- binders may be typed (erased)
+```
+
+A **struct** target destructures fields. The `()` capture operator on a field
+key also binds the field's whole value while its pattern pulls the field apart:
+
+```pho
+(let Point.{ x = px  y = py } = origin)    -- bind fields x → px, y → py
+(let Box.{ (items) = [head tail] } = box)  -- bind `items` AND head, tail
+```
+
+A pattern that can't match — a wrong-length list, a non-matching struct — is a
+runtime error (a `let` binding has no fall-through). These are the same patterns
+and helpers that clause parameters and `select` cases use.
 
 ### Function signatures
 
@@ -456,6 +562,33 @@ The same, with the **receiver type first** (the type of `self`):
 > Earlier drafts carried these as `--@ (~sig …)` / `--@ (~type …)`
 > parse-time annotations. Those are **disconnected** now — the inline forms
 > above are the way to type Pho code.
+
+### Typed struct fields and properties
+
+A struct declares its fields **type-first** inside the `.{ … }` brace — the same
+`Type name` order the signatures use:
+
+```pho
+(struct Point.{ Number x Number y })                  -- two Number fields
+(struct Node.{ Number value (Or Node none) next })    -- a recursive field
+```
+
+Construction stays **name-first** (you're assigning values, not declaring
+types): `Point.{ x = 1 y = 2 }`. A field's declared type is checked on access — `p.x`
+reads as its type. The anonymous record type `Struct.{ Number x }` — "any struct
+with at least these fields" — uses the same `Type name` order.
+
+A property can carry a declared value type by wrapping its name exactly like a
+typed binding:
+
+```pho
+(property (Number Box.area) get (method Box (self) (* self.w self.h)))  -- attached
+(property (Number twice) get (fun () (* n 2)))                          -- free-standing
+```
+
+An **attached** property names its receiver (`Box.area`) and its getter is a
+`(method Box …)`; a **free-standing** property is a bare name whose getter is a
+plain `(fun () …)`.
 
 ## Other builtins
 

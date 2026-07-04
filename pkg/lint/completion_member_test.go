@@ -27,9 +27,9 @@ func containsName(defs []Definition, name string) bool {
 // `p.` on a struct instance completes public fields and methods only.
 func TestDotCompletionOnInstance(t *testing.T) {
 	src := `(struct Point x #y)
-(method Point.Shift (self d) (+ self.x d))
-(method Point.#tweak (self d) (+ self.#y d))
-(let var p = Point.{ x 10 #y 20 })
+(let Point.Shift (self d) = (+ self.x d))
+(let Point.#tweak (self d) = (+ self.#y d))
+(let var p = Point.{ x = 10 #y = 20 })
 (let var q = p.)
 `
 	// Cursor right after "p." on line 5 (col 16 = just past the dot).
@@ -45,7 +45,7 @@ func TestDotCompletionOnInstance(t *testing.T) {
 // `self.` inside a method completes private members too.
 func TestDotCompletionOnSelf(t *testing.T) {
 	src := `(struct Point X y)
-(method Point.M (self) (identity do
+(let Point.M (self) = (identity do
   (var a self.)))
 `
 	defs := CompletionsAt("main.pho", []byte(src), 3, 15)
@@ -57,8 +57,8 @@ func TestDotCompletionOnSelf(t *testing.T) {
 // Partial member already typed: `p.Sh` still completes members.
 func TestDotCompletionPartialMember(t *testing.T) {
 	src := `(struct Point x #y)
-(method Point.shift (self d) (+ self.x d))
-(let var p = Point.{ x 10 #y 20 })
+(let Point.shift (self d) = (+ self.x d))
+(let var p = Point.{ x = 10 #y = 20 })
 (let var q = p.sh)
 `
 	defs := CompletionsAt("main.pho", []byte(src), 4, 18)
@@ -86,8 +86,8 @@ func TestDotCompletionOnImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	lib := filepath.Join(pkgDir, "lib.phl")
-	if err := os.WriteFile(lib, []byte(`(fun visible () 1)
-(fun #hidden () 2)
+	if err := os.WriteFile(lib, []byte(`(let visible () = 1)
+(let #hidden () = 2)
 (struct Thing part)
 `), 0o644); err != nil {
 		t.Fatal(err)

@@ -22,7 +22,7 @@ func writeTree(t *testing.T, files map[string]string) string {
 	return root
 }
 
-const ioLib = `(fun visible () 1)
+const ioLib = `(let visible () = 1)
 (struct Reader id)
 `
 
@@ -48,7 +48,7 @@ func TestResolveImportFromScriptDir(t *testing.T) {
 func TestResolveImportFromNestedLibrary(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/io/io.phl":     ioLib,
-		"script/std/pctl/pctl.phl": "(import 'std/io')\n(fun use () (io.visible))\n(fun bad () (io.nope))\n",
+		"script/std/pctl/pctl.phl": "(import 'std/io')\n(let use () = (io.visible))\n(let bad () = (io.nope))\n",
 	})
 	pctl := filepath.Join(root, "script/std/pctl/pctl.phl")
 	src, _ := os.ReadFile(pctl)
@@ -66,7 +66,7 @@ func TestResolveImportFromNestedLibrary(t *testing.T) {
 func TestResolveImportFeedsShapeInference(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/io/io.phl": ioLib,
-		"script/std/app/a.phl": "(import 'std/io')\n(fun go () (identity do\n  (let var r = io.Reader.{ id 1 })\n  (let var x = r.id)\n  (let var y = r.bogus)))\n",
+		"script/std/app/a.phl": "(import 'std/io')\n(let go () = (identity do\n  (let var r = io.Reader.{ id = 1 })\n  (let var x = r.id)\n  (let var y = r.bogus)))\n",
 	})
 	a := filepath.Join(root, "script/std/app/a.phl")
 	src, _ := os.ReadFile(a)

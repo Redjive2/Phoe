@@ -49,13 +49,13 @@ func TestMacroCallSyntaxEnforced(t *testing.T) {
 	}
 
 	// A function called WITH `!` is flagged.
-	d = AnalyzeFile("test.pho", []byte("(fun f (e) e)\n(~f 1)"))
+	d = AnalyzeFile("test.pho", []byte("(let f (e) = e)\n(~f 1)"))
 	if !hasDiag(d, "not-a-macro") {
 		t.Errorf("calling a function with '!' should be flagged, got %#v", d)
 	}
 
 	// Correct usage — macro with `!`, function without — is clean.
-	d = AnalyzeFile("test.pho", []byte("(macro ~m (e) e)\n(fun f (e) e)\n(~m 1)\n(f 1)"))
+	d = AnalyzeFile("test.pho", []byte("(macro ~m (e) e)\n(let f (e) = e)\n(~m 1)\n(f 1)"))
 	if hasDiag(d, "macro-needs-prefix") || hasDiag(d, "not-a-macro") {
 		t.Errorf("correct macro/function call syntax should be clean, got %#v", d)
 	}

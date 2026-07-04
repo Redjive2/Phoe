@@ -1,25 +1,13 @@
 (import 'std/core')
 
-(macro ~pipe2 (initial (spread parts)) do
-    (let pieces = (parts.split 3 :strict))
-    
-    (let var result = ['do'
-        ['var' 'it' initial]
-    ])
+(let test = [1 2 3])
 
-    (foreach i in pieces.keys do
-        (let piece = pieces.[i])
-        
-        (if (~= piece.[0 : 2] ['-' '>']) then 
-            (return none)
-        )
-        
-        (let expr = piece.[2])
+(fun print-vertical! ((spread Unknown)) None)
 
-        (= result (result.append ['=' 'it' expr]))
+(let print-vertical! (values) =
+    (foreach value in values
+        (core/print-line! value)
     )
-
-    (result.append 'it')
 )
 
-(core.print_line ('abcdefghijk'.split 20 :loose))
+(print-vertical! (spread test))

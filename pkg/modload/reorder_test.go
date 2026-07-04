@@ -72,10 +72,12 @@ func TestLiftDefinitionsDoesNotSortInits(t *testing.T) {
 // A correctly-ordered library is left as-is.
 func TestLiftDefinitionsStable(t *testing.T) {
 	src := `(struct Point x y)
-(method Point.sum (self) (+ self.x self.y))
+(= Point.sum (self) (+ self.x self.y))
 (let origin = Point.{ 'X' 0 'Y' 0 })`
 	got := heads(liftDefinitions(parseForms(t, src)))
-	want := []string{"struct", "method", "let"}
+	// The method impl is now the decl/impl-split `=` form; it still lifts as a
+	// definition (ahead of the `let`), which is what this test guards.
+	want := []string{"struct", "=", "let"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("stable order expected %v; got %v", want, got)
 	}

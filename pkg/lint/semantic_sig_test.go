@@ -22,7 +22,7 @@ func TestSemanticTokensSignatureTypes(t *testing.T) {
 
 	t.Run("fun sig", func(t *testing.T) {
 		// line 1 is the signature, line 2 the implementation.
-		src := "(fun add (Number Number) Number)\n(fun add (x y) (+ x y))"
+		src := "(fun add (Number Number) Number)\n(let add (x y) = (+ x y))"
 		toks := SemanticTokens("t.phl", []byte(src))
 		if nType, nParam := count(toks, 1); nType != 3 || nParam != 0 {
 			t.Errorf("sig line: @type=%d @parameter=%d, want 3/0", nType, nParam)
@@ -33,7 +33,7 @@ func TestSemanticTokensSignatureTypes(t *testing.T) {
 	})
 
 	t.Run("method sig", func(t *testing.T) {
-		src := "(struct R v)\n(method R.take (R Number) Boolean)\n(method R.take (self n) true)"
+		src := "(struct R v)\n(method R.take (R Number) Boolean)\n(let R.take (self n) = true)"
 		toks := SemanticTokens("t.phl", []byte(src))
 		if nType, nParam := count(toks, 2); nType < 3 || nParam != 0 {
 			t.Errorf("method-sig line: @type=%d @parameter=%d, want >=3/0", nType, nParam)

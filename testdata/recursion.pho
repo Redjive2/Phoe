@@ -1,4 +1,5 @@
 -- infinite recursion: the guard must turn this into a recursion-limit
 -- diagnostic, not a fatal Go stack overflow
-(fun loop (n) (loop (+ n 1)))
+(fun loop (Dynamic) Dynamic)
+(let loop (n) = (loop (+ n 1)))
 (loop 0)

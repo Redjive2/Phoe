@@ -5,7 +5,6 @@ import (
 	"math"
 
 	"pho/pkg/core"
-	"pho/pkg/goop"
 )
 
 // dotBuiltins returns a single entry: the mangled core.Dot accessor.
@@ -37,7 +36,7 @@ func dotBuiltins() map[string]core.StackEntry {
 			// hack only for a NUMERIC RHS; an identifier RHS (e.g. 1.Double) is a
 			// member access.
 			if name, ok := memberName(argv[1]); ok && wantsMemberLookup(col.Kind) {
-				return memberAccess(ctx, col, name)
+				return memberAccess(ctx, col, name, argv[0])
 			}
 
 			switch col.Kind {
@@ -174,89 +173,42 @@ func dotBuiltins() map[string]core.StackEntry {
 						// import-scoped extension + universal (Unknown) member
 						// tables, so a struct instance can use universal methods
 						// like `inst.Is?` exactly as any other value does.
-						return memberAccess(ctx, col, ident)
+						return memberAccess(ctx, col, ident, argv[0])
 					}
 
+					recvNode := argv[0]
 					return core.TvFun(func(ctx core.Context, argv []core.Node) core.Value {
-						env := ctx.Env
-						env.InstStack = append([]core.Value{col}, env.InstStack...)
-						defer func() {
-							env.InstStack = env.InstStack[1:]
-						}()
-						return method(ctx, argv)
+						return recvWriteback(ctx, recvNode, func() core.Value {
+							env := ctx.Env
+							env.InstStack = append([]core.Value{col}, env.InstStack...)
+							defer func() {
+								env.InstStack = env.InstStack[1:]
+							}()
+							return method(ctx, argv)
+						})
 					})
+				}
+
+				// A `.[i]` index on a struct whose type overloads `[]` dispatches
+				// to that operator (Features.md §7); the bracket's single index is
+				// the operand. Falls through to the field-name error otherwise.
+				if br, ok := core.AsBranch(argv[1]); ok && len(br) >= 1 && br[0] == core.Leaf(core.Slice) && !isSliceForm(br) {
+					if _, found := inst.Struct.Methods["[]"]; found {
+						idx, ok := singleIndex(ctx, br)
+						if !ok {
+							return core.TvNil
+						}
+						if v, dispatched := dispatchOperator(ctx, "[]", col, []core.Node{idx}); dispatched {
+							return v
+						}
+					}
 				}
 
 				return ctx.Errorf(core.ErrField, "structs are accessed by field name: write 'x.field', not 'x.%s'", core.Inspect(argv[1]))
 
-			case core.KindPackage:
-				// (math.Add 1 2) -> ((read math Add) 1 2)
-				pkg := col.Val.(*core.Package)
-
-				member, ok := core.AsLeaf(argv[1])
-				if !ok {
-					return ctx.Errorf(core.ErrField, "package accessors must be unqualified identifiers: expected identifier, got call '%s'", core.Inspect(argv[1]))
-				}
-
-				if val, found := pkg.Exports[string(member)]; found {
-					if val.Kind == core.KindFun {
-						return core.TvFun(val.Val.(core.Fun))
-					}
-
-					// A struct-type export is a KindType value; it falls through
-					// to the live-binding path below and is returned as-is, so an
-					// importer can use it as a type AND construct through it
-					// (`pkg.Reader.{ … }` — eval.go's call path constructs a
-					// KindType via its registered constructor).
-
-					// A non-callable export — an exported var, const, or
-					// free-standing property. Read the LIVE binding from the
-					// package's own top frame so an importer sees the current
-					// value even after the module mutates its own var
-					// internally; fall back to the value captured at export
-					// time. An exported property delegates to its getter (run
-					// in the module's scope, where its captured names live), so
-					// `pkg.Prop` yields the computed value, not the delegate.
-					if len(pkg.Env.Stack) > 0 {
-						if live, ok := pkg.Env.Stack[0][string(member)]; ok {
-							if live.Val.Kind == core.KindProperty {
-								return core.ReadProperty(ctx, live.Val)
-							}
-							return live.Val
-						}
-					}
-					if val.Kind == core.KindProperty {
-						return core.ReadProperty(ctx, val)
-					}
-					return val
-				}
-
-				return ctx.Errorf(core.ErrField, "package '%s' has no exported member '%s'", pkg.Path, string(member))
-			case core.KindGoPackage:
-				// (math.Add 1 2) -> ((read math Add) 1 2)
-				gopkg := col.Val.(*goop.PhoModule)
-
-				member, ok := core.AsLeaf(argv[1])
-				if !ok {
-					return ctx.Errorf(core.ErrField, "go package accessors must be unqualified identifiers: expected identifier, got call '%s'", core.Inspect(argv[1]))
-				}
-
-				funcName := string(member)
-
-				return core.TvFun(func(ctx core.Context, callArgv []core.Node) core.Value {
-					args, ok := core.DistributeSpreadExpressions(ctx, callArgv)
-					if !ok {
-						return core.TvNil
-					}
-
-					ctx.PushCallFrame("go:" + gopkg.Name + "." + funcName)
-					defer ctx.PopCallFrame()
-					res, err := goop.Call(gopkg, funcName, args)
-					if err != nil {
-						return ctx.Errorf(core.ErrGoCall, "%s", err.Error())
-					}
-					return core.TvUnknown(res)
-				})
+			case core.KindPackage, core.KindGoPackage:
+				// Packages / goimport modules are navigated with `/`, not `.`.
+				return ctx.Errorf(core.ErrField, "packages are navigated with '/': write 'pkg/%s', not 'pkg.%s'", core.Inspect(argv[1]), core.Inspect(argv[1]))
 			case core.KindNum:
 				rhs := argv[1].Evaluate(ctx)
 
@@ -434,11 +386,70 @@ func wantsMemberLookup(kind string) bool {
 	return false
 }
 
+// isSimpleLvalue reports whether node is a receiver expression a rebound
+// `(var self)` value can be assigned back to: a bare identifier, or a dot
+// target (`x.field` / `x.[i]`) whose base is itself a simple lvalue. Anything
+// else (a literal, a call result) has no assignable home, so a rebind is
+// discarded rather than written anywhere.
+func isSimpleLvalue(node core.Node) bool {
+	if lf, ok := core.AsLeaf(node); ok {
+		return core.IsIdent(string(lf))
+	}
+	if br, ok := core.AsBranch(node); ok && len(br) == 3 && br[0] == core.Leaf(core.Dot) {
+		return isSimpleLvalue(br[1])
+	}
+	return false
+}
+
+// assignReceiverBack writes a `(var self)` method's rebound receiver value back
+// to the receiver lvalue. A bare identifier goes straight through ctx.Set
+// (quiet — a non-assignable target, e.g. an immutable binding, simply doesn't
+// propagate; the in-body mutation still happened locally). A dot target reuses
+// the `=` builtin's field/index handling via a synthetic reassignment. A
+// non-lvalue receiver is a no-op.
+func assignReceiverBack(ctx core.Context, recvNode core.Node, val core.Value) {
+	if recvNode == nil {
+		return
+	}
+	if lf, ok := core.AsLeaf(recvNode); ok {
+		if core.IsIdent(string(lf)) {
+			ctx.Set(string(lf), val)
+		}
+		return
+	}
+	if isSimpleLvalue(recvNode) {
+		node := core.Branch{core.Leaf("="), recvNode, core.Lit(val)}
+		node.Evaluate(ctx)
+	}
+}
+
+// recvWriteback wraps a method invocation with `(var self)` receiver
+// write-back: it installs a fresh RecvRebind slot for the call, and if the
+// method rebound its var receiver to a new whole value, assigns that value
+// back to the receiver lvalue recvNode. recvNode is nil (or a non-lvalue) when
+// the receiver has no assignable home — then the rebind is simply discarded.
+// Restores the previous slot so nested method calls each report to their own.
+func recvWriteback(ctx core.Context, recvNode core.Node, invoke func() core.Value) core.Value {
+	env := ctx.Env
+	prev := env.RecvRebind
+	slot := &core.RecvRebind{}
+	env.RecvRebind = slot
+	defer func() {
+		env.RecvRebind = prev
+		if slot.Set {
+			assignReceiverBack(ctx, recvNode, slot.Val)
+		}
+	}()
+	return invoke()
+}
+
 // memberAccess resolves a method/property `name` on col through the import
 // scope and returns the property value (read via its getter) or the bound
 // method — a Fun that pushes col as the receiver on the instance stack at call
-// time, exactly like the struct-instance method wrapper.
-func memberAccess(ctx core.Context, col core.Value, name string) core.Value {
+// time, exactly like the struct-instance method wrapper. recvNode is the
+// receiver's source expression (the dot accessor's left operand), used to write
+// a `(var self)` rebind back to it; nil when the receiver has no lvalue.
+func memberAccess(ctx core.Context, col core.Value, name string, recvNode core.Node) core.Value {
 	// A struct TYPE value resolves STATIC members (declared via `static
 	// method`/`static property`) from the struct itself — keyed per struct, not
 	// through the shared prim:type extension table every type value would share.
@@ -481,10 +492,12 @@ func memberAccess(ctx core.Context, col core.Value, name string) core.Value {
 				return fn(ctx, nil)
 			}
 			return core.TvFun(func(ctx core.Context, argv []core.Node) core.Value {
-				env := ctx.Env
-				env.InstStack = append([]core.Value{col}, env.InstStack...)
-				defer func() { env.InstStack = env.InstStack[1:] }()
-				return fn(ctx, argv)
+				return recvWriteback(ctx, recvNode, func() core.Value {
+					env := ctx.Env
+					env.InstStack = append([]core.Value{col}, env.InstStack...)
+					defer func() { env.InstStack = env.InstStack[1:] }()
+					return fn(ctx, argv)
+				})
 			})
 		}
 		return ctx.Errorf(core.ErrField, "'%s' is not defined on type '%s'", name, core.TvTypeOf(col).Name())
@@ -499,11 +512,13 @@ func memberAccess(ctx core.Context, col core.Value, name string) core.Value {
 
 	method := res.Method
 	return core.TvFun(func(ctx core.Context, argv []core.Node) core.Value {
-		env := ctx.Env
-		env.InstStack = append([]core.Value{col}, env.InstStack...)
-		defer func() {
-			env.InstStack = env.InstStack[1:]
-		}()
-		return method(ctx, argv)
+		return recvWriteback(ctx, recvNode, func() core.Value {
+			env := ctx.Env
+			env.InstStack = append([]core.Value{col}, env.InstStack...)
+			defer func() {
+				env.InstStack = env.InstStack[1:]
+			}()
+			return method(ctx, argv)
+		})
 	})
 }

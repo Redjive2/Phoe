@@ -38,6 +38,7 @@ import (
 
 func main() {
 	logf("pho-lsp starting (log: %s)", logPath())
+	lint.EffectCheck = true // effect discipline is a real language rule now (Effects.md Phase 4)
 	srv := newServer(os.Stdin, os.Stdout)
 	if err := srv.run(); err != nil && !errors.Is(err, io.EOF) {
 		logf("pho-lsp exiting with error: %v", err)
@@ -241,6 +242,18 @@ func (s *server) dispatch(msg *rawMessage) {
 		s.handleDocumentSymbol(msg)
 	case "textDocument/references":
 		s.handleReferences(msg)
+	case "textDocument/documentHighlight":
+		s.handleDocumentHighlight(msg)
+	case "textDocument/prepareRename":
+		s.handlePrepareRename(msg)
+	case "textDocument/rename":
+		s.handleRename(msg)
+	case "textDocument/inlayHint":
+		s.handleInlayHint(msg)
+	case "textDocument/signatureHelp":
+		s.handleSignatureHelp(msg)
+	case "textDocument/implementation":
+		s.handleImplementation(msg)
 	case "shutdown":
 		s.shutdown = true
 		_ = s.t.reply(msg.ID, nil)
@@ -321,10 +334,15 @@ func (s *server) handleInitialize(msg *rawMessage) {
 				FirstTriggerCharacter: "\n",
 				MoreTriggerCharacter:  []string{")", "]", "}"},
 			},
-			HoverProvider:          true,
-			DefinitionProvider:     true,
-			DocumentSymbolProvider: true,
-			ReferencesProvider:     true,
+			HoverProvider:             true,
+			DefinitionProvider:        true,
+			DocumentSymbolProvider:    true,
+			ReferencesProvider:        true,
+			DocumentHighlightProvider: true,
+			RenameProvider:            &renameOptions{PrepareProvider: true},
+			InlayHintProvider:         true,
+			SignatureHelpProvider:     &signatureHelpOptions{TriggerCharacters: []string{" "}},
+			ImplementationProvider:    true,
 		},
 		ServerInfo: &serverInfo{Name: "pho-lsp", Version: "0.2.0"},
 	}

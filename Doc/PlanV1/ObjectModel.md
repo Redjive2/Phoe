@@ -98,7 +98,7 @@ type TypeValue struct {
 
 - `(struct Reader …)` binds `Reader` to a `KindType` value with
   `ID = "<pkg>#Reader"`, the field layout, and a constructor closure. The
-  `Reader.{ field value … }` sugar and `eval.go`'s call path construct through it.
+  `Reader.{ field = value … }` sugar and `eval.go`'s call path construct through it.
 - Primitives have built-in `KindType` values bound globally (`Number`, …,
   `Unknown`).
 - `typeof v` returns the `KindType` for `v` (primitive descriptor, or the
@@ -282,12 +282,12 @@ hard-asserts `*tinstance` and unconditionally grants `Privileged`
 
 -- file: main.broken.pho
 (import "reader")
-(const r reader.Reader.{ buffer [1 2 3] })
+(const r reader.Reader.{ buffer = [1 2 3] })
 (r.ReadAll)            -- ERROR: ReadAll is not defined on Reader (readerExt not imported)
 
 -- file: main.works.pho
 (import "reader" "readerExt")
-(const r reader.Reader.{ buffer [1 2 3] })
+(const r reader.Reader.{ buffer = [1 2 3] })
 (r.ReadAll)            -- [1 2 3]
 ```
 

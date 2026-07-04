@@ -108,6 +108,13 @@ var libraryForms = map[string]bool{
 	// attached `(property Recv.Name …)` registers a computed member on a
 	// struct declared in the same module.
 	"property": true,
+	// `static method`/`static property` declare type-level members; `trait`
+	// declares a named trait type; `template` declares type parameters for the
+	// following generic declaration. All are declarations — kept in sync with
+	// the linter's allow-list in pkg/lint/checkers.go.
+	"static":   true,
+	"trait":    true,
+	"template": true,
 }
 
 // isLibraryForm returns true if a top-level node in a .phl file is an
@@ -124,6 +131,14 @@ func isLibraryForm(form core.Node) bool {
 	head, ok := core.AsLeaf(branch[0])
 	if !ok {
 		return false // a call whose head is itself a call isn't a declaration
+	}
+	// The decl/impl split (Doc/PlanV1/DeclImplSplit.md) writes function/method
+	// IMPLEMENTATIONS as `(= name (params) body)` / `(= Owner.name (params)
+	// body)` — a 4-child `=`, a pure definition, permitted at a library's top
+	// level. A 3-child `(= target value)` is a reassignment: a genuine side
+	// effect, still rejected here (like a bare expression).
+	if string(head) == "=" {
+		return len(branch) == 4
 	}
 	return libraryForms[string(head)]
 }
@@ -226,9 +241,12 @@ func loadPackage(path string, allowShadow bool) (*core.Package, error) {
 		sourceFiles = []string{name}
 	}
 
-	if len(sourceFiles) == 0 {
-		return nil, fmt.Errorf("no .phl files found in package '%s' (.pho scripts in a directory are entrypoints, not importable members)", path)
-	}
+	// A directory with no .phl files is a NAMESPACE package: it has no direct
+	// exports, but its subdirectories are subpackages reachable via `/`
+	// (e.g. `(import 'std')` then `std/core/…`). It loads to an empty-export
+	// package; the slash accessor resolves subpackages by stat-ing the dir.
+	// (Only a directory reaches here with len 0 — a single-file import path
+	// sets sourceFiles above.)
 
 	if EnvFactory == nil {
 		return nil, fmt.Errorf("modload.EnvFactory is not set; the builtins package must be imported to wire it up")

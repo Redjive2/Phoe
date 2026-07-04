@@ -1,11 +1,12 @@
 (goimport ('stdDependencies' dep))
 
--- Just a thin box for an id; all functionality routed through stdDependencies 
+-- Just a thin box for an id; all functionality routed through stdDependencies
 -- Passes strings from writers to readers sharing an id
 (struct Writer
     #id
 )
 
-(method Writer.write (self content)
-    (dep.IoWrite self.#id content)
+(method Writer.write! (Self String) None)
+(let Writer.write! (self content) =
+    (dep/IoWrite self.#id content)
 )

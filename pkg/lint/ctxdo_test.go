@@ -9,7 +9,8 @@ import "testing"
 // and the walker reference-checked them as identifiers — surfacing spurious
 // 'elif'/'then'/'else' is-not-defined errors.
 func TestContextAwareDoLintsClean(t *testing.T) {
-	src := []byte(`(fun classify (n) do
+	src := []byte(`(fun classify (Number) String)
+(let classify (n) = do
     (if (< n 0) then do
         (let r = 'neg')
         r
@@ -27,7 +28,8 @@ func TestContextAwareDoLintsClean(t *testing.T) {
 
 // The unless form is context-aware too: its then-arm `do` stops at `else`.
 func TestContextAwareDoUnlessLintsClean(t *testing.T) {
-	src := []byte(`(fun pick (b) do
+	src := []byte(`(fun pick (Boolean) Number)
+(let pick (b) = do
     (unless b then do
         (let r = 1)
         r

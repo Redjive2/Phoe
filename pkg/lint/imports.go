@@ -69,6 +69,18 @@ func ResolveImport(fromFile, importPath string) string {
 	return resolveImportPath(fromFile, importPath)
 }
 
+// isSubpackage reports whether `name` is a subpackage of the (already resolved)
+// package directory pkgPath — a `pkg/name` navigation that resolves to a nested
+// package directory at runtime rather than an export. The slash-member check
+// uses it to avoid false-flagging a subpackage as an unknown export.
+func isSubpackage(pkgPath, name string) bool {
+	if pkgPath == "" || name == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(pkgPath, name))
+	return err == nil && info.IsDir()
+}
+
 // PackageExports reads the directory at `path` and returns the set of
 // names that an `(import "path")` would expose to other packages.
 // Mirrors modload's runtime export rule: a top-level fun, method, or
@@ -258,6 +270,17 @@ func PackageStructs(path string) map[string]*structInfo {
 				if d.Owner == "" || d.Name == "" || !unicode.IsUpper(rune(d.Owner[0])) {
 					continue
 				}
+				// An inline method SIGNATURE `(method Recv.M (Self T…) R)` carries
+				// the method's parameter/result types: harvest it onto the owner's
+				// MethodSigs so a call to an imported method type-checks its args
+				// (read at the call site via methodSigForShape). Types resolve
+				// against builtins only, like the field harvest above — an
+				// alias/struct-typed param stays Dynamic (gradual), never a false
+				// positive. An IMPL (d.IsSig false) carries no types; skip it.
+				var msig *funSig
+				if d.IsSig {
+					msig = inlineMethodSig(d, nil)
+				}
 				// A union receiver (Collection = String|List|Map) registers on
 				// EACH member — mirroring collectOne and the runtime — so
 				// `"x".Split` resolves across an import when declared as
@@ -266,6 +289,12 @@ func PackageStructs(path string) map[string]*structInfo {
 					si := at(owner)
 					si.Methods[d.Name] = d.NameSpan
 					si.MethodFiles[d.Name] = full
+					if msig != nil {
+						if si.MethodSigs == nil {
+							si.MethodSigs = map[string]*funSig{}
+						}
+						si.MethodSigs[d.Name] = msig
+					}
 				}
 			case "property":
 				// An ATTACHED `(property Recv.Name …)` is a computed member of

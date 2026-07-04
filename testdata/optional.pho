@@ -2,7 +2,8 @@
 -- missing arg binds to Nil and the body runs, instead of raising an
 -- arity error. Calling with the arg present still works. This script
 -- must run clean (exit 0, silent stderr).
-(fun greet (name (optional greeting)) (identity do
+(fun greet (String (optional String)) String)
+(let greet (name greeting) = (identity do
     (if (== greeting none) then (= greeting 'Hello'))
     (+ greeting (+ ', ' name))))
 

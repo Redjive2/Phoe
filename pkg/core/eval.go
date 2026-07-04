@@ -10,9 +10,11 @@ import (
 var (
 	numberPattern = regexp.MustCompile("^-?[0-9]+$")
 	charPattern   = regexp.MustCompile("^`.`$")
-	// A leading letter, no trailing underscore, and an optional single
-	// trailing '?' (the Lisp/Ruby predicate convention, e.g. `atom?`).
-	identPattern = regexp.MustCompile("^#?[a-zA-Z](([a-zA-Z0-9]*)|([a-zA-Z0-9_]*[a-zA-Z0-9]))\\??$")
+	// A leading letter, no trailing underscore, and the optional trailing effect
+	// suffixes '?' (predicate, e.g. `atom?`), '!' (environmental effect, e.g.
+	// `flush!`), and '=' (self/value mutation, e.g. `append=`). They appear in
+	// the fixed order `name?!=`.
+	identPattern = regexp.MustCompile("^#?[a-zA-Z][a-zA-Z0-9]*(-[a-zA-Z0-9]+)*\\??!?=?$")
 	// An atom body is a valid identifier or an all-digit run (digits keep
 	// leading zeros, so `:01` and `:1` are distinct atoms).
 	atomDigitsPattern = regexp.MustCompile("^[0-9]+$")
@@ -22,6 +24,37 @@ var (
 // builtins package (the Dot accessor validates instance keys with it).
 func IsIdent(s string) bool {
 	return identPattern.MatchString(s)
+}
+
+// IsEffectName reports whether s carries the ENVIRONMENTAL-effect suffix '!'
+// (io / randomness / module-global write). The suffixes read `name?!=`, so a
+// trailing self-mutation '=' is peeled first — `flush!`, `flush!=` and `x?!` all
+// count, `append=` does not. (Effect tracking; the static effect checker
+// enforces the convention.)
+func IsEffectName(s string) bool {
+	if len(s) > 0 && s[len(s)-1] == '=' {
+		s = s[:len(s)-1]
+	}
+	return len(s) > 1 && s[len(s)-1] == '!'
+}
+
+// IsSelfEffectName reports whether s carries the SELF/value-mutation suffix '='
+// (mutates a `(var self)` receiver or a `(var arg)` parameter, e.g. `append=`).
+// The equality/comparison operators (`==`, `<=`, `>=`, `~=`) end in '=' too but
+// are not names — they're excluded by requiring a name character before the '='.
+func IsSelfEffectName(s string) bool {
+	// `[]=` is the index-WRITE operator (Features.md §7): it mutates its
+	// receiver, so it carries the self-mutation suffix even though the char
+	// before `=` is `]` rather than a name character.
+	if s == "[]=" {
+		return true
+	}
+	if len(s) < 2 || s[len(s)-1] != '=' {
+		return false
+	}
+	c := s[len(s)-2]
+	return c == '_' || c == '!' || c == '?' ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // IsAtomName reports whether s is a legal atom body — a valid identifier or
@@ -209,14 +242,15 @@ func (lf ttleaf) Evaluate(ctx Context) Tval {
 		// match chars
 	} else if charPattern.MatchString(s) {
 		return TvChr(rune(s[1]))
-		// match nil — `none` is the new spelling; `Nil` is accepted during the
-		// syntax migration and dropped at the hard cutover (Doc/PlanV1/Syntax.md).
-	} else if s == "Nil" || s == "none" {
+		// match nil — `none` is the sole nil-value spelling (the capitalized `Nil`
+		// is no longer a value; a bare `Nil` is an undefined identifier). The nil
+		// TYPE is the capitalized `None`.
+	} else if s == "none" {
 		return TvNil
-		// match bools — `true`/`false` are the new spellings; `True`/`False`
-		// are likewise accepted transitionally.
-	} else if s == "True" || s == "False" || s == "true" || s == "false" {
-		return TvBool(s == "True" || s == "true")
+		// match bools — `true`/`false` are the sole bool-value spellings; the
+		// capitalized `True`/`False` are no longer values (undefined identifiers).
+	} else if s == "true" || s == "false" {
+		return TvBool(s == "true")
 		// match atoms (`:name` / `:123`); the lexer already glued the colon
 		// to an identifier/digit run, so validate the body and intern it.
 	} else if len(s) >= 2 && s[0] == ':' {

@@ -15,10 +15,10 @@ func TestMethodCallResultType(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	box := "(struct Box.{ n Number })\n(method Box.m (Self) String)\n(method Box.m (self) 's')\n(let b = Box.{ n 1 })\n"
-	add := "(struct Box.{ n Number })\n(method Box.add (Self Number) Number)\n(method Box.add (self k) k)\n(let b = Box.{ n 1 })\n"
-	g := "(fun g (Number) none)\n(fun g (n) none)\n"
-	gs := "(fun gs (String) none)\n(fun gs (s) none)\n"
+	box := "(struct Box.{ Number n })\n(method Box.m (Self) String)\n(let Box.m (self) = 's')\n(let b = Box.{ n = 1 })\n"
+	add := "(struct Box.{ Number n })\n(method Box.add (Self Number) Number)\n(let Box.add (self k) = k)\n(let b = Box.{ n = 1 })\n"
+	g := "(fun g (Number) None)\n(let g (n) = none)\n"
+	gs := "(fun gs (String) None)\n(let gs (s) = none)\n"
 	cases := []struct {
 		name    string
 		src     string

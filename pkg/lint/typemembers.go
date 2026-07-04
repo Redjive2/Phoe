@@ -64,7 +64,7 @@ func shapeTypeName(k ShapeKind) string {
 	case ShapeAtom:
 		return "Atom"
 	case ShapeNil:
-		return "Nil"
+		return "None"
 	case ShapeFun:
 		return "Function"
 	}

@@ -108,8 +108,8 @@ func TestLiteralSingletonRender(t *testing.T) {
 		{NumSingleton(200).Or(NumSingleton(404)), "200 | 404"},
 		{StrSingleton("GET"), `'GET'`},
 		{StrSingleton("GET").Or(StrSingleton("POST")), `'GET' | 'POST'`},
-		{BoolSingleton(true), "True"},
-		{BoolSingleton(false), "False"},
+		{BoolSingleton(true), "true"},
+		{BoolSingleton(false), "false"},
 		{TypeNumber, "Number"},
 		{NumSingleton(5).Or(StrSingleton("x")), `5 | 'x'`},
 	}

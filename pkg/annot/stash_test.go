@@ -13,7 +13,7 @@ func TestStashAnnotations(t *testing.T) {
 	SetDefault(New(nil))
 	defer SetDefault(New(nil))
 
-	tokens, _ := syntax.LexPos("--@ (~sig Num)\n(fun add (x) (+ x 1))")
+	tokens, _ := syntax.LexPos("--@ (~sig Num)\n(let add (x) = (+ x 1))")
 	tree, _ := syntax.ParsePos(tokens)
 	file := &core.File{}
 	stashAnnotations(tree, file)
@@ -29,7 +29,7 @@ func TestStashAnnotations(t *testing.T) {
 
 // An un-annotated file leaves file.Annotations nil — no allocation, no work.
 func TestStashNoAnnotations(t *testing.T) {
-	tokens, _ := syntax.LexPos("(fun add (x) (+ x 1))")
+	tokens, _ := syntax.LexPos("(let add (x) = (+ x 1))")
 	tree, _ := syntax.ParsePos(tokens)
 	file := &core.File{}
 	stashAnnotations(tree, file)

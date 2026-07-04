@@ -13,16 +13,16 @@
 
 -- Element/rune count — replaces the removed `len` builtin.
 (property Collection.size
-    get (method Collection (self) (deps.PrimSize self))
+    (get (self) (deps/PrimSize self))
 )
 
 -- The keys of a collection — replaces the removed `keyof` builtin. A list/string
 -- yields its indices (0 … Size-1); a map yields its keys.
 (property Collection.keys
-    get (method Collection (self) (deps.PrimKeys self))
+    (get (self) (deps/PrimKeys self))
 )
 
 -- Emptiness — used across the stdlib (e.g. self.buffer.Empty?).
 (property Collection.empty?
-    get (method Collection (self) (== self.size 0))
+    (get (self) (== self.size 0))
 )

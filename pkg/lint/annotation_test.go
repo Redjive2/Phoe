@@ -17,7 +17,7 @@ func TestHoverShowsAnnotations(t *testing.T) {
 
 	// ~sig/~type are disconnected (TypeSignatures.md Phase 4); use a still-active
 	// annotation (~doc) to exercise hover's annotation-metadata display.
-	src := "--@ (~doc 'adds two numbers')\n(fun add (x y) (+ x y))"
+	src := "--@ (~doc 'adds two numbers')\n(let add (x y) = (+ x y))"
 	md, _, ok := HoverAt("test.pho", []byte(src), 2, 7) // hover on 'add
 	if !ok {
 		t.Fatal("expected a hover for 'add")
@@ -33,7 +33,7 @@ func TestAnnotationUndefinedMacroDiagnoses(t *testing.T) {
 	annot.SetDefault(annot.New(nil)) // no macro library loaded
 	defer annot.SetDefault(annot.New(nil))
 
-	d := AnalyzeFile("test.pho", []byte("--@ (sig! Num)\n(const y 1)"))
+	d := AnalyzeFile("test.pho", []byte("--@ (sig Num)\n(const y 1)"))
 	if !hasDiag(d, "unresolved") {
 		t.Fatalf("expected an 'unresolved' diagnostic for the undefined annotation macro, got %#v", d)
 	}
@@ -49,7 +49,7 @@ func TestAnnotationCleanMacro(t *testing.T) {
 	}))
 	defer annot.SetDefault(annot.New(nil))
 
-	d := AnalyzeFile("test.pho", []byte("--@ (note! anything)\n(const y 1)"))
+	d := AnalyzeFile("test.pho", []byte("--@ (note anything)\n(const y 1)"))
 	for _, dg := range d {
 		if dg.Code == "unresolved" {
 			t.Fatalf("a clean annotation must not diagnose, got %#v", dg)

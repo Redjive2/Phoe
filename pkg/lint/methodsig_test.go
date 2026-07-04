@@ -20,7 +20,7 @@ func TestMethodSigHarvest(t *testing.T) {
 
 	src := "(struct Reader #buffer)\n" +
 		"(method Reader.seek (Reader Number) Boolean)\n" +
-		"(method Reader.seek (self n) do true)\n"
+		"(let Reader.seek (self n) = true)\n"
 
 	tokens, _ := syntax.LexPos(src)
 	tree, _ := syntax.ParsePos(tokens)

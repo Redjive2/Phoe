@@ -15,7 +15,7 @@ func sp(sl, sc, el, ec int) span.Span {
 // gutter excerpt, caret alignment, notes/help, trace, and the single
 // terminating blank line.
 func TestRenderFullBlock(t *testing.T) {
-	src := "(fun double (n)\n    (* n 2))\n"
+	src := "(= double (n)\n    (* n 2))\n"
 	// The span underlines the mid-line form (* n 2) — deliberately NOT
 	// running to end-of-line, so an inclusive-EndCol regression (which the
 	// endByte clamp would mask on an EOL span) shifts the caret count and

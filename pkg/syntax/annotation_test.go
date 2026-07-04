@@ -32,7 +32,7 @@ func TestLexAnnotationToken(t *testing.T) {
 // to that form, with its body re-parsed into a real PNode (here a macro
 // call, since the body uses the `name!` shape).
 func TestAnnotationCaptured(t *testing.T) {
-	tokens, lexErrs := LexPos("--@ (~sig num num)\n(fun add (x y) (+ x y))")
+	tokens, lexErrs := LexPos("--@ (~sig num num)\n(= add (x y) (+ x y))")
 	if len(lexErrs) != 0 {
 		t.Fatalf("unexpected lex errors: %#v", lexErrs)
 	}
@@ -65,7 +65,7 @@ func TestAnnotationCaptured(t *testing.T) {
 
 // Multiple stacked `--@` lines all attach to the next form, in source order.
 func TestAnnotationStacked(t *testing.T) {
-	src := "--@ (~sig num)\n--@ (~doc 'adds')\n(fun add (x) (+ x 1))"
+	src := "--@ (~sig num)\n--@ (~doc 'adds')\n(= add (x) (+ x 1))"
 	tree, errs := ParsePos(mustLex(t, src))
 	if len(errs) != 0 {
 		t.Fatalf("unexpected parse errors: %#v", errs)
@@ -84,7 +84,7 @@ func TestAnnotationStacked(t *testing.T) {
 // annotation present — annotations are pure metadata the runtime never
 // sees. dumpTree strips spans, so this compares pure shape.
 func TestAnnotationLeavesRuntimeTreeUnchanged(t *testing.T) {
-	const decl = "(fun add (x y) (+ x y))"
+	const decl = "(= add (x y) (+ x y))"
 	plain := dumpTree(lower(decl))
 	annotated := dumpTree(lower("--@ (~sig Num Num -> Num)\n" + decl))
 	if plain != annotated {
@@ -96,7 +96,7 @@ func TestAnnotationLeavesRuntimeTreeUnchanged(t *testing.T) {
 // span and the parsed form's leaves point at the real columns.
 func TestAnnotationSpanOffset(t *testing.T) {
 	// Columns (1-based): 1:- 2:- 3:@ 4:space 5:( 6:~ 7:s 8:i 9:g
-	tree, errs := ParsePos(mustLex(t, "--@ (~sig Num Num)\n(fun f () ())"))
+	tree, errs := ParsePos(mustLex(t, "--@ (~sig Num Num)\n(= f () ())"))
 	if len(errs) != 0 {
 		t.Fatalf("unexpected parse errors: %#v", errs)
 	}
@@ -115,9 +115,9 @@ func TestAnnotationSpanOffset(t *testing.T) {
 // no annotation token or attachment.
 func TestPlainCommentsNotAnnotations(t *testing.T) {
 	for _, src := range []string{
-		"-- @notmarker (x)\n(fun f () ())", // space before @, so `--@` never matches
-		"--@nospace (x)\n(fun f () ())",    // no space after @
-		"-------- divider\n(fun f () ())",  // a run of dashes
+		"-- @notmarker (x)\n(= f () ())", // space before @, so `--@` never matches
+		"--@nospace (x)\n(= f () ())",    // no space after @
+		"-------- divider\n(= f () ())",  // a run of dashes
 	} {
 		tokens := mustLex(t, src)
 		for _, tk := range tokens {

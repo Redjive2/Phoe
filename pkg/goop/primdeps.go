@@ -36,17 +36,14 @@ func (state *stdDependencies) PrimSize(v core.Value) float64 {
 	return 0
 }
 
-// Keys returns a list's indices (0 … Size-1) or a dict's keys. Backs `.Keys`.
+// Keys returns a list's indices (0 … size-1) or a dict's keys. Backs the
+// `.keys` collection property.
 //
-// INTEGRATION NOTE: the return is a slice of Pho values. The goop return path
-// (dot.go's gopackage case → core.TvUnknown) does not yet pass core.Value
-// through — TvUnknown needs a one-line passthrough at its top:
-//
-//	if tv, ok := data.(Tval); ok { return tv }
-//
-// which also makes the reflect.Slice case wrap each []core.Value element
-// correctly. That belongs to the Stage A/B core work (pkg/core/tval.go); until
-// it lands, `.Size` is fully live but `.Keys` is pending that single change.
+// The return is a slice of Pho values. The goop return path (dot.go's gopackage
+// case → core.TvUnknown) carries it through unchanged: TvUnknown passes an
+// already-wrapped Tval straight back, and its reflect.Slice case re-enters per
+// element, so a []core.Value round-trips element-for-element. Both `.size` and
+// `.keys` are live end to end.
 func (state *stdDependencies) PrimKeys(v core.Value) []core.Value {
 	switch v.Kind {
 	case core.KindArray:

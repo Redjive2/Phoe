@@ -34,6 +34,25 @@
   (#eq? @context "struct")
 ) @item
 
+; (trait Name member ...) — a named trait; members follow as nested lists.
+(list
+  .
+  (identifier) @context
+  .
+  (identifier) @name
+  (#eq? @context "trait")
+) @item
+
+; (template Name) / (template Name (bounds ...)) — a generic type parameter.
+; The optional bounds list follows the name and is ignored here.
+(list
+  .
+  (identifier) @context
+  .
+  (identifier) @name
+  (#eq? @context "template")
+) @item
+
 ; (method Owner.Name (args) body) — named only (an anonymous (method Owner …)
 ; delegate has a bare receiver, not a dot_chain). The owner shows as context.
 (list

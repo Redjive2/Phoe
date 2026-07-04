@@ -18,15 +18,16 @@ import (
 // spread; a required (plain) parameter after an optional is rejected.
 // Returns ok=false (after reporting a diagnostic through ctx) on any
 // malformed pattern.
-func parseArgList(ctx core.Context, node core.Node, caller string) ([]string, bool) {
+func parseArgList(ctx core.Context, node core.Node, caller string) ([]string, map[string]core.Node, bool) {
 	argBranch, ok := core.AsBranch(node)
 	if !ok {
 		ctx.Errorf(core.ErrBadForm, "'%s' expected an argument list like (a b), got '%s'", caller, core.Inspect(node))
-		return nil, false
+		return nil, nil, false
 	}
 
 	argList := make([]string, len(argBranch))
 	sawOptional := false
+	var defaults map[string]core.Node
 
 	for i, arg := range argBranch {
 		if branch, ok := core.AsBranch(arg); ok {
@@ -38,7 +39,7 @@ func parseArgList(ctx core.Context, node core.Node, caller string) ([]string, bo
 				leaf, ok := core.AsLeaf(branch[1])
 				if !ok {
 					ctx.Errorf(core.ErrBadForm, "'%s' cannot parse rest-argument pattern '%s'", caller, core.Inspect(branch))
-					return nil, false
+					return nil, nil, false
 				}
 				argList[i] = fmt.Sprint("#", leaf)
 				break
@@ -49,26 +50,76 @@ func parseArgList(ctx core.Context, node core.Node, caller string) ([]string, bo
 				leaf, ok := core.AsLeaf(branch[1])
 				if !ok {
 					ctx.Errorf(core.ErrBadForm, "'%s' cannot parse optional-argument pattern '%s'", caller, core.Inspect(branch))
-					return nil, false
+					return nil, nil, false
 				}
 				argList[i] = fmt.Sprint("?", leaf)
 				sawOptional = true
 				continue
 			}
 
+			// RETIRED: `(or name default)` moved to the SIGNATURE —
+			// `(optional Type else default)` (Features.md; defaults are part
+			// of a callable's declared interface, not its clause).
+			if len(branch) == 3 && branch[0] == core.Leaf("or") {
+				ctx.Errorf(core.ErrBadForm, "'%s': defaults are declared in the signature — (optional Type else default) — not in the parameter list", caller)
+				return nil, nil, false
+			}
+
+			// (var name) — a MUTABLE parameter (the effect-tracking receiver
+			// `(var self)`, or a future mutable value arg). Binds the name like
+			// an ordinary required parameter; the mutability is a STATIC contract
+			// the effect checker reads from the source — at runtime an instance
+			// is already a mutable pointer, so binding is unchanged. (Effect
+			// tracking, Phase 1: parsed + bound, not yet semantically enforced.)
+			if len(branch) == 2 && branch[0] == core.Leaf("var") {
+				leaf, ok := core.AsLeaf(branch[1])
+				if !ok {
+					ctx.Errorf(core.ErrBadForm, "'%s' cannot parse mutable-parameter pattern '%s'", caller, core.Inspect(branch))
+					return nil, nil, false
+				}
+				// Only the RECEIVER may be mutable — a method's `self`. A
+				// `(var <other>)` value parameter is rejected (Effects.md).
+				if string(leaf) != "self" {
+					ctx.Errorf(core.ErrBadForm, "'%s': (var %s) is not allowed — only the receiver '(var self)' may be mutable; a value parameter cannot be declared mutable", caller, leaf)
+					return nil, nil, false
+				}
+				if sawOptional {
+					ctx.Errorf(core.ErrBadForm, "'%s' parameter '%s' cannot follow an optional parameter", caller, leaf)
+					return nil, nil, false
+				}
+				argList[i] = string(leaf)
+				continue
+			}
+
+			// RETIRED: `(disc X)` — declare the parameter `(const T)` in the
+			// SIGNATURE and dispatch with literal patterns in the clauses.
+			if len(branch) == 2 && branch[0] == core.Leaf("disc") {
+				ctx.Errorf(core.ErrBadForm, "'%s': (disc X) is retired — declare the parameter (const T) in the signature and dispatch with literal patterns in the clauses", caller)
+				return nil, nil, false
+			}
+
+			// (const X) — a parse-time-constant SIGNATURE slot (Features.md;
+			// the successor to disc). Only trait member signatures reach
+			// parseArgList with one — it occupies a positional slot for arity,
+			// binding a synthetic key.
+			if len(branch) == 2 && branch[0] == core.Leaf("const") {
+				argList[i] = fmt.Sprint("@const", i)
+				continue
+			}
+
 			ctx.Errorf(core.ErrBadForm, "'%s' cannot parse argument pattern '%s'", caller, core.Inspect(arg))
-			return nil, false
+			return nil, nil, false
 		}
 
 		leaf, _ := core.AsLeaf(arg)
 		if sawOptional {
 			ctx.Errorf(core.ErrBadForm, "'%s' required parameter '%s' cannot follow an optional parameter", caller, leaf)
-			return nil, false
+			return nil, nil, false
 		}
 		argList[i] = string(leaf)
 	}
 
-	return argList, true
+	return argList, defaults, true
 }
 
 // declName reads a literal declaration name from a bare identifier node.
@@ -135,17 +186,115 @@ func isExportedMember(name string) bool {
 	return len(name) > 0 && name[0] != '#'
 }
 
+// defineFunOrMethod implements the 3-argument form of `=`: a function or method
+// IMPLEMENTATION (the decl/impl split — `fun`/`method` declare the signature, `=`
+// provides the impl). `(= name (params) body)` binds a function; `(= Owner.name
+// (params) body)` defines a method on the owner type. It reuses the exact binding
+// machinery the `fun`/`method` builtins use (kept additive during the tolerant
+// rollout — the fun/method impl forms still work too). argv = [target, params, body].
+func defineFunOrMethod(ctx core.Context, argv []core.Node) core.Value {
+	// RETIRED (Features.md §1): implementations are `let` clauses now. Keep a
+	// pointed error so pre-cutover code gets steered to the new form.
+	return ctx.Errorf(core.ErrBadForm, "'=' no longer defines implementations; write (let %s (params) [where guard] = body) after its signature", core.Inspect(argv[0]))
+}
+
+// stripPropType unwraps a typed property name slot `(Type target)` — a
+// two-element branch whose SECOND child is the real name target (a bare name or
+// a `Recv.name` receiver pattern, which itself is a three-element Dot branch) —
+// returning that target. The declared Type is ERASED at runtime (read by the
+// gradual checker), mirroring typed var/const bindings `(Type x)`. A bare name
+// or a `Recv.name` pattern is returned unchanged.
+func stripPropType(node core.Node) core.Node {
+	if br, ok := core.AsBranch(node); ok && len(br) == 2 {
+		return br[1]
+	}
+	return node
+}
+
+// isPropAccessor reports whether node is a `(get …)` / `(set …)` delegate sub-form
+// (a branch headed by the keyword) — the property delegate syntax.
+func isPropAccessor(node core.Node, kw string) bool {
+	br, ok := core.AsBranch(node)
+	if !ok || len(br) < 1 {
+		return false
+	}
+	h, ok := core.AsLeaf(br[0])
+	return ok && string(h) == kw
+}
+
+// bindPropDelegate binds one property accessor `(get (params) body)` /
+// `(set (params) body)` to a callable value: a `self`-receiver method (BindMethod)
+// for a struct property, or a plain function (BindFun) for a free-standing one — no
+// anonymous function ever exists.
+func bindPropDelegate(ctx core.Context, node core.Node, kw string, onStruct bool, recvType *core.PhoType) (core.Value, bool) {
+	br, isBr := core.AsBranch(node)
+	if !isBr || len(br) != 3 {
+		ctx.Errorf(core.ErrBadForm, "'property' %s must be a (%s (params) body) form", kw, kw)
+		return core.TvNil, false
+	}
+	if h, ok := core.AsLeaf(br[0]); !ok || string(h) != kw {
+		ctx.Errorf(core.ErrBadForm, "'property' expected a (%s …) accessor", kw)
+		return core.TvNil, false
+	}
+	argList, defaults, ok := parseArgList(ctx, br[1], "property "+kw)
+	if !ok {
+		return core.TvNil, false
+	}
+	if onStruct && recvType != nil {
+		return core.TvFun(core.BindMethod(recvType.Name()+"."+kw, br[2], argList, defaults, ctx)), true
+	}
+	return core.TvFun(core.BindFun(kw, br[2], argList, defaults, ctx)), true
+}
+
+// propertyDelegates computes a property's (getter, setter, hasSetter) from the
+// parenthesized accessor sub-forms `(get (params) body)` and optional
+// `(set (params) body)` — the ONLY property syntax. The target has already been
+// resolved by the caller (onStruct/recv drive method-vs-fun binding: a struct
+// property's getter/setter are `self`-methods, a free-standing one's are funs).
+func propertyDelegates(ctx core.Context, argv []core.Node, onStruct bool, recv core.Node) (getter, setter core.Value, hasSetter, ok bool) {
+	if !isPropAccessor(argv[1], "get") {
+		ctx.Errorf(core.ErrBadForm, "'property' takes (target (get (params) body) [(set (params) body)]); the getter must be a (get …) accessor")
+		return core.TvNil, core.TvNil, false, false
+	}
+	if len(argv) != 2 && len(argv) != 3 {
+		ctx.Errorf(core.ErrArity, "'property' takes (target (get …) [(set …)]); got %d argument(s)", len(argv))
+		return core.TvNil, core.TvNil, false, false
+	}
+	var recvType *core.PhoType
+	if onStruct {
+		recvVal := recv.Evaluate(ctx)
+		if recvVal.Kind != core.KindType {
+			ctx.Errorf(core.ErrType, "'property' receiver must be a type or struct, got kind '%s'", recvVal.Kind)
+			return core.TvNil, core.TvNil, false, false
+		}
+		recvType = recvVal.Val.(*core.PhoType)
+	}
+	g, gok := bindPropDelegate(ctx, argv[1], "get", onStruct, recvType)
+	if !gok {
+		return core.TvNil, core.TvNil, false, false
+	}
+	getter = g
+	if len(argv) == 3 {
+		s, sok := bindPropDelegate(ctx, argv[2], "set", onStruct, recvType)
+		if !sok {
+			return core.TvNil, core.TvNil, false, false
+		}
+		setter, hasSetter = s, true
+	}
+	return getter, setter, hasSetter, true
+}
+
 // structDeclShape reads a struct declaration's name and field names, accepting
 // both forms:
 //
 //	(struct Name f0 f1 …)            — bare untyped fields
-//	(struct Name.{ F0 T0 F1 T1 … })  — typed fields
+//	(struct Name.{ T0 F0 T1 F1 … })  — typed fields (Type name)
 //
 // The typed form reaches the runtime as a single branch argument
-// `(Name "F0" T0 "F1" T1 …)` (the `.{}` sugar quotes the field names and leaves
-// the types as ordinary expressions). Field TYPES are static-only — at runtime
-// a struct is just its field names — so they are read past here; the linter's
-// checker consumes them.
+// `(Name T0 "F0" T1 "F1" …)` (the `.{}` sugar quotes the field NAMES and leaves
+// the types as ordinary expressions, so names sit at the EVEN slots). Field
+// TYPES are static-only — at runtime a struct is just its field names — so they
+// are read past here; the linter's checker consumes them.
 func structDeclShape(ctx core.Context, argv []core.Node) (name string, fields []string, ok bool) {
 	if len(argv) == 1 {
 		if br, isBranch := core.AsBranch(argv[0]); isBranch {
@@ -154,7 +303,7 @@ func structDeclShape(ctx core.Context, argv []core.Node) (name string, fields []
 				ctx.Errorf(core.ErrBadForm, "'struct' name must be a bare identifier; got '%s'", core.Inspect(br[0]))
 				return "", nil, false
 			}
-			for i := 1; i < len(br); i += 2 {
+			for i := 2; i < len(br); i += 2 {
 				fv := br[i].Evaluate(ctx)
 				fn, isStr := fv.Val.(string)
 				if !isStr {
@@ -164,6 +313,29 @@ func structDeclShape(ctx core.Context, argv []core.Node) (name string, fields []
 				fields = append(fields, fn)
 			}
 			return string(head), fields, true
+		}
+	}
+	// Generic typed-field form `(struct Name { T0 f0 T1 f1 … })` — the `{}` brace
+	// lowers to a `(Map T0 f0 T1 f1 …)` literal (key = type, value = field name).
+	// Phase 1 generics erases the types and keeps the field NAMES, which are bare
+	// identifiers at the value positions (not quoted strings like `.{}`).
+	if len(argv) == 2 {
+		if br, isBranch := core.AsBranch(argv[1]); isBranch && len(br) >= 1 {
+			if head, isLeaf := core.AsLeaf(br[0]); isLeaf && string(head) == core.Map {
+				name, isName := declName(ctx, argv[0], "struct", "name")
+				if !isName {
+					return "", nil, false
+				}
+				for i := 2; i < len(br); i += 2 {
+					fl, isFieldLeaf := core.AsLeaf(br[i])
+					if !isFieldLeaf {
+						ctx.Errorf(core.ErrBadForm, "generic struct field name must be an identifier, got '%s'", core.Inspect(br[i]))
+						return "", nil, false
+					}
+					fields = append(fields, string(fl))
+				}
+				return name, fields, true
+			}
 		}
 	}
 	name, isName := declName(ctx, argv[0], "struct", "name")
@@ -179,6 +351,22 @@ func structDeclShape(ctx core.Context, argv []core.Node) (name string, fields []
 		fields = append(fields, string(fl))
 	}
 	return name, fields, true
+}
+
+// templateParamName returns the name of one `(template …)` type parameter node:
+// a bare leaf `P` (unbound), or the bound form `(Bound P)` whose parameter is
+// the LAST element (the rest is the bound, erased in Phase 1). Empty for a node
+// that names no parameter.
+func templateParamName(n core.Node) string {
+	if leaf, ok := core.AsLeaf(n); ok {
+		return string(leaf)
+	}
+	if br, ok := core.AsBranch(n); ok && len(br) >= 2 {
+		if leaf, ok := core.AsLeaf(br[len(br)-1]); ok {
+			return string(leaf)
+		}
+	}
+	return ""
 }
 
 // staticReceiver resolves a `static method`/`static property` receiver node to
@@ -221,48 +409,32 @@ func staticMethod(ctx core.Context, argv []core.Node) core.Value {
 	if !named {
 		return ctx.Errorf(core.ErrBadForm, "'static method' needs a 'Receiver.Name' pattern")
 	}
-	sdata, recvType, ok := staticReceiver(ctx, recv, "static method")
+	_, recvType, ok := staticReceiver(ctx, recv, "static method")
 	if !ok {
 		return core.TvNil
 	}
-	params, ok := parseArgList(ctx, argv[1], "static method")
-	if !ok {
-		return core.TvNil
+	// A `static method` form is a SIGNATURE (Features.md §1): its params are
+	// all real arguments (the receiver type is implicit — `Self` in the sig
+	// resolves to it), flat with a `->` before the return type. The
+	// implementation is the adjacent `(let Recv.Name params… = body)` clause,
+	// which routes to StaticMethods via the "Recv/Name" registry key.
+	params, ret, ok := splitArrow(argv[1:])
+	if !ok || !isFunSig(core.Branch(params), ret) {
+		return ctx.Errorf(core.ErrBadForm, "'static method %s.%s' declares a signature only: (static method %s.%s Type… -> Result); the implementation is (let %s.%s params… = body)", core.Inspect(recv), name, core.Inspect(recv), name, core.Inspect(recv), name)
 	}
-	// Prepend `self` as the receiver parameter — bound from the instance stack
-	// (the dot access pushes the type value), so `self` in the body is the type.
-	argList := append([]string{"self"}, params...)
-	sdata.StaticMethods[name] = core.BindMethod(recvType.Name()+"."+name, argv[2], argList, ctx)
-	return core.TvNil
+	return withSelfType(ctx, core.TvType(recvType), func(sctx core.Context) core.Value {
+		return registerSig(sctx, core.Inspect(recv)+"/"+name, name, core.Branch(params), ret, true, "static method")
+	})
 }
 
 // staticProperty declares a type-level property `(static property Recv.Name get
 // getter [set setter])` — read (and optionally written) through the TYPE value,
 // the getter/setter receiving the type as their receiver.
 func staticProperty(ctx core.Context, argv []core.Node) core.Value {
-	if len(argv) != 3 && len(argv) != 5 {
-		return ctx.Errorf(core.ErrArity, "'static property' takes (Name get getter) or (Name get getter set setter); got %d", len(argv))
+	if len(argv) < 2 {
+		return ctx.Errorf(core.ErrArity, "'static property' takes (Receiver.Name (get (params) body) [(set (params) body)]); got %d", len(argv))
 	}
-	if kw, ok := core.AsLeaf(argv[1]); !ok || string(kw) != "get" {
-		return ctx.Errorf(core.ErrBadForm, "'static property' expects the keyword 'get' before the getter")
-	}
-	getter := argv[2].Evaluate(ctx)
-	if getter.Kind != core.KindFun {
-		return ctx.Errorf(core.ErrType, "static property getter must be a function or anonymous method, got kind '%s'", getter.Kind)
-	}
-	var setter core.Value
-	hasSetter := false
-	if len(argv) == 5 {
-		if kw, ok := core.AsLeaf(argv[3]); !ok || string(kw) != "set" {
-			return ctx.Errorf(core.ErrBadForm, "'static property' expects the keyword 'set' before the setter")
-		}
-		setter = argv[4].Evaluate(ctx)
-		if setter.Kind != core.KindFun {
-			return ctx.Errorf(core.ErrType, "static property setter must be a function or anonymous method, got kind '%s'", setter.Kind)
-		}
-		hasSetter = true
-	}
-	recv, name, named, ok := methodTarget(ctx, argv[0])
+	recv, name, named, ok := methodTarget(ctx, stripPropType(argv[0]))
 	if !ok {
 		return core.TvNil
 	}
@@ -270,6 +442,13 @@ func staticProperty(ctx core.Context, argv []core.Node) core.Value {
 		return ctx.Errorf(core.ErrBadForm, "'static property' needs a 'Receiver.Name' pattern")
 	}
 	sdata, _, ok := staticReceiver(ctx, recv, "static property")
+	if !ok {
+		return core.TvNil
+	}
+	// Same delegate machinery as an instance property: the `(get …)`/`(set …)`
+	// bodies bind as `self`-methods, with `self` the TYPE value pushed by the
+	// static-property dot read/write path.
+	getter, setter, hasSetter, ok := propertyDelegates(ctx, argv, true, recv)
 	if !ok {
 		return core.TvNil
 	}
@@ -295,13 +474,17 @@ func isTypeNode(node core.Node) bool {
 	if leaf, ok := core.AsLeaf(node); ok {
 		s := string(leaf)
 		if s == "Nil" || s == "True" || s == "False" {
-			return false // capitalized VALUE literals, not types (the nil TYPE is NilT)
+			return false // capitalized VALUE literals, not types (the nil TYPE is None)
 		}
 		return s != "" && s[0] >= 'A' && s[0] <= 'Z'
 	}
 	if br, ok := core.AsBranch(node); ok && len(br) >= 1 {
 		if head, ok := core.AsLeaf(br[0]); ok {
-			return typeConnectives[string(head)]
+			// A function TYPE `(fun (P…) R)` shares the head of a function value
+			// but in a type position reads as a type — so a method sig whose
+			// param is a function type (e.g. `(method I.bind (Self (fun (I) O)) O)`)
+			// is recognized and erased, not bound as an impl.
+			return typeConnectives[string(head)] || string(head) == "fun"
 		}
 	}
 	return false
@@ -318,76 +501,117 @@ func isFunSig(params, ret core.Node) bool {
 		return false
 	}
 	for _, p := range br {
-		if !isTypeNode(p) {
+		if !isSigParamNode(p) {
 			return false
 		}
 	}
-	// Non-empty all-type params already mark this a signature, so the return is
-	// a type: admit Nil/True/False in return position as NilT/Boolean (relaxed).
-	// An empty param list is ambiguous with a nullary impl returning a value, so
-	// it keeps the strict check — `(fun f () Nil)` stays an impl returning nil.
-	if len(br) > 0 {
-		return isReturnTypeNode(ret)
-	}
+	// The return slot must be a real TYPE — `None` for nil-returning, `Boolean`
+	// for bool. The value literals none/true/false are NOT types (nor is the
+	// dropped Nil/True/False). Empty and non-empty param lists both use the
+	// strict check: `(fun f () None)` is a sig; `(fun f () none)` is a nullary
+	// impl returning the nil VALUE.
 	return isTypeNode(ret)
 }
 
-// isReturnTypeNode is isTypeNode relaxed for the RETURN slot of a form whose
-// params already mark it a signature: the capitalized value literals
-// Nil/True/False are admitted as their types (NilT / Boolean).
-func isReturnTypeNode(node core.Node) bool {
-	if leaf, ok := core.AsLeaf(node); ok {
-		switch string(leaf) {
-		case "Nil", "True", "False":
-			return true
+// isSigParamNode is isTypeNode extended for a signature param slot: it also
+// accepts a `(var/spread/optional/const <type>)` modifier wrapping a type —
+// including the defaulted optional `(optional Type else DEFAULT)` — so a
+// signature can declare a mutable `(var Self)` receiver, variadic/optional
+// params, and parse-time-constant `(const T)` slots. The inner must still be
+// a type (capitalized), so an implementation's lowercase `(var self)`/
+// `(spread xs)` param is NOT mistaken for a signature.
+func isSigParamNode(node core.Node) bool {
+	if br, ok := core.AsBranch(node); ok {
+		if head, ok := core.AsLeaf(br[0]); ok {
+			switch string(head) {
+			case "var", "spread", "const", "disc":
+				return len(br) == 2 && isTypeNode(br[1])
+			case "optional":
+				if len(br) == 2 {
+					return isTypeNode(br[1])
+				}
+				// (optional Type else DEFAULT)
+				if len(br) == 4 {
+					kw, ok := core.AsLeaf(br[2])
+					return ok && string(kw) == "else" && isTypeNode(br[1])
+				}
+				return false
+			}
 		}
 	}
 	return isTypeNode(node)
+}
+
+// splitArrow splits a flat signature tail into its parameter-type nodes and the
+// single return-type node, separated by a top-level `->` marker:
+//
+//	(fun add Integer Integer -> Integer)  ->  params [Integer Integer], ret Integer
+//	(fun cwd -> String)                   ->  params [],                 ret String
+//
+// ok=false when there is no top-level `->`, or it isn't followed by exactly one
+// return node. A `->` nested inside a `(…)`/`[…]` (a function or map type) is not
+// a top-level child here, so it never interferes.
+func splitArrow(nodes []core.Node) (params []core.Node, ret core.Node, ok bool) {
+	for i, n := range nodes {
+		if lf, isLeaf := core.AsLeaf(n); isLeaf && string(lf) == "->" {
+			if i != len(nodes)-2 {
+				return nil, nil, false
+			}
+			return nodes[:i], nodes[i+1], true
+		}
+	}
+	return nil, nil, false
 }
 
 // declBuiltins returns the declaration / binding / assignment builtins:
 // var, const, fun, method, struct, =, block.
 func declBuiltins() map[string]core.StackEntry {
 	return map[string]core.StackEntry{
-		"fun": global(func(ctx core.Context, argv []core.Node) core.Value {
-			// (fun (args) body) — anonymous
-			if len(argv) == 2 {
-				argList, ok := parseArgList(ctx, argv[0], "fun")
-				if !ok {
-					return core.TvNil
+		// (template P (Bound Q) …) — declares type parameters for the following
+		// declaration. Phase 1 generics ERASES types at runtime: each parameter
+		// is bound to the top type Unknown so the following generic declaration
+		// resolves — a generic method whose receiver is a type parameter becomes
+		// a UNIVERSAL (Unknown) method, callable on any value, and a generic
+		// struct's field types collapse to Unknown (struct fields are untyped at
+		// runtime anyway). Bounds are erased. Bound idempotently: the same
+		// parameter name recurs across templates and must not redeclare.
+		"template": global(func(ctx core.Context, argv []core.Node) core.Value {
+			for _, p := range argv {
+				name := templateParamName(p)
+				if name == "" {
+					continue
 				}
-
-				return core.TvFun(core.BindFun("", argv[1], argList, ctx))
+				if _, exists := ctx.Resolve(name); !exists {
+					ctx.Declare(name, core.TvType(core.TypeUnknown), true)
+				}
 			}
+			return core.TvNil
+		}),
 
-			// (fun name (args) body)
-			if len(argv) != 3 {
-				return ctx.Errorf(core.ErrArity, "'fun' expects 2 arguments (args, body) or 3 (name, args, body); got %d", len(argv))
+		"fun": global(func(ctx core.Context, argv []core.Node) core.Value {
+			// `fun` declares a type SIGNATURE only: (fun name Types… -> Result),
+			// e.g. (fun add Integer Integer -> Integer) or the 0-arg (fun cwd ->
+			// String). Parameter TYPES are flat (no parens); `->` separates them
+			// from the return type. It registers an overload the adjacent
+			// `(let name params… = body)` clauses attach to (Features.md §1/§9). An
+			// inline callable VALUE is a lambda.
+			if len(argv) < 2 {
+				return ctx.Errorf(core.ErrBadForm, "'fun' declares a signature: (fun name Types… -> Result); to make an inline callable, use a lambda: (lambda … -> …)")
 			}
 
 			funName, ok := declName(ctx, argv[0], "fun", "name")
 			if !ok {
 				return core.TvNil
 			}
-
-			// A type SIGNATURE `(fun name (T…) R)` is recognized and ERASED at
-			// runtime — the gradual checker reads it (Phase 3), the interpreter
-			// binds nothing (the implementation form, with named params and a
-			// body, creates the function). See TypeSignatures.md §3.
-			if isFunSig(argv[1], argv[2]) {
-				return core.TvNil
-			}
-
-			argList, ok := parseArgList(ctx, argv[1], "fun")
+			params, ret, ok := splitArrow(argv[1:])
 			if !ok {
-				return core.TvNil
+				return ctx.Errorf(core.ErrBadForm, "'fun %s' is a signature: write (fun %s Type… -> ReturnType); the implementation is (let %s params… = body)", funName, funName, funName)
 			}
-
-			if !ctx.Declare(funName, core.TvFun(core.BindFun(funName, argv[2], argList, ctx)), true) {
-				ctx.Errorf(core.ErrRedeclare, "cannot declare function '%s': name already in use", funName)
+			paramsBranch := core.Branch(params)
+			if !isFunSig(paramsBranch, ret) {
+				return ctx.Errorf(core.ErrBadForm, "'fun %s' declares a signature only; parameters and the return must be types: (fun %s Type… -> ReturnType)", funName, funName)
 			}
-
-			return core.TvNil
+			return registerSig(ctx, funName, funName, paramsBranch, ret, false, "fun")
 		}),
 
 		// (macro ~name (params) body) — declares a macro. The leading `~`
@@ -417,12 +641,12 @@ func declBuiltins() map[string]core.StackEntry {
 				return ctx.Errorf(core.ErrArity, "'macro' expects (macro ~name (params) body); got %d arguments", len(argv))
 			}
 
-			argList, ok := parseArgList(ctx, argv[2], "macro")
+			argList, defaults, ok := parseArgList(ctx, argv[2], "macro")
 			if !ok {
 				return core.TvNil
 			}
 
-			if !ctx.Declare(name, core.TvMacro(core.BindFun(name, argv[3], argList, ctx)), true) {
+			if !ctx.Declare(name, core.TvMacro(core.BindFun(name, argv[3], argList, defaults, ctx)), true) {
 				ctx.Errorf(core.ErrRedeclare, "cannot declare macro '%s': name already in use", name)
 			}
 
@@ -430,134 +654,60 @@ func declBuiltins() map[string]core.StackEntry {
 		}),
 
 		"method": global(func(ctx core.Context, argv []core.Node) core.Value {
-			// (method Receiver.Name (self m) (+ self.n m)) — NAMED: registers
-			//   the method on the struct, returns Nil.
-			// (method Receiver (self) self.x)            — ANONYMOUS: returns
-			//   the bound method as a value (for `property` get/set delegates).
-			//
-			// Receiver[.Name] is a PATTERN matched structurally — the dot is
-			// never evaluated as a member access.
-			if len(argv) != 3 {
-				return ctx.Errorf(core.ErrArity, "'method' requires 3 arguments (Receiver[.Name], args, body); got %d", len(argv))
+			// `method` declares a type SIGNATURE only:
+			//   (method Recv.Name Self Type… -> Result), e.g.
+			//   (method List.sum Self -> Integer). The receiver + parameter TYPES
+			//   are flat (no parens); `->` separates them from the return type. It
+			//   registers an overload the adjacent `(let Recv.Name self … = body)`
+			//   clauses attach to. `Self` is bound to the receiver type while the
+			//   signature evaluates. Recv.Name is a PATTERN — the dot is never
+			//   evaluated as a member access.
+			if len(argv) < 1 {
+				return ctx.Errorf(core.ErrArity, "'method' requires a 'Recv.Name' signature: (method Recv.Name Self Type… -> Result)")
 			}
 
 			recv, methodName, named, ok := methodTarget(ctx, argv[0])
 			if !ok {
 				return core.TvNil
 			}
-
-			// A method type SIGNATURE `(method Recv.Name (Self …) Ret)` is
-			// recognized and ERASED at runtime — the gradual checker reads it;
-			// the implementation form (with `self` and a body) binds the
-			// method. See TypeSignatures.md §3.
-			if named && isFunSig(argv[1], argv[2]) {
-				return core.TvNil
+			if !named {
+				return ctx.Errorf(core.ErrBadForm, "'method' needs a 'Recv.Name': declare (method Recv.Name Self Type… -> Result); for an inline callable with a receiver, use a lambda: (lambda Recv self … -> body)")
 			}
 
+			params, ret, ok := splitArrow(argv[1:])
+			if !ok {
+				return ctx.Errorf(core.ErrBadForm, "'method %s.%s' is a signature: write (method %s.%s Self Type… -> Result); the implementation is (let %s.%s self … = body)", core.Inspect(recv), methodName, core.Inspect(recv), methodName, core.Inspect(recv), methodName)
+			}
+			paramsBranch := core.Branch(params)
+			if !isFunSig(paramsBranch, ret) {
+				return ctx.Errorf(core.ErrBadForm, "'method %s.%s' declares a signature only; the receiver, parameters, and return must be types: (method %s.%s Self Type… -> Result)", core.Inspect(recv), methodName, core.Inspect(recv), methodName)
+			}
 			recvVal := recv.Evaluate(ctx)
 			if recvVal.Kind != core.KindType {
 				return ctx.Errorf(core.ErrType, "'method' receiver must be a type or struct, got kind '%s'", recvVal.Kind)
 			}
-			recvType := recvVal.Val.(*core.PhoType)
+			return withSelfType(ctx, recvVal, func(sctx core.Context) core.Value {
+				return registerSig(sctx, core.Inspect(recv)+"."+methodName, methodName, paramsBranch, ret, false, "method")
+			})
+		}),
 
-			argList, ok := parseArgList(ctx, argv[1], "method")
+		// (property <Receiver.>Name (get (params) body) [(set (params) body)]) —
+		// a computed field/variable backed by a getter and optional setter. With
+		// a Receiver.Name the getter/setter are `self`-methods registered on the
+		// struct (read via inst.Name, write via (= inst.Name v)); with a bare Name
+		// they are funs bound free-standing in the env. The parenthesized
+		// `(get …)`/`(set …)` accessors are the only accepted form.
+		"property": global(func(ctx core.Context, argv []core.Node) core.Value {
+			if len(argv) < 2 {
+				return ctx.Errorf(core.ErrArity, "'property' takes (target (get (params) body) [(set (params) body)]); got %d argument(s)", len(argv))
+			}
+
+			recv, fieldName, onStruct, ok := methodTarget(ctx, stripPropType(argv[0]))
 			if !ok {
 				return core.TvNil
 			}
 
-			if len(argList) == 0 {
-				return ctx.Errorf(core.ErrBadForm, "method needs at least a receiver argument (self)")
-			}
-			// The receiver (first param) must be a plain name: parseArgList
-			// encodes `(optional x)`/`(spread x)` as "?x"/"#x", and BindMethod
-			// binds the instance under that raw key — so an optional/spread
-			// receiver leaves `self` unbound in the body. Reject it up front.
-			if m := argList[0]; len(m) > 0 && (m[0] == '?' || m[0] == '#') {
-				return ctx.Errorf(core.ErrBadForm, "method receiver cannot be optional or spread; use a plain name like (self)")
-			}
-
-			label := recvType.Name() + ".<anonymous>"
-			if named {
-				label = recvType.Name() + "." + methodName
-			}
-			// BindMethod binds the first param (self) from the instance stack
-			// at call time; the rest are the user-supplied parameters.
-			bound := core.BindMethod(label, argv[2], argList, ctx)
-
-			if !named {
-				// Anonymous: hand the method back as a callable value. It still
-				// expects its receiver on the instance stack — `property` (or a
-				// Dot wrapper) supplies it.
-				return core.TvFun(bound)
-			}
-
-			// A STRUCT type keeps its methods on the struct itself, reached
-			// globally through any instance (the KindInstance dot path) — they
-			// are NOT env names, so a method may share its name with a plain
-			// function (pctl.Stdout fun vs Process.Stdout method) without
-			// colliding. A PRIMITIVE (or universal "unknown") type stores the
-			// method in this package's import-scoped extension table, where the
-			// dot accessor resolves it for any value of that type.
-			if sdata, isStruct := core.StructOf(recvType); isStruct {
-				sdata.Methods[methodName] = bound
-				return core.TvNil
-			}
-
-			typeKey := recvType.TypeKey()
-			if typeKey == "" {
-				// A finite union receiver (e.g. Collection = String|List|Map):
-				// attach the method to every concrete member, so one declaration
-				// covers them all and dispatches on any value of those kinds.
-				keys := recvType.MemberKeys()
-				if len(keys) == 0 {
-					return ctx.Errorf(core.ErrType, "'method' cannot attach to the type '%s'", recvType.Name())
-				}
-				for _, k := range keys {
-					if !ctx.AddMethod(k, methodName, bound, false, isExportedMember(methodName)) {
-						return ctx.Errorf(core.ErrRedeclare, "method '%s' for a member of '%s' is already declared in this module", methodName, recvType.Name())
-					}
-				}
-				return core.TvNil
-			}
-			// Primitive/universal extensions are non-privileged: no private state.
-			if !ctx.AddMethod(typeKey, methodName, bound, false, isExportedMember(methodName)) {
-				return ctx.Errorf(core.ErrRedeclare, "method '%s.%s' is already declared in this module", recvType.Name(), methodName)
-			}
-			return core.TvNil
-		}),
-
-		// (property <Receiver.>Name get getter [set setter]) — a computed
-		// field/variable backed by a getter and optional setter. With a
-		// Receiver.Name the getter/setter are anonymous methods registered on
-		// the struct (read via inst.Name, write via (= inst.Name v)); with a
-		// bare Name they are anonymous funs bound free-standing in the env.
-		// `get`/`set` are positional keywords.
-		"property": global(func(ctx core.Context, argv []core.Node) core.Value {
-			if len(argv) != 3 && len(argv) != 5 {
-				return ctx.Errorf(core.ErrArity, "'property' takes (Name get getter) or (Name get getter set setter); got %d argument(s)", len(argv))
-			}
-			if kw, ok := core.AsLeaf(argv[1]); !ok || string(kw) != "get" {
-				return ctx.Errorf(core.ErrBadForm, "'property' expects the keyword 'get' before the getter")
-			}
-			getter := argv[2].Evaluate(ctx)
-			if getter.Kind != core.KindFun {
-				return ctx.Errorf(core.ErrType, "property getter must be a function or anonymous method, got kind '%s'", getter.Kind)
-			}
-
-			var setter core.Value
-			hasSetter := false
-			if len(argv) == 5 {
-				if kw, ok := core.AsLeaf(argv[3]); !ok || string(kw) != "set" {
-					return ctx.Errorf(core.ErrBadForm, "'property' expects the keyword 'set' before the setter")
-				}
-				setter = argv[4].Evaluate(ctx)
-				if setter.Kind != core.KindFun {
-					return ctx.Errorf(core.ErrType, "property setter must be a function or anonymous method, got kind '%s'", setter.Kind)
-				}
-				hasSetter = true
-			}
-
-			recv, fieldName, onStruct, ok := methodTarget(ctx, argv[0])
+			getter, setter, hasSetter, ok := propertyDelegates(ctx, argv, onStruct, recv)
 			if !ok {
 				return core.TvNil
 			}
@@ -608,16 +758,16 @@ func declBuiltins() map[string]core.StackEntry {
 
 			// Free-standing: bind the bare name to a KindProperty value so the
 			// leaf evaluator (read) and `=` (write) delegate to get/set.
-			name, _ := core.AsLeaf(argv[0])
+			name, _ := core.AsLeaf(recv)
 			if !ctx.Declare(string(name), core.TvProperty(getter, setter, hasSetter), true) {
 				return ctx.Errorf(core.ErrRedeclare, "'%s' is already declared in this scope", string(name))
 			}
 			return core.TvNil
 		}),
 
-		// (static method Recv.Name (args) body) / (static property Recv.Name get
-		// getter [set setter]) — TYPE-level members, reached through the struct's
-		// type value (`Recv.Name`) rather than an instance.
+		// (static method Recv.Name (args) body) / (static property Recv.Name
+		// (get (params) body) [(set (params) body)]) — TYPE-level members, reached
+		// through the struct's type value (`Recv.Name`) rather than an instance.
 		"static": global(func(ctx core.Context, argv []core.Node) core.Value {
 			if len(argv) < 1 {
 				return ctx.Errorf(core.ErrArity, "'static' requires 'method' or 'property' and a declaration")
@@ -646,15 +796,23 @@ func declBuiltins() map[string]core.StackEntry {
 			if len(argv) != 1 {
 				return ctx.Errorf(core.ErrArity, "'block' takes exactly 1 argument; got %d", len(argv))
 			}
-			return core.TvFun(core.BindFun("<block>", syntax.Derepr(argv[0]), []string{"?it"}, ctx))
+			return core.TvFun(core.BindFun("<block>", syntax.Derepr(argv[0]), []string{"?it"}, nil, ctx))
 		}),
 
 		// only two valid syntax types:
 		//   (= 'ident newVal)             -->   (= "ident" newVal)
 		//   (= collection.index newVal)   -->   (= (core.Dot collection index) newVal)
 		"=": global(func(ctx core.Context, argv []core.Node) core.Value {
+			// `=` is arity-overloaded by the decl/impl split: a 3-arg
+			// `(= name (params) body)` / `(= Owner.name (params) body)` is a function
+			// or method IMPLEMENTATION; the 2-arg `(= target value)` is reassignment.
+			// No 4-child `=` ever existed (this guard used to hard-require 2), so the
+			// arity is an unambiguous discriminator.
+			if len(argv) == 3 {
+				return defineFunOrMethod(ctx, argv)
+			}
 			if len(argv) != 2 {
-				return ctx.Errorf(core.ErrArity, "'=' requires exactly 2 arguments (target, value); got %d", len(argv))
+				return ctx.Errorf(core.ErrArity, "'=' requires 2 arguments (target value — reassignment) or 3 (name (params) body — a fun/method implementation); got %d", len(argv))
 			}
 
 			if leaf, ok := core.AsLeaf(argv[0]); ok {
@@ -692,6 +850,23 @@ func declBuiltins() map[string]core.StackEntry {
 
 			switch collection.Kind {
 			case core.KindInstance:
+				instance := collection.Val.(*core.Instance)
+
+				// A `.[i]` target on a struct whose type overloads `[]=`
+				// dispatches to the write operator (Features.md §7): the operands
+				// are the bracket's index and the assignment's right-hand side.
+				if bracket, ok := core.AsBranch(br[2]); ok && len(bracket) >= 1 && bracket[0] == core.Leaf(core.Slice) && !isSliceForm(bracket) {
+					if _, found := instance.Struct.Methods["[]="]; found {
+						idx, ok := assignIndex(ctx, br[2])
+						if !ok {
+							return core.TvNil
+						}
+						if v, dispatched := dispatchOperator(ctx, "[]=", collection, []core.Node{idx, argv[1]}); dispatched {
+							return v
+						}
+					}
+				}
+
 				// The field name is the literal identifier after the dot —
 				// same as the read path in the Dot accessor — never an
 				// evaluated expression.
@@ -700,8 +875,6 @@ func declBuiltins() map[string]core.StackEntry {
 					return ctx.Errorf(core.ErrBadAssign, "cannot assign to dynamic field expression '%s'", core.Inspect(br[2]))
 				}
 				field := string(lf)
-
-				instance := collection.Val.(*core.Instance)
 
 				// A computed field (property): assigning calls its setter (an
 				// anonymous method) with the instance as self.
@@ -800,6 +973,18 @@ func declBuiltins() map[string]core.StackEntry {
 		// modifier and the `=` markers are structural punctuation stripped here;
 		// names and values reuse the var/const binding logic.
 		"let": global(func(ctx core.Context, argv []core.Node) core.Value {
+			// (let [Owner.]name p1 p2 … [where guard] = body) — an implementation
+			// CLAUSE (Features.md §1/§2): flat parameters + optional guard, attached
+			// to the adjacent signature. Value bindings (`(let x = v)`,
+			// `(let var x = v)`, typed, multi) stay below. A param-less
+			// `(let name = body)` is a 0-arg function impl when `name` has a
+			// signature, else a value binding (isZeroArgClause). Canonicalize an
+			// operator-impl target first so `(let Recv.[] …)` / `(let Recv.[]= …)`
+			// become clauses named "[]"/"[]=" (Features.md §7).
+			argv = desugarOperatorTarget(argv)
+			if isClauseForm(argv) || isZeroArgClause(ctx, argv) {
+				return defineClause(ctx, argv)
+			}
 			declareLet(ctx, argv)
 			return core.TvNil
 		}),
@@ -834,7 +1019,7 @@ func declBuiltins() map[string]core.StackEntry {
 		//							'privateField 2 }))   -- init keys are values: still quoted
 		"struct": global(func(ctx core.Context, argv []core.Node) core.Value {
 			// (struct Name f0 f1 …) — bare fields — or the typed-field form
-			// (struct Name.{ F0 T0 … }); structDeclShape reads either.
+			// (struct Name.{ T0 F0 … }); structDeclShape reads either.
 			if len(argv) < 1 {
 				return ctx.Errorf(core.ErrArity, "'struct' requires at least a name; got %d argument(s)", len(argv))
 			}
@@ -973,33 +1158,120 @@ func isBareLeaf(n core.Node, word string) bool {
 	return ok && string(leaf) == word
 }
 
-// declareLet implements the first-class `let` / `let var` declaration. The form
-// is an optional `var` modifier followed by `name = value` triples; the `=`
-// markers are stripped and each (name, value) is bound exactly as var/const
-// would — immutable for `let`, mutable for `let var`.
+// declareLet implements the first-class `let` / `let var` declaration: an
+// optional leading `var` modifier followed by one or more `target = value`
+// segments. A target is a bare name, a typed `(Type name)`, or a destructuring
+// pattern (`[a b …]`, `Type.{ … }`) — see bindLetTarget. `var` (leading, or a
+// per-binder `(var …)`) makes the binding reassignable; a plain binder is const.
 func declareLet(ctx core.Context, argv []core.Node) {
 	i := 0
-	isConst := true
+	defaultMutable := false
 	if i < len(argv) && isBareLeaf(argv[i], "var") {
-		isConst = false
+		defaultMutable = true
 		i++
 	}
-	for i+2 < len(argv) {
-		if !isBareLeaf(argv[i+1], "=") {
-			ctx.Errorf(core.ErrArity, "'let' binding expects 'name = value'; missing '=' before %s", core.Inspect(argv[i+1]))
+	for i < len(argv) {
+		// The retired ungrouped typed form `Type name = value` (two bare leaves
+		// before `=`): point at the grouped `(Type name)` replacement.
+		if i+3 < len(argv) && !isBareLeaf(argv[i+1], "=") && isBareLeaf(argv[i+2], "=") {
+			ctx.Errorf(core.ErrBadForm, "a typed 'let' binding is written '(Type name) = value', not 'Type name = value'; got '%s %s'", core.Inspect(argv[i]), core.Inspect(argv[i+1]))
 			return
 		}
-		name, ok := declBindName(ctx, argv[i], "let")
-		if !ok {
+		if i+2 >= len(argv) || !isBareLeaf(argv[i+1], "=") {
+			ctx.Errorf(core.ErrArity, "'let' binding expects 'target = value'; missing '=' near %s", core.Inspect(argv[i]))
 			return
 		}
-		if !ctx.Rebind(name, argv[i+2].Evaluate(ctx), isConst) {
-			ctx.Errorf(core.ErrRedeclare, "'let' cannot shadow the builtin '%s'", name)
-			return
-		}
+		target, valueNode := argv[i], argv[i+2]
 		i += 3
+		if !bindLetTarget(ctx, target, valueNode.Evaluate(ctx), defaultMutable) {
+			return
+		}
 	}
-	if i != len(argv) {
-		ctx.Errorf(core.ErrArity, "'let' has a malformed binding list; expected 'name = value' triples")
+}
+
+// bindLetTarget binds one `let` target to v. A bare-identifier target binds
+// directly — any identifier here is a binder, never a pattern literal, so a
+// Capitalized name binds too. A branch target is a pattern: `(Type name)` (typed
+// bind — the type is erased), `(var …)`, a `[…]` list destructure, or a
+// `Type.{ … }` struct destructure. defaultMutable (the leading `var`) makes
+// every binder in the target reassignable; a per-binder `(var …)` does the same
+// for just that one. Reports and returns false on a malformed target, a match
+// failure, or a builtin-shadowing name.
+func bindLetTarget(ctx core.Context, target core.Node, v core.Value, defaultMutable bool) bool {
+	if _, isBranch := core.AsBranch(target); !isBranch {
+		name, ok := declName(ctx, target, "let", "name")
+		if !ok {
+			return false
+		}
+		return declareBinding(ctx, name, v, !defaultMutable)
 	}
+
+	// A single typed/mutable binder — (name), (var name), (Type name),
+	// (var Type name) — binds one name with its type erased. Handled here (not
+	// via the pattern engine) so the annotation may be a COMPOUND type
+	// expression like (Or Number String), which a runtime type-test pattern
+	// could not name.
+	if name, mutable, ok := simpleLetBinder(target); ok {
+		return declareBinding(ctx, name, v, !(defaultMutable || mutable))
+	}
+
+	pat, ok := parsePattern(ctx, target, newBinderSet())
+	if !ok {
+		return false
+	}
+	// A `let` has no alternative branch, so a scalar type annotation cannot
+	// drive dispatch — it is erased (gradual), leaving the destructure and
+	// mutability as the runtime-meaningful parts.
+	eraseScalarTypeTests(pat)
+
+	binds := map[string]core.Value{}
+	if !matchPattern(ctx, pat, v, binds, false) {
+		ctx.Errorf(core.ErrType, "value %s does not match pattern %s", core.Inspect(core.Lit(v)), pat.src)
+		return false
+	}
+	for _, b := range patternBinders(pat) {
+		if !declareBinding(ctx, b.name, binds[b.name], !(defaultMutable || b.mutable)) {
+			return false
+		}
+	}
+	return true
+}
+
+// simpleLetBinder recognizes a `let` target that binds exactly one name with
+// its type (if any) erased: (name), (var name), (Type name), or
+// (var Type name). The Type slot may be any expression — including a compound
+// (Or A B) — since it is a static annotation, never evaluated here. Returns
+// ok=false for a list/struct destructure or anything else (the caller then
+// routes to the pattern engine).
+func simpleLetBinder(target core.Node) (name string, mutable bool, ok bool) {
+	br, isBr := core.AsBranch(target)
+	if !isBr || len(br) == 0 {
+		return "", false, false
+	}
+	elems := br
+	if h, isLeaf := core.AsLeaf(br[0]); isLeaf && string(h) == "var" {
+		mutable = true
+		elems = br[1:]
+	}
+	switch len(elems) {
+	case 1: // (name) capture / (var name)
+		if lf, isLeaf := core.AsLeaf(elems[0]); isLeaf && isBinderName(string(lf)) {
+			return string(lf), mutable, true
+		}
+	case 2: // (Type name) / (var Type name) — the Type slot is erased
+		if lf, isLeaf := core.AsLeaf(elems[1]); isLeaf && isBinderName(string(lf)) {
+			return string(lf), mutable, true
+		}
+	}
+	return "", false, false
+}
+
+// declareBinding rebinds name to v (const unless isConst is false), reporting
+// the builtin-shadow error the way declareLet always has.
+func declareBinding(ctx core.Context, name string, v core.Value, isConst bool) bool {
+	if !ctx.Rebind(name, v, isConst) {
+		ctx.Errorf(core.ErrRedeclare, "'let' cannot shadow the builtin '%s'", name)
+		return false
+	}
+	return true
 }

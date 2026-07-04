@@ -8,8 +8,8 @@ import "testing"
 // union-receiver dispatch. A genuinely-unknown member still flags.
 func TestCollectionMemberResolves(t *testing.T) {
 	clean := []string{
-		"(method Collection.foo (self) self)\n(let a = [1 2].foo)\n(let b = 'x'.foo)\n(let c = [ 'k' -> 1 ].foo)\n",
-		"(property Collection.big? get (method Collection (self) (> self.size 1)))\n(let a = [1 2].big?)\n(let b = 'x'.big?)\n",
+		"(let Collection.foo (self) = self)\n(let a = [1 2].foo)\n(let b = 'x'.foo)\n(let c = [ 'k' -> 1 ].foo)\n",
+		"(property Collection.big? (get (self) (> self.size 1)))\n(let a = [1 2].big?)\n(let b = 'x'.big?)\n",
 	}
 	for _, src := range clean {
 		d := AnalyzeFile("t.phl", []byte(src))

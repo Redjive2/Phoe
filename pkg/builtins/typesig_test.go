@@ -19,12 +19,17 @@ func TestTypeSigErasedAtRuntime(t *testing.T) {
 			t.Errorf("eval(%q) = %v (%s), want %v", src, v.Val, v.Kind, want)
 		}
 	}
-	// Typed binding: name bound, type erased.
+	// Typed binding: name bound, type erased (grouped form).
 	num("(let (Number n) = 5)\nn", 5)
 	// fun signature no-ops; the impl binds and runs.
-	num("(fun add (Number Number) Number)\n(fun add (a b) (+ a b))\n(add 3 4)", 7)
+	num("(fun add (Number Number) Number)\n(let add (a b) = (+ a b))\n(add 3 4)", 7)
 	// method signature no-ops; the impl binds and runs.
-	num("(struct P x)\n(method P.show (self) Number)\n(method P.show (self) (* self.x 2))\n(let var p = P.{ x 5 })\n(p.show)", 10)
+	num("(struct P x)\n(method P.show (Self) Number)\n(let P.show (self) = (* self.x 2))\n(let var p = P.{ x = 5 })\n(p.show)", 10)
+	// a mutable-receiver method SIGNATURE `(var Self)` is a sig, not a
+	// body-None impl that would clobber the real one (which would leave x
+	// at 5) — the clause attaches to it and runs. A `(var Self)` receiver
+	// requires the `=` self-mutation suffix, and the impl names self plainly.
+	num("(struct P x)\n(method P.grow= ((var Self)) None)\n(let P.grow= (self) = (= self.x 10))\n(let var p = P.{ x = 5 })\n(p.grow=)\np.x", 10)
 }
 
 // A lone signature with no implementation binds nothing — calling it is

@@ -51,7 +51,7 @@ func TestCallArgSignatureCheck(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	const add = "(fun add (Number Number) Number)\n(fun add (x y) (+ x y))\n"
+	const add = "(fun add (Number Number) Number)\n(let add (x y) = (+ x y))\n"
 	cases := []struct {
 		name      string
 		src       string
@@ -63,7 +63,7 @@ func TestCallArgSignatureCheck(t *testing.T) {
 		{"nested call result feeds arg", add + "(let r = (add (add 1 2) 3))", false},
 		// Gradual guarantee.
 		{"reference arg is dynamic", add + "(let var z = 9)\n(let r = (add z 1))", false},
-		{"un-annotated callee", "(fun f (x) x)\n(let r = (f 'anything'))", false},
+		{"un-annotated callee", "(let f (x) = x)\n(let r = (f 'anything'))", false},
 		// The result type flows: add returns Number, so declaring r String mismatches.
 		{"result type flows into var", add + "(let (String r) = (add 1 2))", true},
 	}
@@ -85,18 +85,18 @@ func TestParametricSignatureCheck(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	const sumL = "(fun sum_l ((List Number)) Number)\n(fun sum_l (xs) 0)\n"
+	const sumL = "(fun sum-l ((List Number)) Number)\n(fun sum-l (xs) 0)\n"
 	cases := []struct {
 		name      string
 		src       string
 		wantError bool
 	}{
-		{"correct list literal", sumL + "(let r = (sum_l [1 2 3]))", false},
-		{"wrong element type", sumL + "(let r = (sum_l ['a' 'b']))", true},
-		{"mixed list narrows wider", sumL + "(let r = (sum_l [1 'x']))", true},
-		{"empty list ok", sumL + "(let r = (sum_l []))", false},
-		{"non-list arg", sumL + "(let r = (sum_l 5))", true},
-		{"reference arg is dynamic", sumL + "(let var z = [1])\n(let r = (sum_l z))", false},
+		{"correct list literal", sumL + "(let r = (sum-l [1 2 3]))", false},
+		{"wrong element type", sumL + "(let r = (sum-l ['a' 'b']))", true},
+		{"mixed list narrows wider", sumL + "(let r = (sum-l [1 'x']))", true},
+		{"empty list ok", sumL + "(let r = (sum-l []))", false},
+		{"non-list arg", sumL + "(let r = (sum-l 5))", true},
+		{"reference arg is dynamic", sumL + "(let var z = [1])\n(let r = (sum-l z))", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -117,19 +117,19 @@ func TestOccurrenceTyping(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	const decls = "(fun need_n (Number) Number)\n(fun need_n (n) n)\n" +
-		"(fun need_s (String) String)\n(fun need_s (s) s)\n" +
+	const decls = "(fun need-n (Number) Number)\n(fun need-n (n) n)\n" +
+		"(fun need-s (String) String)\n(fun need-s (s) s)\n" +
 		"(let var ((Or Number String) x) = 5)\n"
 	cases := []struct {
 		name      string
 		src       string
 		wantError bool
 	}{
-		{"narrowed both arms correct", decls + "(if (x.is? Number) then (need_n x) else (need_s x))", false},
-		{"then-arm wrong after narrow", decls + "(if (x.is? Number) then (need_s x) else (need_n x))", true},
-		{"else-arm wrong after narrow", decls + "(if (x.is? Number) then (need_n x) else (need_n x))", true},
-		{"unguarded union arg", decls + "(need_n x)", true},
-		{"unless inverts arms", decls + "(unless (x.is? Number) then (need_s x) else (need_n x))", false},
+		{"narrowed both arms correct", decls + "(if (x.is? Number) then (need-n x) else (need-s x))", false},
+		{"then-arm wrong after narrow", decls + "(if (x.is? Number) then (need-s x) else (need-n x))", true},
+		{"else-arm wrong after narrow", decls + "(if (x.is? Number) then (need-n x) else (need-n x))", true},
+		{"unguarded union arg", decls + "(need-n x)", true},
+		{"unless inverts arms", decls + "(unless (x.is? Number) then (need-s x) else (need-n x))", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

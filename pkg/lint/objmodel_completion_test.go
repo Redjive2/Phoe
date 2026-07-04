@@ -36,7 +36,7 @@ func TestDotCompletionOnPrimitives(t *testing.T) {
 // A user-declared method on a primitive type surfaces in completion: the
 // walker collects it under the type name like a struct method.
 func TestDotCompletionUserPrimitiveExtension(t *testing.T) {
-	src := "(method Number.Double (self) do (* self 2))\n(var n 5)\n(var q n.)\n"
+	src := "(let Number.Double (self) = (* self 2))\n(var n 5)\n(var q n.)\n"
 	defs := CompletionsAt("main.pho", []byte(src), 3, 10)
 	if !containsName(defs, "Double") {
 		t.Fatalf("user primitive extension Double missing from completion, got %v", defNames(defs))
@@ -49,7 +49,7 @@ func TestDotCompletionUserPrimitiveExtension(t *testing.T) {
 // Hover and go-to-definition resolve a user-declared method on a primitive
 // type, through the same machinery as struct methods.
 func TestNavOnUserPrimitiveExtension(t *testing.T) {
-	src := "(method Number.double (self) do (* self 2))\n(let var n = 5)\n(let var q = (n.double))\n"
+	src := "(let Number.double (self) = (* self 2))\n(let var n = 5)\n(let var q = (n.double))\n"
 
 	site, ok := DefinitionAt("main.pho", []byte(src), 3, 17)
 	if !ok {

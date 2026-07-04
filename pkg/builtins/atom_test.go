@@ -37,7 +37,7 @@ func TestAtomPredicateAndConversions(t *testing.T) {
 	wantBool(t, `(atom? 'fast')`, false)
 	wantBool(t, "(atom? 5)", false)
 
-	if v := evalProgram(t, "(atom_name :fast)"); v.Kind != core.KindStr || v.Val.(string) != "fast" {
+	if v := evalProgram(t, "(atom-name :fast)"); v.Kind != core.KindStr || v.Val.(string) != "fast" {
 		t.Errorf("(atomName :fast) = %q (%v), want str \"fast\"", v.Kind, v.Val)
 	}
 	if v := evalProgram(t, `(atom 'fast')`); v.Kind != core.KindAtom || v.Val.(*core.Atom).Name() != "fast" {

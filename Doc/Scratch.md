@@ -419,8 +419,8 @@ function:
 
 ```
 (import "std/io")
-(io.PrintLine "a" "b" "c")
-(io.ReadLine "heyo: ")
+(io/PrintLine "a" "b" "c")
+(io/ReadLine "heyo: ")
 ```
 
 Demonstrates the surface area: a directory `import`, file-scoped `io`

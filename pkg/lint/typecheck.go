@@ -21,10 +21,74 @@ import (
 // are Dynamic-free and not subtypes, so un-annotated code (and anything the
 // checker can't pin down) is never flagged.
 
-// funSig is a harvested function signature.
+// funSig is a harvested function signature — one OVERLOAD of a callable
+// (Features.md §9: a name may carry several signatures, distinguished by arity
+// and parameter types).
 type funSig struct {
 	Params []*core.PhoType
 	Result *core.PhoType
+	// Min/Max bound the accepted ARGUMENT count: Min counts the required
+	// params; Max is len(Params), or -1 when a trailing `(spread T)` accepts
+	// any surplus. Annotation-harvested sigs are exact (Min = Max = arity).
+	Min, Max int
+	// Const marks the parse-time-constant `(const T)` slots (Features.md §1);
+	// nil when the sig has none. Read by the clause checker.
+	Const []bool
+}
+
+// exactSig builds a funSig with a fixed arity (no optional/spread slots) — the
+// shape the annotation harvest produces.
+func exactSig(params []*core.PhoType, result *core.PhoType) *funSig {
+	return &funSig{Params: params, Result: result, Min: len(params), Max: len(params)}
+}
+
+// admitsArity reports whether the sig accepts n call arguments.
+func (s *funSig) admitsArity(n int) bool {
+	return n >= s.Min && (s.Max < 0 || n <= s.Max)
+}
+
+// sigIndex maps a callable name to its signature OVERLOADS, in source order.
+type sigIndex map[string][]*funSig
+
+// add appends one overload.
+func (s sigIndex) add(name string, sig *funSig) { s[name] = append(s[name], sig) }
+
+// one returns the sole signature of name — nil when the name is absent OR
+// overloaded, so single-sig call paths stay precise and overloads stay gradual.
+func (s sigIndex) one(name string) *funSig {
+	if list := s[name]; len(list) == 1 {
+		return list[0]
+	}
+	return nil
+}
+
+// forArity returns the first overload of name whose arity window admits n
+// arguments, or nil. Declaration order mirrors the runtime's "clauses attach to
+// the latest preceding signature" reading closely enough for typing.
+func (s sigIndex) forArity(name string, n int) *funSig {
+	for _, sig := range s[name] {
+		if sig.admitsArity(n) {
+			return sig
+		}
+	}
+	return nil
+}
+
+// commonResult returns the result type every overload of name shares, or nil
+// when the name is absent or the overloads disagree (the result then stays
+// gradual — no false positive).
+func (s sigIndex) commonResult(name string) *core.PhoType {
+	list := s[name]
+	if len(list) == 0 || list[0].Result == nil {
+		return nil
+	}
+	r := list[0].Result
+	for _, sig := range list[1:] {
+		if sig.Result != r {
+			return nil
+		}
+	}
+	return r
 }
 
 // flowEnv maps a binding name to its currently-known type (narrowed within a
@@ -49,7 +113,19 @@ func (f flowEnv) narrowed(name string, t *core.PhoType) flowEnv {
 }
 
 func provableMismatch(actual, expected *core.PhoType) bool {
-	if actual == nil || expected == nil || actual.IsGradual() || expected.IsGradual() {
+	if actual == nil || expected == nil || actual.IsGradual() {
+		return false
+	}
+	// A generic type variable expected: the value must fit SOME instantiation of
+	// the parameter — a subtype of its bound. It is a provable mismatch only when
+	// the value is DISJOINT from the bound (no instantiation could accept it).
+	// Disjointness, not subtype: a value narrower than the bound (e.g. `5` for a
+	// Number-bounded var) is a perfectly good instantiation. An unbounded
+	// parameter (bound = Unknown) is disjoint from nothing, so it never fires.
+	if bound, ok := core.TypeVarBound(expected); ok {
+		return !bound.IsGradual() && !bound.IsEmpty() && actual.And(bound).IsEmpty()
+	}
+	if expected.IsGradual() {
 		return false
 	}
 	return !core.Subtype(actual, expected)
@@ -117,6 +193,40 @@ func collectTypeAliases(tree []ast.PNode) typeEnv {
 	return env
 }
 
+// collectTemplateVars binds each `(template …)` type parameter to a fresh core
+// type variable (its bound resolved against env) so a generic struct/method's
+// uses of the parameter resolve to a VARIABLE — checked by its bound and
+// substituted at instantiation — rather than a bare gradual placeholder. Runs
+// after collectTypeAliases so a bound may name a user alias. File-scoped for now
+// (a parameter is visible file-wide); since variables are gradual, the scoping
+// imprecision never causes a false positive.
+func (w *walker) collectTemplateVars(tree []ast.PNode, env typeEnv) {
+	for _, form := range tree {
+		d, ok := declOf(form)
+		if !ok || d.Head != "template" {
+			continue
+		}
+		for _, p := range d.TemplateParams {
+			var bound *core.PhoType
+			if p.Bound != nil {
+				bound = resolveTypeNode(p.Bound, env)
+			}
+			tv := core.TypeVar(p.Name, bound)
+			env[p.Name] = tv
+			// A struct bound: record its NAME so bound METHOD access can reach the
+			// nominal struct's method table (the bound record carries only fields).
+			if leaf, ok := p.Bound.(*ast.PLeaf); ok {
+				if _, isStruct := w.fileScope.LookupStruct(leaf.Value); isStruct {
+					if w.tvarBoundStruct == nil {
+						w.tvarBoundStruct = map[*core.PhoType]string{}
+					}
+					w.tvarBoundStruct[tv] = leaf.Value
+				}
+			}
+		}
+	}
+}
+
 // resolveAnnotType maps a harvested annotation value to a type. A bare name is
 // a string ("Number" or a user alias); a connective form is a (possibly nested)
 // array (`(Or Number String)` → ["Or" "Number" "String"]). Unknown names/forms
@@ -176,14 +286,14 @@ func resolveAnnotArray(arr []core.Value, env typeEnv) *core.PhoType {
 			return core.ArrowType(resolveTypeList(arr[1], env), resolveAnnotType(arr[2], env))
 		}
 	case "Struct":
-		// `Struct.{ X T Y U }` harvests as ["Struct" "\"X\"" T "\"Y\"" U]; the
+		// `Struct.{ T X U Y }` harvests as ["Struct" T "\"X\"" U "\"Y\""]; the
 		// field names are quoted string source-text (the parser stringifies the
-		// brace keys).
+		// brace names), interleaved as Type name pairs.
 		if len(arr)%2 == 1 {
 			fields := map[string]*core.PhoType{}
 			for i := 1; i+1 < len(arr); i += 2 {
-				if name, ok := unquoteField(arr[i].Val); ok {
-					fields[name] = resolveAnnotType(arr[i+1], env)
+				if name, ok := unquoteField(arr[i+1].Val); ok {
+					fields[name] = resolveAnnotType(arr[i], env)
 				}
 			}
 			return core.RecordType(fields)
@@ -245,15 +355,28 @@ func resolveTypeNode(n ast.PNode, env typeEnv) *core.PhoType {
 					if len(node.Children) == 3 {
 						return core.ArrowType(resolveTypeNodeList(node.Children[1], env), resolveTypeNode(node.Children[2], env))
 					}
+				case "fun":
+					// A function TYPE `(fun (P…) R)` — lowercase, PAREN params (the
+					// value-level function syntax reused in a type position, e.g. a
+					// generic sig `(method I.bind (Self (fun (I) O)) O)`).
+					if len(node.Children) == 3 {
+						var ptypes []*core.PhoType
+						if pl, ok := node.Children[1].(*ast.PBranch); ok {
+							for _, p := range pl.Children {
+								ptypes = append(ptypes, resolveTypeNode(p, env))
+							}
+						}
+						return core.ArrowType(ptypes, resolveTypeNode(node.Children[2], env))
+					}
 				case "Struct":
-					// `Struct.{ X T Y U }` parses to (Struct "X" T "Y" U) — the
-					// field-name keys are stringified by the parser.
+					// `Struct.{ T X U Y }` parses to (Struct T "X" U "Y") — Type
+					// name pairs; the field-name keys are stringified by the parser.
 					if len(node.Children)%2 == 1 {
 						fields := map[string]*core.PhoType{}
 						for i := 1; i+1 < len(node.Children); i += 2 {
-							if lf, ok := node.Children[i].(*ast.PLeaf); ok {
+							if lf, ok := node.Children[i+1].(*ast.PLeaf); ok {
 								if name, ok := unquoteField(lf.Value); ok {
-									fields[name] = resolveTypeNode(node.Children[i+1], env)
+									fields[name] = resolveTypeNode(node.Children[i], env)
 								}
 							}
 						}
@@ -292,7 +415,7 @@ func traitFormParts(node *ast.PBranch) (extends *ast.PBranch, members []ast.PNod
 // (method/property/static) rather than the extends-list.
 func isTraitMemberNode(br *ast.PBranch) bool {
 	switch headIdent(br) {
-	case "method", "property", "static":
+	case "method", "property", "static", "=":
 		return true
 	}
 	return false
@@ -336,14 +459,29 @@ func resolveTraitNode(node *ast.PBranch, env typeEnv) *core.PhoType {
 		switch headIdent(sb) {
 		case "method":
 			arity := 0
+			var params []*core.PhoType
 			if len(sb.Children) >= 3 {
 				if args, ok := sb.Children[2].(*ast.PBranch); ok && len(args.Children) > 0 {
 					arity = len(args.Children) - 1 // exclude self
+					for _, p := range args.Children[1:] {
+						params = append(params, resolveTypeNode(p, env))
+					}
 				}
 			}
-			info.Methods[name] = core.TraitMethod{Arity: arity}
+			// A trait method sig `(method self.m (self …) R)` carries its result
+			// type R (Children[3]) — read so a bound trait method call types.
+			var result *core.PhoType
+			if len(sb.Children) >= 4 {
+				result = resolveTypeNode(sb.Children[3], env)
+			}
+			info.Methods[name] = core.TraitMethod{Arity: arity, Params: params, Result: result}
 		case "property":
 			p := core.TraitProperty{}
+			// A typed property `(property (Type Self.name) get)` carries its value
+			// type, so a bound trait property access `b.name` types as Type.
+			if tb, ok := sb.Children[1].(*ast.PBranch); ok && len(tb.Children) == 2 {
+				p.Type = resolveTypeNode(tb.Children[0], env)
+			}
 			for _, c := range sb.Children[2:] {
 				if lf, ok := c.(*ast.PLeaf); ok {
 					switch lf.Value {
@@ -418,9 +556,28 @@ func (w *walker) checkTraitArg(arg ast.PNode, info *core.TraitInfo, label string
 	return true
 }
 
-// traitMemberName extracts the member name from a `Self.Name` receiver pattern.
+// checkTraitArgOK is checkTraitArg's SILENT twin, for overload probing: it
+// reports whether the trait slot handled-and-accepted the argument (a known
+// struct with every member, or an undecidable struct — gradual) without
+// emitting anything. false falls the caller through to the generic mismatch
+// probe, mirroring checkTraitArg's false.
+func (w *walker) checkTraitArgOK(arg ast.PNode, info *core.TraitInfo) bool {
+	sh := w.inferShape(w.checkScope, arg)
+	if sh.Kind != ShapeInstance || sh.Owner == "" {
+		return false // not a known struct — the generic probe decides
+	}
+	missing, decided := w.structMissingTraitMembers(w.checkScope, sh.Owner, info)
+	return !decided || len(missing) == 0
+}
+
+// traitMemberName extracts the member name from a `Self.Name` receiver pattern,
+// unwrapping a typed property wrapper `(Type Self.Name)` first.
 func traitMemberName(sb *ast.PBranch) string {
-	if dot, ok := sb.Children[1].(*ast.PDot); ok {
+	node := sb.Children[1]
+	if tb, ok := node.(*ast.PBranch); ok && len(tb.Children) == 2 {
+		node = tb.Children[1] // typed property `(Type Self.Name)` → the receiver pattern
+	}
+	if dot, ok := node.(*ast.PDot); ok {
 		if rhs, ok := dot.RHS.(*ast.PLeaf); ok {
 			return rhs.Value
 		}
@@ -481,7 +638,7 @@ var intLiteralRe = regexp.MustCompile(`^-?[0-9]+$`)
 // get their precise type; an identifier gets its (possibly narrowed) flow type;
 // a call to an annotated function gets that function's result type; everything
 // else is Dynamic.
-func inferType(n ast.PNode, sigs map[string]*funSig, flow flowEnv) *core.PhoType {
+func inferType(n ast.PNode, sigs sigIndex, flow flowEnv) *core.PhoType {
 	switch node := n.(type) {
 	case *ast.PLeaf:
 		v := node.Value
@@ -516,8 +673,13 @@ func inferType(n ast.PNode, sigs map[string]*funSig, flow flowEnv) *core.PhoType
 		}
 		if node.Open == "(" && len(node.Children) >= 1 {
 			if head, ok := node.Children[0].(*ast.PLeaf); ok {
-				if sig, found := sigs[head.Value]; found && sig.Result != nil {
+				// Prefer the overload the call's ARITY selects; overloads that
+				// all agree on a result still type an arity-unmatched call.
+				if sig := sigs.forArity(head.Value, len(node.Children)-1); sig != nil && sig.Result != nil {
 					return sig.Result
+				}
+				if r := sigs.commonResult(head.Value); r != nil {
+					return r
 				}
 			}
 		}
@@ -549,6 +711,28 @@ func (w *walker) harvestFieldTypes(scope *Scope, tree []ast.PNode, env typeEnv) 
 			}
 			si.FieldTypes[f.Name] = resolveTypeNode(f.Type, env)
 		}
+	}
+}
+
+// harvestPropertyTypes records every local struct-attached typed property's
+// declared value type onto its owner's structInfo.PropertyTypes, resolving the
+// `(property (Type Recv.name) …)` type under the alias env. Untyped properties,
+// free-standing ones (no owner), and primitive/union receivers are skipped — a
+// struct property mirrors a field for member-access typing (`inst.prop`).
+func (w *walker) harvestPropertyTypes(scope *Scope, tree []ast.PNode, env typeEnv) {
+	for _, form := range tree {
+		d, ok := declOf(form)
+		if !ok || d.Head != "property" || d.Owner == "" || d.Name == "" || d.PropType == nil {
+			continue
+		}
+		si, ok := scope.LookupStruct(d.Owner)
+		if !ok {
+			continue
+		}
+		if si.PropertyTypes == nil {
+			si.PropertyTypes = map[string]*core.PhoType{}
+		}
+		si.PropertyTypes[d.Name] = resolveTypeNode(d.PropType, env)
 	}
 }
 
@@ -636,12 +820,44 @@ func (w *walker) localFieldResolve(scope *Scope) func(ast.PNode) (Shape, bool) {
 // typed struct instance yields field F's declared type (FieldTypes). The free
 // inferType can't do this — it has no struct tables — so the walker resolves the
 // receiver's shape over the file scope and reads the owner's FieldTypes.
-func (w *walker) exprType(n ast.PNode, sigs map[string]*funSig, flow flowEnv) *core.PhoType {
+func (w *walker) exprType(n ast.PNode, sigs sigIndex, flow flowEnv) *core.PhoType {
 	if dot, ok := n.(*ast.PDot); ok {
 		if rhs, ok := dot.RHS.(*ast.PLeaf); ok {
+			// Per-instance type arguments: if the receiver has a record type (an
+			// instantiated generic instance carries its type args as concrete field
+			// types), resolve the field from it — it overrides the struct's shared
+			// declared FieldTypes, which for a generic field is only the bare var.
+			if lt := w.exprType(dot.LHS, sigs, flow); lt != nil {
+				if ft := core.FieldsOf(lt); ft != nil {
+					if t, found := ft[rhs.Value]; found {
+						return t
+					}
+				}
+				// A value typed as a BOUNDED type variable may use its bound's
+				// members: resolve a field through the bound's record shape (so a
+				// generic `(template (Shape B))` param's `b.field` types as the
+				// field's declared type). Method members need the nominal struct's
+				// table, which the structural bound doesn't carry — see notes.
+				if bound, ok := core.TypeVarBound(lt); ok {
+					if ft := core.FieldsOf(bound); ft != nil {
+						if t, found := ft[rhs.Value]; found {
+							return t
+						}
+					}
+					// A TRAIT bound: resolve a required property's declared type.
+					if info, isTrait := core.TraitOf(bound); isTrait {
+						if p, found := info.Properties[rhs.Value]; found && p.Type != nil {
+							return p.Type
+						}
+					}
+				}
+			}
 			sh := w.inferShape(w.checkScope, dot.LHS)
-			if si, ok := w.resolveStruct(w.checkScope, sh); ok && si.FieldTypes != nil {
+			if si, ok := w.resolveStruct(w.checkScope, sh); ok {
 				if t, found := si.FieldTypes[rhs.Value]; found {
+					return t
+				}
+				if t, found := si.PropertyTypes[rhs.Value]; found {
 					return t
 				}
 			}
@@ -653,12 +869,79 @@ func (w *walker) exprType(n ast.PNode, sigs map[string]*funSig, flow flowEnv) *c
 		if dot, ok := br.Children[0].(*ast.PDot); ok {
 			if rhs, ok := dot.RHS.(*ast.PLeaf); ok {
 				sh := w.inferShape(w.checkScope, dot.LHS)
-				if sig := w.methodSigFor(w.checkScope, sh.Owner, rhs.Value); sig != nil && sig.Result != nil {
+				owner := sh.Owner
+				if owner == "" {
+					// A bounded type-variable receiver `(b.method …)` resolves the
+					// method through its bound: a STRUCT bound via the nominal
+					// struct's method table, a TRAIT bound via the trait's required
+					// methods (which carry the declared result type).
+					if lt := w.exprType(dot.LHS, sigs, flow); lt != nil {
+						if bn, ok := w.tvarBoundStruct[lt]; ok {
+							owner = bn
+						}
+						if bound, ok := core.TypeVarBound(lt); ok {
+							if info, isTrait := core.TraitOf(bound); isTrait {
+								if m, found := info.Methods[rhs.Value]; found && m.Result != nil {
+									return m.Result
+								}
+							}
+						}
+					}
+				}
+				if sig := w.methodSigFor(w.checkScope, owner, rhs.Value); sig != nil && sig.Result != nil {
+					if r, ok := w.instantiateResultVar(sig.Result, sig.Params, br.Children[1:], sigs, flow); ok {
+						return r
+					}
 					return sig.Result
 				}
 			}
 		}
 	}
+	// A generic function call whose RESULT is a type PARAMETER that also appears
+	// among the PARAMETERS instantiates to the matching argument's type — the
+	// parametric-polymorphism win: `(fun id (I) I)` → `(id 5)` : Number. The sig's
+	// param and result resolve to the SAME interned type variable, so a pointer
+	// match locates the argument that fixes the result.
+	if br, ok := n.(*ast.PBranch); ok && br.Open == "(" && len(br.Children) >= 2 {
+		if head, ok := br.Children[0].(*ast.PLeaf); ok {
+			for _, sig := range sigs[head.Value] {
+				if r, ok := w.instantiateResultVar(sig.Result, sig.Params, br.Children[1:], sigs, flow); ok {
+					return r
+				}
+			}
+		}
+	}
+	// A `(fun (params) body)` literal has the arrow type params→body-type, so a
+	// higher-order generic call can extract its result (the `bind`/`apply`
+	// pattern). Its params are unannotated (gradual); the result is the body's
+	// inferred type.
+	if br, ok := n.(*ast.PBranch); ok && br.Open == "(" && len(br.Children) == 3 {
+		if head, ok := br.Children[0].(*ast.PLeaf); ok && head.Value == "fun" {
+			if params, ok := br.Children[1].(*ast.PBranch); ok && params.Open == "(" {
+				ptypes := make([]*core.PhoType, len(params.Children))
+				for i := range ptypes {
+					ptypes[i] = core.TypeDynamic
+				}
+				return core.ArrowType(ptypes, w.exprType(br.Children[2], sigs, flow))
+			}
+		}
+	}
+	// A struct construction `(Struct "field" value …)` has an INSTANTIATED record
+	// type: its generic fields resolved to the constructed values' types, so
+	// `c.field` resolves to the type argument. (A non-generic struct yields the
+	// same record its declared field types would.)
+	if br, ok := n.(*ast.PBranch); ok && br.Open == "(" && len(br.Children) >= 1 {
+		if head, ok := br.Children[0].(*ast.PLeaf); ok && looksLikeIdentifier(head.Value) {
+			if def, _, found := w.checkScope.Lookup(head.Value); found && def.Kind == DefStruct {
+				if si, ok := w.checkScope.LookupStruct(head.Value); ok {
+					if rec := w.instanceRecordType(br, si, sigs, flow); rec != nil {
+						return rec
+					}
+				}
+			}
+		}
+	}
+
 	t := inferType(n, sigs, flow)
 	// A struct VARIABLE/expression whose precise type the literal-driven
 	// inferType can't see (Dynamic) gets its struct record, so a struct-shaped
@@ -669,6 +952,40 @@ func (w *walker) exprType(n ast.PNode, sigs map[string]*funSig, flow flowEnv) *c
 		}
 	}
 	return t
+}
+
+// instantiateResultVar instantiates a call's result when the callee's RESULT is
+// a type variable, from the arguments in the positions that fix it: a parameter
+// that IS the result variable contributes its argument's type (parametric
+// result — `id`), and a function-typed parameter `(fun (…) O)` whose result IS
+// the result variable contributes its argument function's result type (the
+// higher-order `(fun apply (I (fun (I) O)) O)` / `bind` pattern). The
+// contributions are joined. Returns (result, false) when nothing fixes it.
+func (w *walker) instantiateResultVar(result *core.PhoType, params []*core.PhoType, args []ast.PNode, sigs sigIndex, flow flowEnv) (*core.PhoType, bool) {
+	if result == nil || !core.IsTypeVar(result) {
+		return nil, false
+	}
+	res, matched := core.TypeNone, false
+	for i, p := range params {
+		if i >= len(args) {
+			break
+		}
+		switch {
+		case p == result:
+			if at := w.exprType(args[i], sigs, flow); at != nil {
+				res, matched = res.Or(at), true
+			}
+		default:
+			// A function-typed parameter whose result is the variable: take the
+			// argument function's result type.
+			if ar, ok := core.ArrowResult(p); ok && ar == result {
+				if aar, ok := core.ArrowResult(w.exprType(args[i], sigs, flow)); ok && aar != nil {
+					res, matched = res.Or(aar), true
+				}
+			}
+		}
+	}
+	return res, matched
 }
 
 // shapeToType maps an inferred runtime SHAPE to the broad set-theoretic type of
@@ -735,6 +1052,48 @@ func (w *walker) structRecord(si *structInfo) *core.PhoType {
 	return si.recordType
 }
 
+// instanceRecordType builds the INSTANTIATED record type of a struct
+// construction `(Struct "field" value …)`: each declared field type, with a
+// generic (type-variable) field resolved to its constructed value's type — the
+// per-construction type argument. So `(const c Box.{ v 5 })` gives `c` the record
+// `{ v: Number }` and `c.v` resolves to Number downstream, not to the bare
+// variable. A generic field is instantiated to the value's coarse (base) shape
+// type — Number, not the singleton `5` — so a later field write isn't
+// false-flagged. Returns nil unless every field resolves precisely (a gradual
+// field would make the record unsound), keeping such instances coarse.
+func (w *walker) instanceRecordType(br *ast.PBranch, si *structInfo, sigs sigIndex, flow flowEnv) *core.PhoType {
+	if si == nil || len(si.FieldTypes) != len(si.Fields) {
+		return nil // not fully typed
+	}
+	fields := make(map[string]*core.PhoType, len(si.Fields))
+	for name, t := range si.FieldTypes {
+		fields[name] = t // declared type (concrete field, or an un-instantiated var)
+	}
+	for i := 1; i+1 < len(br.Children); i += 2 {
+		nameLeaf, ok := br.Children[i].(*ast.PLeaf)
+		if !ok {
+			continue
+		}
+		fname, ok := unquoteField(nameLeaf.Value)
+		if !ok {
+			continue
+		}
+		if core.IsTypeVar(fields[fname]) {
+			vt := shapeToType(w.inferShape(w.checkScope, br.Children[i+1]))
+			if vt == nil {
+				vt = w.exprType(br.Children[i+1], sigs, flow)
+			}
+			fields[fname] = vt
+		}
+	}
+	for _, t := range fields {
+		if t == nil || t.IsGradual() {
+			return nil // an un-inferrable field — keep the instance coarse
+		}
+	}
+	return core.RecordType(fields)
+}
+
 // shapeRecordType is the precise type of a struct-instance shape: the owner
 // struct's record (nil for a non-instance shape, an unknown struct, or one that
 // isn't fully typed). Lets exprType give a struct variable a real type.
@@ -783,7 +1142,7 @@ func (w *walker) addStructTypes(env typeEnv, tree []ast.PNode) {
 // fire merely because the coarse shape type isn't a subtype. This lets a
 // struct/list/num variable be caught against an incompatible declared type with
 // no annotation, while a `5`/`(List Number)`/record-typed slot stays silent.
-func (w *walker) typeMismatch(node ast.PNode, expected *core.PhoType, sigs map[string]*funSig, flow flowEnv) (*core.PhoType, bool) {
+func (w *walker) typeMismatch(node ast.PNode, expected *core.PhoType, sigs sigIndex, flow flowEnv) (*core.PhoType, bool) {
 	actual := w.exprType(node, sigs, flow)
 	if provableMismatch(actual, expected) {
 		return actual, true
@@ -834,16 +1193,34 @@ func (w *walker) checkTypes(tree []ast.PNode) {
 	// downstream — annotations, guards — resolves user names alongside builtins.
 	env := collectTypeAliases(tree)
 
-	// Record typed struct fields `(struct Name.{ F T … })` onto their owners'
-	// FieldTypes, so member access `inst.F` types as T.
+	// Record typed struct fields `(struct Name.{ T F … })` onto their owners'
+	// FieldTypes, so member access `inst.F` types as T. (First pass: a generic
+	// struct's type-variable field still resolves to Dynamic here — its variable
+	// isn't bound until collectTemplateVars below; a second pass then fixes it.)
 	w.harvestFieldTypes(w.checkScope, tree, env)
+
+	// Record typed properties `(property (Type Recv.name) …)` onto their owners'
+	// PropertyTypes, so member access `inst.prop` types as Type — the property
+	// analogue of FieldTypes.
+	w.harvestPropertyTypes(w.checkScope, tree, env)
 
 	// Bind each fully-typed struct's name to its record type, so a struct name
 	// in an annotation resolves to the struct rather than Dynamic. After the
-	// field harvest (records need FieldTypes), before signatures are resolved.
+	// field harvest (records need FieldTypes), before signatures are resolved —
+	// and before template bounds, so a struct/trait BOUND resolves to its record.
 	w.addStructTypes(env, tree)
 
-	sigs := map[string]*funSig{}
+	// Bind generic type parameters `(template …)` to type variables — after
+	// addStructTypes so a struct/trait bound resolves to its record (not Dynamic),
+	// enabling the bound check and bound-member access for struct-bounded params.
+	w.collectTemplateVars(tree, env)
+
+	// Second field pass: now that the type variables are bound, a generic struct's
+	// variable-typed field resolves to its variable (overwriting the Dynamic the
+	// first pass recorded), so instantiation and the construction bound check see it.
+	w.harvestFieldTypes(w.checkScope, tree, env)
+
+	sigs := sigIndex{}
 	base := flowEnv{}
 
 	// Inline type signatures feed the checker alongside the legacy `--@`
@@ -860,7 +1237,7 @@ func (w *walker) checkTypes(tree []ast.PNode) {
 		switch {
 		case d.IsSig && d.Head == "fun" && d.Name != "":
 			if sig := inlineFunSig(d, env); sig != nil {
-				sigs[d.Name] = sig
+				sigs.add(d.Name, sig)
 			}
 		case (d.Head == "var" || d.Head == "const") && form != nil:
 			w.checkInlineTypedBinds(form, env, sigs, base)
@@ -881,7 +1258,7 @@ func (w *walker) checkTypes(tree []ast.PNode) {
 		switch {
 		case d.Head == "fun" && d.Name != "":
 			if sig := sigFromEntries(entries, env); sig != nil {
-				sigs[d.Name] = sig
+				sigs[d.Name] = []*funSig{sig} // a legacy annotation wins over inline sigs
 			}
 		case (d.Head == "var" || d.Head == "const") && len(d.Binds) > 0:
 			declared := typeFromEntries(entries, env)
@@ -937,7 +1314,7 @@ func (w *walker) checkTypes(tree []ast.PNode) {
 	// declared result type.
 	for _, form := range tree {
 		if d, ok := declOf(form); ok && d.Head == "fun" && d.Name != "" && !d.IsSig && d.ArgList != nil && d.Body != nil {
-			if sig, found := sigs[d.Name]; found && sig.Result != nil {
+			if sig := sigs.forArity(d.Name, clauseParamCount(d)); sig != nil && sig.Result != nil {
 				w.checkReturns(sigs, d, sig)
 			}
 		}
@@ -953,7 +1330,7 @@ func (w *walker) checkTypes(tree []ast.PNode) {
 // implicit return) and every explicit `(return X)`. Parameters are bound to
 // their declared types so a return that uses them resolves. Un-inferable
 // returns are Dynamic ⇒ gradual (no false positive).
-func (w *walker) checkReturns(sigs map[string]*funSig, d topLevelDecl, sig *funSig) {
+func (w *walker) checkReturns(sigs sigIndex, d topLevelDecl, sig *funSig) {
 	// Infer shapes against the body's scope (params/locals), like checkBody, so a
 	// returned local struct/value is seen.
 	if bodyScope, ok := w.bodyScopes[d.Body]; ok {
@@ -1042,6 +1419,14 @@ func collectReturns(n ast.PNode, out *[]ast.PNode) {
 			return
 		case "fun", "method":
 			return // a nested function — its returns belong to it
+		case "let":
+			if d, ok := declOf(br); ok && d.IsClause {
+				return // a nested implementation CLAUSE — its returns belong to it
+			}
+		case "=":
+			if len(br.Children) == 4 {
+				return // a nested fun/method implementation — its returns belong to it
+			}
 		}
 	}
 	for _, c := range br.Children {
@@ -1051,7 +1436,17 @@ func collectReturns(n ast.PNode, out *[]ast.PNode) {
 
 // checkFlow walks expressions under a flow env, checking call arguments and
 // narrowing on if/unless guards. Quoted data (not a `(`-branch) is skipped.
-func (w *walker) checkFlow(sigs map[string]*funSig, env typeEnv, flow flowEnv, n ast.PNode) {
+func (w *walker) checkFlow(sigs sigIndex, env typeEnv, flow flowEnv, n ast.PNode) {
+	// A member access `b.member` on a value typed as a bounded type variable: the
+	// member must be provided by the bound (or be universal). This catches a typo
+	// inside a polymorphic body, where `b` is only known to be a subtype of the
+	// bound — reached both bare (`b.member`) and as a call head (`(b.member …)`,
+	// whose head PDot is visited as a child).
+	if dot, ok := n.(*ast.PDot); ok {
+		w.checkBoundMember(sigs, flow, dot)
+		w.checkFlow(sigs, env, flow, dot.LHS)
+		return
+	}
 	br, ok := n.(*ast.PBranch)
 	if !ok {
 		return
@@ -1068,7 +1463,7 @@ func (w *walker) checkFlow(sigs map[string]*funSig, env typeEnv, flow flowEnv, n
 				// in-body uses check too (checkBody recurses; skip the generic one).
 				if d, ok := declOf(br); ok && !d.IsSig && d.Body != nil {
 					var params []*core.PhoType
-					if sig := sigs[d.Name]; sig != nil {
+					if sig := sigs.forArity(d.Name, clauseParamCount(d)); sig != nil {
 						params = sig.Params
 					}
 					w.checkBody(sigs, env, flow, d, params, 0)
@@ -1083,11 +1478,54 @@ func (w *walker) checkFlow(sigs map[string]*funSig, env typeEnv, flow flowEnv, n
 					w.checkBody(sigs, env, flow, d, params, 1)
 					return
 				}
+			case "let":
+				// A `(let name (patterns) [where g] = body)` IMPLEMENTATION CLAUSE
+				// (declOf normalizes it to Head fun/method): check its body with its
+				// own scope + sig-typed params, like the fun/method arms. Bare-binder
+				// pattern slots get the sig's param type; literal/destructure patterns
+				// bind via the reference walk and stay gradual here. Value-binding
+				// lets fall through to the generic descent (their initializers are
+				// checked by checkInlineTypedBinds / const propagation).
+				if d, ok := declOf(br); ok && d.IsClause && d.Body != nil {
+					var params []*core.PhoType
+					selfOffset := 0
+					if d.Head == "method" {
+						selfOffset = 1
+						if sig := w.methodSigFor(w.checkScope, d.Owner, d.Name); sig != nil {
+							params = sig.Params
+						}
+					} else if sig := sigs.forArity(d.Name, clauseParamCount(d)); sig != nil {
+						params = sig.Params
+					}
+					w.checkBody(sigs, env, flow, d, params, selfOffset)
+					return
+				}
 			case "=":
+				// A 4-child `(= …)` normalizes to a fun/method IMPL: check its body
+				// with its own scope + params, like the fun/method arms above. A
+				// 3-child reassignment (declOf ok=false) falls through to checkAssignFlow.
+				if d, ok := declOf(br); ok && d.Body != nil {
+					var params []*core.PhoType
+					selfOffset := 0
+					if d.Head == "method" {
+						selfOffset = 1
+						if sig := w.methodSigFor(w.checkScope, d.Owner, d.Name); sig != nil {
+							params = sig.Params
+						}
+					} else if sig := sigs.forArity(d.Name, clauseParamCount(d)); sig != nil {
+						params = sig.Params
+					}
+					w.checkBody(sigs, env, flow, d, params, selfOffset)
+					return
+				}
 				w.checkAssignFlow(sigs, flow, br)
 			default:
-				if sig, found := sigs[head.Value]; found {
-					w.checkCallArgs(sigs, flow, br.Children[1:], sig, "'"+head.Value+"'")
+				if overloads, found := sigs[head.Value]; found {
+					w.checkCallOverloads(sigs, flow, head, br.Children[1:], overloads)
+				} else if def, _, found := w.checkScope.Lookup(head.Value); found && def.Kind == DefStruct {
+					if si, ok := w.checkScope.LookupStruct(head.Value); ok {
+						w.checkConstructFields(sigs, flow, br, si, head.Value)
+					}
 				}
 			}
 		case *ast.PDot:
@@ -1107,7 +1545,7 @@ func (w *walker) checkFlow(sigs map[string]*funSig, env typeEnv, flow flowEnv, n
 // for a method, whose first arg-slot is the un-typed `self`); the body's own
 // consts then propagate. Without a sig, params stay Dynamic but the correct
 // scope + const propagation still apply.
-func (w *walker) checkBody(sigs map[string]*funSig, env typeEnv, flow flowEnv, d topLevelDecl, params []*core.PhoType, selfOffset int) {
+func (w *walker) checkBody(sigs sigIndex, env typeEnv, flow flowEnv, d topLevelDecl, params []*core.PhoType, selfOffset int) {
 	bodyScope, ok := w.bodyScopes[d.Body]
 	if !ok {
 		for _, ch := range d.Branch.Children { // no stashed scope — don't skip anything
@@ -1130,6 +1568,10 @@ func (w *walker) checkBody(sigs map[string]*funSig, env typeEnv, flow flowEnv, d
 	}
 	prev := w.checkScope
 	w.checkScope = bodyScope
+	if d.Guard != nil {
+		// A clause's `where` guard runs with the same params in scope as the body.
+		w.checkFlow(sigs, env, bodyFlow, d.Guard)
+	}
 	w.propagateBodyConsts(sigs, bodyFlow, d.Body)
 	w.checkFlow(sigs, env, bodyFlow, d.Body)
 	w.checkScope = prev
@@ -1140,7 +1582,7 @@ func (w *walker) checkBody(sigs map[string]*funSig, env typeEnv, flow flowEnv, d
 // any binding of that name — it's reassignable (no stable type) and must
 // override a same-named parameter. Only the body's direct statements are
 // scanned (a `(do …)`'s children, or the lone body expression).
-func (w *walker) propagateBodyConsts(sigs map[string]*funSig, flow flowEnv, body ast.PNode) {
+func (w *walker) propagateBodyConsts(sigs sigIndex, flow flowEnv, body ast.PNode) {
 	stmts := []ast.PNode{body}
 	if br, ok := body.(*ast.PBranch); ok && br.Open == "(" && headIdent(br) == "do" {
 		stmts = br.Children[1:]
@@ -1168,9 +1610,113 @@ func (w *walker) propagateBodyConsts(sigs map[string]*funSig, flow flowEnv, body
 	}
 }
 
+// clauseParamCount is the number of parameter slots a clause/impl declares —
+// its dispatch arity (a method's receiver slot included; callers offset it).
+func clauseParamCount(d topLevelDecl) int {
+	if br, ok := asList(d.ArgList); ok {
+		n := len(br.Children)
+		if d.Head == "method" && n > 0 {
+			n-- // the receiver slot is not a call argument
+		}
+		return n
+	}
+	return 0
+}
+
+// checkCallOverloads checks a call against a callable's signature OVERLOADS
+// (Features.md §9): the overloads whose arity window admits the argument count
+// are candidates. No candidate → an arity diagnostic. One candidate → per-arg
+// checking with precise messages (checkCallArgs). Several candidates → the call
+// is fine if ANY accepts every argument; when the argument types are known and
+// NONE accepts, it can never dispatch → no-matching-overload. provableMismatch
+// keeps the gradual guarantee: an unknown argument type accepts everywhere.
+func (w *walker) checkCallOverloads(sigs sigIndex, flow flowEnv, head *ast.PLeaf, args []ast.PNode, overloads []*funSig) {
+	var cands []*funSig
+	for _, sig := range overloads {
+		if sig.admitsArity(len(args)) {
+			cands = append(cands, sig)
+		}
+	}
+	if len(cands) == 0 {
+		w.emit(Diagnostic{
+			File: w.file, Span: head.Span, Severity: SeverityError, Code: "arity-mismatch",
+			Message: fmt.Sprintf("'%s' takes %s, but this call passes %d", head.Value, arityWindowLabel(overloads), len(args)),
+		})
+		return
+	}
+	if len(cands) == 1 {
+		w.checkCallArgs(sigs, flow, args, cands[0], "'"+head.Value+"'")
+		return
+	}
+	for _, sig := range cands {
+		if w.sigAcceptsArgs(sigs, flow, args, sig) {
+			return // some overload takes this call — fine
+		}
+	}
+	w.emit(Diagnostic{
+		File: w.file, Span: head.Span, Severity: SeverityError, Code: "no-matching-overload",
+		Message: fmt.Sprintf("no overload of '%s' accepts these argument types", head.Value),
+	})
+}
+
+// sigAcceptsArgs reports whether every argument can inhabit its parameter slot
+// under sig — provableMismatch-based, so an unknown argument type accepts.
+func (w *walker) sigAcceptsArgs(sigs sigIndex, flow flowEnv, args []ast.PNode, sig *funSig) bool {
+	for i, arg := range args {
+		j := i
+		if j >= len(sig.Params) {
+			if sig.Max >= 0 {
+				break
+			}
+			j = len(sig.Params) - 1 // surplus args check against the spread slot
+		}
+		if j < 0 {
+			break
+		}
+		param := sig.Params[j]
+		if info, isTrait := core.TraitOf(param); isTrait && w.checkTraitArgOK(arg, info) {
+			continue
+		}
+		if _, bad := w.typeMismatch(arg, param, sigs, flow); bad {
+			return false
+		}
+	}
+	return true
+}
+
+// arityWindowLabel renders the argument counts a set of overloads accepts —
+// "2 arguments", "1–3 arguments", "at least 1 argument" — for arity messages.
+func arityWindowLabel(overloads []*funSig) string {
+	lo, hi := -1, 0
+	for _, sig := range overloads {
+		if lo < 0 || sig.Min < lo {
+			lo = sig.Min
+		}
+		if sig.Max < 0 {
+			hi = -1
+		} else if hi >= 0 && sig.Max > hi {
+			hi = sig.Max
+		}
+	}
+	plural := func(n int) string {
+		if n == 1 {
+			return "1 argument"
+		}
+		return fmt.Sprintf("%d arguments", n)
+	}
+	switch {
+	case hi < 0:
+		return fmt.Sprintf("at least %s", plural(lo))
+	case lo == hi:
+		return plural(lo)
+	default:
+		return fmt.Sprintf("%d–%s", lo, plural(hi))
+	}
+}
+
 // checkCallArgs checks positional arguments against a signature's parameters.
 // label names the callee for diagnostics (e.g. "'f'" or "method 'M'").
-func (w *walker) checkCallArgs(sigs map[string]*funSig, flow flowEnv, args []ast.PNode, sig *funSig, label string) {
+func (w *walker) checkCallArgs(sigs sigIndex, flow flowEnv, args []ast.PNode, sig *funSig, label string) {
 	for i, arg := range args {
 		if i >= len(sig.Params) {
 			break
@@ -1189,10 +1735,91 @@ func (w *walker) checkCallArgs(sigs map[string]*funSig, flow flowEnv, args []ast
 	}
 }
 
+// checkBoundMember flags a member access `b.member` whose receiver `b` is typed
+// as a bounded type variable when the bound provably does NOT provide `member`.
+// This is sound only inside a polymorphic body: `b` is some unknown subtype of
+// the bound, so only the bound's members (plus the universal ones) are
+// guaranteed. It fires ONLY when the bound is fully enumerable — a local struct
+// or a trait — so a member reachable some other way (an imported extension, an
+// unknown bound) can never be false-flagged.
+func (w *walker) checkBoundMember(sigs sigIndex, flow flowEnv, dot *ast.PDot) {
+	rhs, ok := dot.RHS.(*ast.PLeaf)
+	if !ok || isUniversalMember(rhs.Value) {
+		return
+	}
+	lt := w.exprType(dot.LHS, sigs, flow)
+	bound, isVar := core.TypeVarBound(lt)
+	if !isVar {
+		return
+	}
+	enumerable, has := w.boundMemberKnown(lt, bound, rhs.Value)
+	if !enumerable || has {
+		return
+	}
+	w.emit(Diagnostic{
+		File: w.file, Span: rhs.Span, Severity: SeverityError, Code: "unknown-member",
+		Message: fmt.Sprintf("'%s' is not a member of the bound '%s' of this type parameter", rhs.Value, bound.Name()),
+	})
+}
+
+// boundMemberKnown reports whether a bounded variable's bound can be fully
+// enumerated (a local struct or a trait) and, if so, whether it provides
+// `member`. A non-enumerable bound returns (false, false) so the caller stays
+// silent — the gradual guarantee.
+func (w *walker) boundMemberKnown(lt, bound *core.PhoType, member string) (enumerable, has bool) {
+	if name, ok := w.tvarBoundStruct[lt]; ok {
+		if si, ok := w.checkScope.LookupStruct(name); ok {
+			_, f := si.Fields[member]
+			_, m := si.Methods[member]
+			_, p := si.PropertyTypes[member]
+			return true, f || m || p
+		}
+	}
+	if info, ok := core.TraitOf(bound); ok {
+		_, m := info.Methods[member]
+		_, p := info.Properties[member]
+		return true, m || p
+	}
+	return false, false
+}
+
+// checkConstruction checks a struct construction `(Struct "field" value …)` —
+// each field VALUE against its declared field type — so a value that provably
+// cannot inhabit the field's type fires. For a generic struct field (a type
+// variable) this enforces the parameter's BOUND at construction, the analogue of
+// the call-site bound check. Untyped fields (no declared type) never fire, and
+// the gradual guarantee holds because typeMismatch decides by disjointness.
+func (w *walker) checkConstructFields(sigs sigIndex, flow flowEnv, br *ast.PBranch, si *structInfo, owner string) {
+	if si == nil {
+		return
+	}
+	for i := 1; i+1 < len(br.Children); i += 2 {
+		nameLeaf, ok := br.Children[i].(*ast.PLeaf)
+		if !ok {
+			continue
+		}
+		fname, ok := unquoteField(nameLeaf.Value)
+		if !ok {
+			continue
+		}
+		ft := si.FieldTypes[fname]
+		if ft == nil {
+			continue
+		}
+		if actual, bad := w.typeMismatch(br.Children[i+1], ft, sigs, flow); bad {
+			w.emit(Diagnostic{
+				File: w.file, Span: br.Children[i+1].GetSpan(), Severity: SeverityError, Code: diag.ErrType,
+				Message: fmt.Sprintf("field '%s' of '%s' has type '%s', but got '%s'",
+					fname, owner, ft.Name(), actual.Name()),
+			})
+		}
+	}
+}
+
 // checkMethodCall checks a `(x.M args…)` call against M's harvested methodsig,
 // when x's struct is statically known. Unknown receivers / un-annotated methods
 // are gradual (no check).
-func (w *walker) checkMethodCall(sigs map[string]*funSig, flow flowEnv, br *ast.PBranch, dot *ast.PDot) {
+func (w *walker) checkMethodCall(sigs sigIndex, flow flowEnv, br *ast.PBranch, dot *ast.PDot) {
 	rhs, ok := dot.RHS.(*ast.PLeaf)
 	if !ok {
 		return
@@ -1201,7 +1828,9 @@ func (w *walker) checkMethodCall(sigs map[string]*funSig, flow flowEnv, br *ast.
 	if sh.Kind != ShapeInstance || sh.Owner == "" {
 		return
 	}
-	sig := w.methodSigFor(w.checkScope, sh.Owner, rhs.Value)
+	// Resolve M's signature through the receiver shape, so a call on an IMPORTED
+	// struct instance checks against the owner package's harvested MethodSigs too.
+	sig := w.methodSigForShape(w.checkScope, sh, rhs.Value)
 	if sig == nil {
 		return
 	}
@@ -1211,7 +1840,7 @@ func (w *walker) checkMethodCall(sigs map[string]*funSig, flow flowEnv, br *ast.
 // checkAssignFlow checks `(= x v)`: v must inhabit x's DECLARED type. Only a
 // bare-name target with a declared type is checked (a dotted target is a
 // field/property write, handled elsewhere); an un-annotated x is gradual.
-func (w *walker) checkAssignFlow(sigs map[string]*funSig, flow flowEnv, br *ast.PBranch) {
+func (w *walker) checkAssignFlow(sigs sigIndex, flow flowEnv, br *ast.PBranch) {
 	if len(br.Children) != 3 {
 		return
 	}
@@ -1235,7 +1864,7 @@ func (w *walker) checkAssignFlow(sigs map[string]*funSig, flow flowEnv, br *ast.
 
 // checkIfFlow walks an if/unless form, narrowing the tested binding in each arm.
 // `unless` inverts the guard (its then-arm runs when the condition is false).
-func (w *walker) checkIfFlow(sigs map[string]*funSig, env typeEnv, flow flowEnv, br *ast.PBranch, keyword string) {
+func (w *walker) checkIfFlow(sigs sigIndex, env typeEnv, flow flowEnv, br *ast.PBranch, keyword string) {
 	f := parseIfForm(br, keyword, keyword == "if")
 	invert := keyword == "unless"
 
@@ -1282,16 +1911,16 @@ func harvestEntries(br *ast.PBranch) []annot.Entry {
 
 // inlineFunSig resolves an inline `(fun name (T…) R)` SIGNATURE's parameter and
 // result type expressions to a funSig — the same shape sigFromEntries builds
-// from a `--@ (~sig …)` annotation. (TypeSignatures.md Phase 3.)
+// from a `--@ (~sig …)` annotation. The `(var/spread/optional/const T)` slot
+// modifiers are read here: they set the sig's arity window (Min/Max) and Const
+// mask, and the TYPE plumbing sees only the inner type. (TypeSignatures.md
+// Phase 3; Features.md §1.)
 func inlineFunSig(d topLevelDecl, env typeEnv) *funSig {
 	params, ok := asList(d.ArgList)
 	if !ok {
 		return nil
 	}
-	sig := &funSig{}
-	for _, p := range params.Children {
-		sig.Params = append(sig.Params, resolveTypeNode(p, env))
-	}
+	sig := readSigParams(params.Children, env)
 	sig.Result = resolveTypeNode(d.Body, env)
 	return sig
 }
@@ -1305,27 +1934,62 @@ func inlineMethodSig(d topLevelDecl, env typeEnv) *funSig {
 	if !ok || len(params.Children) == 0 {
 		return nil
 	}
-	sig := &funSig{}
-	for _, p := range params.Children[1:] {
-		sig.Params = append(sig.Params, resolveTypeNode(p, env))
-	}
+	sig := readSigParams(params.Children[1:], env)
 	sig.Result = resolveTypeNode(d.Body, env)
 	return sig
+}
+
+// readSigParams resolves a signature's param slots (modifiers unwrapped) into a
+// funSig with its arity window: required slots count into Min; `(optional T
+// [else D])` slots are omittable; a `(spread T)` slot lifts Max to unbounded.
+func readSigParams(slots []ast.PNode, env typeEnv) *funSig {
+	sig := &funSig{Max: len(slots)}
+	for _, p := range slots {
+		mod := sigParamMod(p)
+		sig.Params = append(sig.Params, resolveTypeNode(sigParamType(p), env))
+		sig.Const = append(sig.Const, mod == "const")
+		switch mod {
+		case "spread":
+			sig.Max = -1
+		case "optional":
+			// omittable — not required
+		default:
+			sig.Min++
+		}
+	}
+	return sig
+}
+
+// sigParamMod returns the modifier keyword wrapping a signature param slot
+// ("var"/"spread"/"optional"/"const"/"disc"), or "" for a bare type slot.
+func sigParamMod(p ast.PNode) string {
+	if br, ok := asList(p); ok && len(br.Children) >= 2 {
+		if head, ok := br.Children[0].(*ast.PLeaf); ok {
+			switch head.Value {
+			case "var", "spread", "optional", "const", "disc":
+				return head.Value
+			}
+		}
+	}
+	return ""
 }
 
 // checkInlineTypedBinds records the declared type of each inline typed binding
 // `(const (T x) v)` / `(var (T x) v)` into base and checks its value against
 // it — the inline counterpart of the `--@ (~type T)` handling. Bare (untyped)
 // binds are left alone. (TypeSignatures.md Phase 3.)
-func (w *walker) checkInlineTypedBinds(form ast.PNode, env typeEnv, sigs map[string]*funSig, base flowEnv) {
+func (w *walker) checkInlineTypedBinds(form ast.PNode, env typeEnv, sigs sigIndex, base flowEnv) {
 	br, ok := asList(form)
 	if !ok {
 		return
 	}
-	// The binding layout differs by form: const/var are (name value) pairs; a
-	// `let` form is an optional `var` modifier then (name = value) triples.
-	// Collect (nameNode, valueNode) so the type check below is shared.
-	type binding struct{ nameNode, valueNode ast.PNode }
+	// The binding layout differs by form: const/var are (name value) pairs whose
+	// name slot may be the grouped typed form `(Type x)`; a `let` form is an
+	// optional `var` modifier then `[Type] name = value` bindings (the ungrouped
+	// typed form carries the type as a separate leading node). Collect
+	// (typeNode, nameNode, valueNode) so the type check below is shared — typeNode
+	// is nil for a grouped/bare slot and read out of the name slot instead.
+	type binding struct{ typeNode, nameNode, valueNode ast.PNode }
 	var binds []binding
 	if headIdent(br) == "let" {
 		i := 1
@@ -1334,24 +1998,42 @@ func (w *walker) checkInlineTypedBinds(form ast.PNode, env typeEnv, sigs map[str
 				i++
 			}
 		}
-		for ; i+2 < len(br.Children); i += 3 {
-			binds = append(binds, binding{br.Children[i], br.Children[i+2]})
+		for i < len(br.Children) {
+			targetNode, valueNode, next, ok := letBinding(br.Children, i)
+			if !ok {
+				break
+			}
+			// The type (if any) lives inside a grouped `(Type name)` target,
+			// extracted below; a destructuring target has no scalar annotation.
+			binds = append(binds, binding{nil, targetNode, valueNode})
+			i = next
 		}
 	} else {
 		for i := 1; i+1 < len(br.Children); i += 2 {
-			binds = append(binds, binding{br.Children[i], br.Children[i+1]})
+			binds = append(binds, binding{nil, br.Children[i], br.Children[i+1]})
 		}
 	}
 	for _, bd := range binds {
-		inner, ok := asList(bd.nameNode)
-		if !ok || len(inner.Children) != 2 {
-			continue // bare name, untyped
+		// Resolve the declared type + the name leaf: the ungrouped `let` form
+		// supplies the type as a separate node; the grouped `(Type x)` slot holds
+		// both. A bare name slot with no type is untyped — skipped.
+		typeNode, nameNode := bd.typeNode, bd.nameNode
+		if typeNode == nil {
+			inner, ok := asList(bd.nameNode)
+			if !ok || len(inner.Children) != 2 {
+				continue // bare name, or a destructuring pattern — untyped here
+			}
+			// `(var name)` is a mutable binder, not a typed `(Type name)` — skip.
+			if h, ok := inner.Children[0].(*ast.PLeaf); ok && h.Value == "var" {
+				continue
+			}
+			typeNode, nameNode = inner.Children[0], inner.Children[1]
 		}
-		name, ok := inner.Children[1].(*ast.PLeaf)
+		name, ok := nameNode.(*ast.PLeaf)
 		if !ok {
 			continue
 		}
-		declared := resolveTypeNode(inner.Children[0], env)
+		declared := resolveTypeNode(typeNode, env)
 		if declared == nil {
 			continue
 		}
@@ -1397,5 +2079,5 @@ func sigFromEntries(entries []annot.Entry, env typeEnv) *funSig {
 		return nil
 	}
 	// New `~sig` form: params is the `(…)` list, result is a single type.
-	return &funSig{Params: resolveTypeList(params, env), Result: resolveAnnotType(result, env)}
+	return exactSig(resolveTypeList(params, env), resolveAnnotType(result, env))
 }

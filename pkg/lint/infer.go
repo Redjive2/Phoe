@@ -61,7 +61,7 @@ func (k ShapeKind) String() string {
 	case ShapeBool:
 		return "bool"
 	case ShapeNil:
-		return "Nil"
+		return "none"
 	case ShapeFun:
 		return "function"
 	}
@@ -106,10 +106,17 @@ type structInfo struct {
 	// nil/absent for an un-annotated method. Populated by harvestMethodSigs.
 	MethodSigs map[string]*funSig
 	// FieldTypes holds each typed field's declared type from the
-	// `(struct Name.{ F T … })` form; absent for a bare/untyped field. The
+	// `(struct Name.{ T F … })` form; absent for a bare/untyped field. The
 	// checker reads it to type a member access `inst.F`. Populated by
 	// harvestFieldTypes (local structs only for now).
 	FieldTypes map[string]*core.PhoType
+	// PropertyTypes holds each typed property's declared value type from the
+	// `(property (Type Recv.name) …)` form; absent for an untyped property. The
+	// checker reads it to type a member access `inst.prop`, exactly like
+	// FieldTypes. Populated by harvestPropertyTypes (local structs only). Unlike
+	// FieldTypes it does NOT feed the struct's record type — a property is a
+	// computed member, not a structural field.
+	PropertyTypes map[string]*core.PhoType
 	// FieldStructOwner maps a typed field to the INSTANCE SHAPE member access
 	// through it navigates to — the struct it is declared as: a bare local
 	// struct (`Next Node`), a qualified imported one (`Inner pkg.B`), or the
@@ -172,6 +179,26 @@ func (w *walker) inferShape(scope *Scope, n ast.PNode) Shape {
 		}
 
 	case *ast.PDot:
+		// A slice `xs.[i : j]` — an index RHS `[…]` carrying a `:` range
+		// separator — PRESERVES the receiver's kind: slicing a list yields a list,
+		// slicing a string yields a string (a substring — the runtime returns
+		// `core.TvStr(strRuneSlice(…))`). So completion/inference on the result see
+		// the right members. An unknown or non-sliceable receiver stays Unknown. A
+		// plain index `xs.[i]` yields a single element of unknown type (also
+		// Unknown).
+		if arr, ok := node.RHS.(*ast.PBranch); ok && arr.Open == "[" {
+			for _, c := range arr.Children {
+				if lf, ok := c.(*ast.PLeaf); ok && lf.Value == ":" {
+					switch w.inferShape(scope, node.LHS).Kind {
+					case ShapeString:
+						return Shape{Kind: ShapeString}
+					case ShapeArray:
+						return Shape{Kind: ShapeArray}
+					}
+					return Shape{}
+				}
+			}
+		}
 		// Member access through a struct-typed field: `inst.Field`, where Field
 		// is declared a struct type, yields an instance of that struct — so
 		// recursive (node.Next.Next) and nested (a.b.c) navigation resolves.
@@ -199,9 +226,9 @@ func (w *walker) inferLeafShape(scope *Scope, leaf *ast.PLeaf) Shape {
 		return Shape{}
 	}
 	switch {
-	case v == "True" || v == "False" || v == "true" || v == "false":
+	case v == "true" || v == "false":
 		return Shape{Kind: ShapeBool}
-	case v == "Nil" || v == "none":
+	case v == "none":
 		return Shape{Kind: ShapeNil}
 	case v[0] == '"' || v[0] == '\'':
 		return Shape{Kind: ShapeString}
@@ -372,6 +399,9 @@ func (w *walker) assignDeclShapes(scope *Scope, forms []ast.PNode) {
 			}
 			def.Shape = w.inferShape(scope, b.Value)
 			scope.Defs[b.Name] = def
+			if w.onShapeAssigned != nil && def.Shape.Kind != ShapeUnknown {
+				w.onShapeAssigned(b.Span, def.Shape)
+			}
 		}
 	}
 }

@@ -6,11 +6,11 @@ import "testing"
 // so the body resolves `it` cleanly — but `it` must not leak outside a block.
 func TestBlockItResolution(t *testing.T) {
 	clean := []string{
-		"(fun apply (x f) (f x))\n(apply 3 &(+ it 1))",
-		"(fun apply (x f) (f x))\n(apply 3 &do (let y = (+ it 1)) (* y 2))",
-		"(fun apply (x f) (f x))\n(apply 3 &none)",
+		"(fun apply (Number (Fun (Number) Unknown)) Unknown)\n(let apply (x f) = (f x))\n(apply 3 &(+ it 1))",
+		"(fun apply (Number (Fun (Number) Unknown)) Unknown)\n(let apply (x f) = (f x))\n(apply 3 &do (let y = (+ it 1)) (* y 2))",
+		"(fun apply (Number (Fun (Number) Unknown)) Unknown)\n(let apply (x f) = (f x))\n(apply 3 &none)",
 		// nested blocks each get their own `it`
-		"(fun apply (x f) (f x))\n(apply 1 &(apply 2 &(* it it)))",
+		"(fun apply (Number (Fun (Number) Unknown)) Unknown)\n(let apply (x f) = (f x))\n(apply 1 &(apply 2 &(* it it)))",
 	}
 	for _, src := range clean {
 		for _, d := range AnalyzeFile("t.pho", []byte(src)) {
@@ -27,19 +27,19 @@ func TestBlockItResolution(t *testing.T) {
 // Editor niceties for `it`: completion offers it inside a `&` block (but not
 // outside), and semantic tokens paint it @parameter.
 func TestBlockItEditorFeatures(t *testing.T) {
-	src := []byte("(fun apply (x f) (f x))\n(apply 3 &(+ it 1))")
+	src := []byte("(fun apply (Number (Fun (Number) Unknown)) Unknown)\n(let apply (x f) = (f x))\n(apply 3 &(+ it 1))")
 
-	// Completion at the cursor just past `it` inside the block.
-	if defs := CompletionsAt("t.pho", src, 2, 15); !containsName(defs, "it") {
+	// Completion at the cursor just past `it` inside the block (line 3).
+	if defs := CompletionsAt("t.pho", src, 3, 15); !containsName(defs, "it") {
 		t.Errorf("completion inside a `&` block should offer 'it': %v", defNames(defs))
 	}
-	// Not offered outside any block (inside the fun arg list area).
-	if defs := CompletionsAt("t.pho", src, 1, 10); containsName(defs, "it") {
+	// Not offered outside any block (inside the impl arg list area).
+	if defs := CompletionsAt("t.pho", src, 2, 12); containsName(defs, "it") {
 		t.Errorf("completion outside a block should NOT offer 'it'")
 	}
 
 	// Semantic token: `it` is @parameter.
-	lines := []string{"(fun apply (x f) (f x))", "(apply 3 &(+ it 1))"}
+	lines := []string{"(fun apply (Number (Fun (Number) Unknown)) Unknown)", "(let apply (x f) = (f x))", "(apply 3 &(+ it 1))"}
 	var got bool
 	for _, tk := range SemanticTokens("t.pho", src) {
 		s := lines[tk.Span.StartLine-1]

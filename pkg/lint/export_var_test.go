@@ -13,8 +13,8 @@ func TestExportedVarConst(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"script/std/cfg/cfg.phl":   "(let pi = 3)\n(let var count = 0)\n(let lower = 9)\n",
 		"script/std/app/read.phl":  "(import 'std/cfg')\n(fun read_pi () cfg.pi)\n(fun read_count () cfg.count)\n",
-		"script/std/app/write.phl": "(import 'std/cfg')\n(fun bump () (= cfg.count 5))\n",
-		"script/std/app/priv.phl":  "(import 'std/cfg')\n(fun peek () cfg.#lower)\n",
+		"script/std/app/write.phl": "(import 'std/cfg')\n(let bump () = (= cfg.count 5))\n",
+		"script/std/app/priv.phl":  "(import 'std/cfg')\n(let peek () = cfg.#lower)\n",
 	})
 
 	analyze := func(rel string) []Diagnostic {

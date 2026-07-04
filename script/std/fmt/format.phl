@@ -1,5 +1,6 @@
 (goimport ('stdDependencies' dep))
 
-(fun format ((spread args))
-    (dep.FmtSprint (spread args))
+(fun format ((spread Unknown)) String)
+(let format ((spread args)) =
+    (dep/FmtSprint (spread args))
 )

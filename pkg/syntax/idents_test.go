@@ -10,37 +10,37 @@ func TestClassifyIdent(t *testing.T) {
 		in   string
 		want IdentKind
 	}{
-		// snake_case values
-		{"my_var", IdentValue},
+		// kebab-case values
+		{"my-var", IdentValue},
 		{"foo", IdentValue},
 		{"x", IdentValue},
-		{"is_string?", IdentValue},
-		{"parse_2", IdentValue},
-		{"vec_3d", IdentValue},
+		{"is-string?", IdentValue},
+		{"parse-2", IdentValue},
+		{"vec-3d", IdentValue},
 		{"let", IdentValue},
 		{"none", IdentValue},
 		{"self", IdentValue},
 		{"#secret", IdentValue},
-		{"#is_empty?", IdentValue},
+		{"#is-empty?", IdentValue},
 
-		// Title_Snake_Case types
-		{"Type_Name", IdentType},
+		// Title-Kebab-Case types
+		{"Type-Name", IdentType},
 		{"Integer", IdentType},
-		{"My_Struct", IdentType},
+		{"My-Struct", IdentType},
 		{"Num", IdentType},
-		{"#Secret_Type", IdentType},
+		{"#Secret-Type", IdentType},
 
 		// invalid shapes
 		{"myVar", IdentInvalid},     // camelCase
-		{"TypeName", IdentInvalid},  // PascalCase (no underscore)
+		{"TypeName", IdentInvalid},  // PascalCase (no hyphen)
 		{"HTTP", IdentInvalid},      // acronym
-		{"My_var", IdentInvalid},    // type word lowercased
-		{"my_Var", IdentInvalid},    // value word capitalized
+		{"My-var", IdentInvalid},    // type word lowercased
+		{"my-Var", IdentInvalid},    // value word capitalized
 		{"SCREAMING", IdentInvalid}, // all caps
-		{"_foo", IdentInvalid},      // leading underscore
-		{"foo_", IdentInvalid},      // trailing underscore
-		{"foo__bar", IdentInvalid},  // doubled underscore
-		{"Foo_", IdentInvalid},      // trailing underscore (type)
+		{"-foo", IdentInvalid},      // leading hyphen
+		{"foo-", IdentInvalid},      // trailing hyphen
+		{"foo--bar", IdentInvalid},  // doubled hyphen
+		{"Foo-", IdentInvalid},      // trailing hyphen (type)
 		{"9foo", IdentInvalid},      // leading digit
 		{"", IdentInvalid},          // empty
 		{"#", IdentInvalid},         // bare marker
@@ -56,9 +56,9 @@ func TestLexPrivateIdentifier(t *testing.T) {
 	if got := tokenValues(t, "#secret"); len(got) != 1 || got[0] != "#secret" {
 		t.Fatalf("tokens = %v, want [#secret]", got)
 	}
-	// A '#' glued to a Title_Snake_Case type name lexes as one token too.
-	if got := tokenValues(t, "#Secret_Type"); len(got) != 1 || got[0] != "#Secret_Type" {
-		t.Fatalf("tokens = %v, want [#Secret_Type]", got)
+	// A '#' glued to a Title-Kebab-Case type name lexes as one token too.
+	if got := tokenValues(t, "#Secret-Type"); len(got) != 1 || got[0] != "#Secret-Type" {
+		t.Fatalf("tokens = %v, want [#Secret-Type]", got)
 	}
 }
 
@@ -96,7 +96,7 @@ func TestStrictNamesRejectsNonConforming(t *testing.T) {
 		}
 	}
 
-	accept := []string{"my_var", "Type_Name", "#secret", "#Secret_Type", "is_empty?"}
+	accept := []string{"my-var", "Type-Name", "#secret", "#Secret-Type", "is-empty?"}
 	for _, src := range accept {
 		if _, errs := LexPos(src); len(errs) != 0 {
 			t.Errorf("LexPos(%q): unexpected errs=%v", src, errs)

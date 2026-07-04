@@ -209,10 +209,7 @@ func LexPos(src string) ([]Token, []ParseError) {
 		// (`xs.[1 : 2]`). The atom body mirrors identifier lexing, including
 		// an optional trailing '?'; the leaf evaluator validates the form.
 		if ch == ':' && i+1 < len(src) && (isIdentStart(src[i+1]) || isDigit(src[i+1])) {
-			j := i + 1
-			for j < len(src) && isIdentCont(src[j]) {
-				j++
-			}
+			j := scanIdentBody(src, i+1)
 			if j < len(src) && src[j] == '?' {
 				j++
 			}
@@ -272,11 +269,11 @@ func LexPos(src string) ([]Token, []ParseError) {
 		// is malformed.
 		if ch == '#' {
 			if i+1 < len(src) && isIdentStart(src[i+1]) {
-				j := i + 1
-				for j < len(src) && isIdentCont(src[j]) {
+				j := scanIdentBody(src, i+1)
+				if j < len(src) && src[j] == '?' {
 					j++
 				}
-				if j < len(src) && src[j] == '?' {
+				if j < len(src) && src[j] == '!' {
 					j++
 				}
 				emitIdent(src[i:j], mkSpan(startLine, startCol, line, col+(j-i)))
@@ -293,14 +290,23 @@ func LexPos(src string) ([]Token, []ParseError) {
 			continue
 		}
 
-		// Identifier or word-like operator. A single optional trailing '?'
-		// is part of the identifier (the predicate convention, e.g. `atom?`).
+		// Identifier or word-like operator. Optional trailing effect suffixes are
+		// part of the identifier, always in the order `name?!=`:
+		//   '?' — predicate convention (`atom?`)
+		//   '!' — ENVIRONMENTAL effect (io / randomness / module-global write)
+		//   '=' — SELF/VALUE mutation (mutates a `(var self)` or `(var arg)`,
+		//         e.g. `append=`) — the value counterpart of '!'.
+		// The '=' is consumed only when it's a LONE '=' (not the start of '=='),
+		// so the equality operator still lexes on its own.
 		if isIdentStart(ch) {
-			j := i + 1
-			for j < len(src) && isIdentCont(src[j]) {
+			j := scanIdentBody(src, i+1)
+			if j < len(src) && src[j] == '?' {
 				j++
 			}
-			if j < len(src) && src[j] == '?' {
+			if j < len(src) && src[j] == '!' {
+				j++
+			}
+			if j < len(src) && src[j] == '=' && (j+1 >= len(src) || src[j+1] != '=') {
 				j++
 			}
 			emitIdent(src[i:j], mkSpan(startLine, startCol, line, col+(j-i)))
@@ -348,6 +354,27 @@ func LexPos(src string) ([]Token, []ParseError) {
 	return tokens, errs
 }
 
+// scanIdentBody advances from j over an identifier body: letters and digits,
+// plus an INTERIOR `-` — a `-` immediately followed by another letter or digit,
+// so kebab-case names like `print-line` and `foo-5` scan as ONE token. A `-`
+// that is NOT followed by an ident char is left for its own branch, keeping
+// the minus operator `(- a b)`, negative numbers `-5`, the `--` comment, the
+// `->` map arrow, and a trailing `-` all intact. Returns the index past the
+// body (before any `?`/`!`/`=` effect suffix).
+func scanIdentBody(src string, j int) int {
+	for j < len(src) {
+		switch {
+		case isIdentCont(src[j]):
+			j++
+		case src[j] == '-' && j+1 < len(src) && (isIdentStart(src[j+1]) || isDigit(src[j+1])):
+			j++
+		default:
+			return j
+		}
+	}
+	return j
+}
+
 // isStructural reports whether ch is a token-by-itself punctuation
 // character that doesn't combine with adjacent characters.
 func isStructural(ch byte) bool {
@@ -361,7 +388,7 @@ func isStructural(ch byte) bool {
 func isDigit(ch byte) bool      { return ch >= '0' && ch <= '9' }
 func isIdentStart(ch byte) bool { return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') }
 func isIdentCont(ch byte) bool {
-	return isIdentStart(ch) || isDigit(ch) || ch == '_'
+	return isIdentStart(ch) || isDigit(ch)
 }
 
 // isBareWord reports whether s is a plain identifier token — the shape a
@@ -407,7 +434,13 @@ func isFieldTypePos(n ast.PNode) bool {
 	if len(s) > 0 && s[0] == '#' {
 		s = s[1:]
 	}
-	return len(s) > 0 && s[0] >= 'A' && s[0] <= 'Z'
+	if s == "" {
+		return false
+	}
+	// A field NAME is a lower-case identifier (the construction `name value`
+	// case). Anything else in first position is a type: a Title-cased name, or a
+	// numeric/string/atom singleton type (`Struct.{ 5 x }`, `Struct.{ :ok tag }`).
+	return !(s[0] >= 'a' && s[0] <= 'z')
 }
 
 func isBareWord(s string) bool {
@@ -419,11 +452,25 @@ func isBareWord(s string) bool {
 	if s[0] == '#' {
 		s = s[1:]
 	}
+	// A field name may carry the predicate '?' and/or effect '!' suffix,
+	// always in the order `name?!` (mirrors core.IsIdent). Peel them before
+	// checking the identifier body so keys like `is-fish?` are quoted as
+	// field names in construction rather than left as identifier references.
+	if len(s) > 0 && s[len(s)-1] == '!' {
+		s = s[:len(s)-1]
+	}
+	if len(s) > 0 && s[len(s)-1] == '?' {
+		s = s[:len(s)-1]
+	}
 	if s == "" || !isIdentStart(s[0]) {
 		return false
 	}
+	// An interior '-' is part of a kebab-case name (`my-field`), matching the
+	// identifier grammar `[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)*`. The lexer has
+	// already produced this as a single token, so accepting '-' as a
+	// continuation char here suffices to quote hyphenated construction keys.
 	for i := 1; i < len(s); i++ {
-		if !isIdentCont(s[i]) {
+		if !isIdentCont(s[i]) && s[i] != '-' {
 			return false
 		}
 	}
@@ -644,28 +691,32 @@ func (p *posParser) advance() Token {
 
 func (p *posParser) parseExpr() ast.PNode {
 	expr := p.parsePrimary()
-	// Build a left-associative dot chain: while the next token is `.`,
-	// consume it and pair with the next primary. `a.b.c` becomes
-	// PDot{PDot{a, b}, c}.
-	for !p.atEnd() && p.peek().Value == "." {
-		dotTok := p.advance() // consume '.'
+	// Build a left-associative access chain: while the next token is `.`
+	// (value/type member) or `/` (package/subpackage navigation), consume it
+	// and pair with the next primary. `a.b.c` → PDot{PDot{a,b},c}; `a/b/c` →
+	// PSlash{PSlash{a,b},c}; the two interleave (`pctl/stdout.write!`). A `/`
+	// at list-head — `(/ a b)` — is read by parsePrimary as a leaf (division)
+	// and never reaches this loop.
+	for !p.atEnd() && (p.peek().Value == "." || p.peek().Value == "/") {
+		sep := p.peek().Value
+		sepTok := p.advance() // consume '.' or '/'
 		if p.atEnd() {
 			p.errs = append(p.errs, ParseError{
-				Span:    dotTok.Span,
-				Message: "missing expression after '.'",
+				Span:    sepTok.Span,
+				Message: "missing expression after '" + sep + "'",
 			})
 			break
 		}
-		// The token after `.` must be able to start a primary. Closers
-		// and `!` can't, and consuming them here would steal them from
-		// the surrounding form (e.g. `args.)` would eat the `)` that
-		// belongs to the enclosing parenthesized form).
+		// The token after the separator must be able to start a primary.
+		// Closers can't, and consuming them here would steal them from the
+		// surrounding form (e.g. `args.)` would eat the `)` that belongs to
+		// the enclosing parenthesized form).
 		var rhs ast.PNode
 		switch p.peek().Value {
 		case ")", "]", "}", "!":
 			p.errs = append(p.errs, ParseError{
-				Span:    dotTok.Span,
-				Message: "missing expression after '.'",
+				Span:    sepTok.Span,
+				Message: "missing expression after '" + sep + "'",
 			})
 			return expr
 		case ".":
@@ -680,6 +731,12 @@ func (p *posParser) parseExpr() ast.PNode {
 		span := expr.GetSpan()
 		span.EndLine = rhs.GetSpan().EndLine
 		span.EndCol = rhs.GetSpan().EndCol
+		if sep == "/" {
+			// `/` navigates a package/subpackage down to an export — no
+			// struct-construction sugar (that is a `.`-only form).
+			expr = &ast.PSlash{LHS: expr, RHS: rhs, Span: span}
+			continue
+		}
 		// `LHS.{ field value … }` is struct-construction sugar. The brace's
 		// keys are BARE field names, not values: rewrite each even-position
 		// key from a bare identifier into a string literal, then splice the
@@ -697,13 +754,36 @@ func (p *posParser) parseExpr() ast.PNode {
 					children = append(children, quoteFieldKey(br.Children[i]), br.Children[i+2])
 				}
 			} else {
-				// Old `{ field value … }`: name/value pairs.
-				for i, c := range br.Children {
-					if i%2 == 0 {
-						children = append(children, quoteFieldKey(c))
-					} else {
-						children = append(children, c)
+				// `{ … }` pairs — a typed field list `{ Type name … }` (struct
+				// decl / record type): the first element of each pair is a Type
+				// (kept live), the second is the field name (quoted so the
+				// decl/constructor reads it as a string) → `(LHS Type 'name')`.
+				//
+				// A bare CONSTRUCTION pair `{ field value … }` (first element a
+				// lowercase field name, not a type) is RETIRED: construction must
+				// use the explicit `{ field = value }` form (structInitHasEq
+				// above) so it is unambiguous versus a typed field list. Flag it
+				// once, but still desugar it the old way for error recovery.
+				flaggedBare := false
+				for i := 0; i < len(br.Children); i += 2 {
+					a := br.Children[i]
+					if i+1 >= len(br.Children) {
+						children = append(children, quoteFieldKey(a)) // trailing odd element
+						break
 					}
+					b := br.Children[i+1]
+					if isFieldTypePos(a) {
+						children = append(children, a, quoteFieldKey(b)) // Type name — typed field
+						continue
+					}
+					if !flaggedBare {
+						p.errs = append(p.errs, ParseError{
+							Span:    a.GetSpan(),
+							Message: "struct construction must use 'field = value'; the bare 'field value' form is no longer allowed",
+						})
+						flaggedBare = true
+					}
+					children = append(children, quoteFieldKey(a), b) // name value — retired; desugared for recovery
 				}
 			}
 			expr = &ast.PBranch{

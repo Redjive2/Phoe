@@ -1,4 +1,4 @@
 -- a macro that generates a call to an undefined function: the error
 -- must show both the (~evilMacro) call site and the generated code
-(macro ~evil_macro () ['fakeFunctionName' 'fakeArgumentName'])
-(~evil_macro)
+(macro ~evil-macro () ['fakeFunctionName' 'fakeArgumentName'])
+(~evil-macro)

@@ -21,7 +21,7 @@ import (
 // processes.)
 func BenchmarkFib(b *testing.B) {
 	const src = `
-(fun fib (n) (if (< n 2)
+(let fib (n) = (if (< n 2)
     then n
     else (+ (fib (- n 1)) (fib (- n 2)))))
 (fib 15)

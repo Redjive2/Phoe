@@ -13,7 +13,7 @@ import (
 // identifiers (`std/io`). Compiled once and shared by `import` and
 // `goimport` rather than rebuilt on every call.
 var importPathRe = regexp.MustCompile(
-	"^[a-zA-Z](([a-zA-Z0-9]*)|([a-zA-Z0-9_]*[a-zA-Z0-9]))(/[a-zA-Z](([a-zA-Z0-9]*)|([a-zA-Z0-9_]*[a-zA-Z0-9])))*$",
+	"^[a-zA-Z][a-zA-Z0-9]*(-[a-zA-Z0-9]+)*(/[a-zA-Z][a-zA-Z0-9]*(-[a-zA-Z0-9]+)*)*$",
 )
 
 // modimportBuiltins returns the import surface: `import` for Pho packages

@@ -42,13 +42,12 @@ func TestLiteralSingletonRuntime(t *testing.T) {
 	wantBool(t, "(subtype? (Or true false) Boolean)", true)
 }
 
-// `Nil` in a type position is the nil type (NilT): it is the sole value of that
-// type, so `(x.Is? Nil)` is the natural nil test (used across the stdlib, e.g.
-// os.phl's Guard / Open). The named `NilT` still works too.
+// The nil TYPE is the capitalized `None`; the value `none` is NOT a type (so
+// `(x.is? none)` is rejected — write `(x.is? None)`). `None` is the sole type
+// of the `none` value, so `(x.is? None)` is the nil test.
 func TestNilAsTypeRuntime(t *testing.T) {
-	wantBool(t, "(none.is? none)", true)
-	wantBool(t, "(5.is? none)", false)
-	wantBool(t, "(none.is? NilT)", true)
-	wantBool(t, "(none.is? (Or Number none))", true) // nil arm of an optional union
-	wantBool(t, "(5.is? (Or Number none))", true)
+	wantBool(t, "(none.is? None)", true)
+	wantBool(t, "(5.is? None)", false)
+	wantBool(t, "(none.is? (Or Number None))", true) // nil arm of an optional union
+	wantBool(t, "(5.is? (Or Number None))", true)
 }

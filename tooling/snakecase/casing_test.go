@@ -74,7 +74,7 @@ func TestToTitleSnake(t *testing.T) {
 
 func TestCollectTypeNames(t *testing.T) {
 	src := `(struct Point X y)
-(struct Writer.{ Id Number })
+(struct Writer.{ Number id })
 (type Pair (Or Number String))
 (trait Drawable (method Self.Draw (self)))
 (const config 5)

@@ -330,7 +330,7 @@ func recaseConstructionKey(src string, lf *ast.PLeaf, ctx *recaseCtx, edits *[]e
 
 // recaseStruct handles `(struct Name f0 f1 …)`: the Name is a type-ref leaf and
 // the bare field names use the member rule (private lowercase fields gain `#`).
-// The typed form `(struct (Name 'F' T …))` arrives as a construction branch at
+// The typed form `(struct (Name T 'F' …))` arrives as a construction branch at
 // child[1], handled by recaseConstruction via the normal walk.
 func recaseStruct(src string, br *ast.PBranch, ctx *recaseCtx, edits *[]edit) {
 	if len(br.Children) >= 2 {

@@ -27,7 +27,7 @@ func TestPrimitiveMembership(t *testing.T) {
 	wantBool(t, "(:ok.is? Atom)", true)
 	wantBool(t, "([1 2 3].is? List)", true)
 	wantBool(t, `([ 'k' -> 1 ].is? Map)`, true)
-	wantBool(t, "(none.is? NilT)", true)
+	wantBool(t, "(none.is? None)", true)
 	wantBool(t, "((fun (x) x).is? Function)", true)
 	wantBool(t, "(Number.is? Type)", true) // a type value inhabits Type
 	// Distinct kinds.
@@ -51,8 +51,8 @@ func TestTypeStringify(t *testing.T) {
 	wantStr(t, `'%Number'`, "Number")
 	wantStr(t, `'%List'`, "List")
 	wantStr(t, `'%Unknown'`, "Unknown")
-	wantStr(t, `'%None'`, "None")
-	wantStr(t, `'%NilT'`, "Nil")
+	wantStr(t, `'%None'`, "None") // None is the type of the `none` value
+	wantStr(t, `'%Never'`, "Never")
 }
 
 // (x.Is? T) is membership: x inhabits T.
@@ -61,30 +61,33 @@ func TestIsMembership(t *testing.T) {
 	wantBool(t, "(5.is? String)", false)
 	wantBool(t, `('hi'.is? String)`, true)
 	wantBool(t, "(:ok.is? Atom)", true)
-	// Everything inhabits Unknown (⊤); nothing inhabits None (⊥).
+	// Everything inhabits Unknown (⊤); nothing inhabits Never (⊥).
 	wantBool(t, "(5.is? Unknown)", true)
 	wantBool(t, `('x'.is? Unknown)`, true)
+	wantBool(t, "(5.is? Never)", false)
+	// `none` inhabits None (its type); a non-nil value does not.
+	wantBool(t, "(none.is? None)", true)
 	wantBool(t, "(5.is? None)", false)
 }
 
-// (subtype? S T) is set inclusion, with Unknown as ⊤ and None as ⊥.
+// (subtype? S T) is set inclusion, with Unknown as ⊤ and Never as ⊥.
 func TestSubtype(t *testing.T) {
 	wantBool(t, "(subtype? Number Number)", true)
 	wantBool(t, "(subtype? Number Unknown)", true)
-	wantBool(t, "(subtype? Number None)", false)
-	wantBool(t, "(subtype? None Number)", true) // ⊥ ⊆ everything
+	wantBool(t, "(subtype? Number Never)", false)
+	wantBool(t, "(subtype? Never Number)", true) // ⊥ ⊆ everything
 	wantBool(t, "(subtype? Unknown Number)", false)
 	wantBool(t, "(subtype? Unknown Unknown)", true)
-	wantBool(t, "(subtype? None None)", true)
+	wantBool(t, "(subtype? Never Never)", true)
 }
 
 // A struct instance inhabits its own struct type, not another's, and inhabits
 // Unknown; the struct type prints as its name.
 func TestStructMembership(t *testing.T) {
 	const decls = "(struct Point #x #y)\n(struct Line #a #b)\n"
-	wantBool(t, decls+"(Point.{ #x 1 #y 2 }.is? Point)", true)
-	wantBool(t, decls+"(Point.{ #x 1 #y 2 }.is? Line)", false)
-	wantBool(t, decls+"(Point.{ #x 1 #y 2 }.is? Unknown)", true)
+	wantBool(t, decls+"(Point.{ #x = 1 #y = 2 }.is? Point)", true)
+	wantBool(t, decls+"(Point.{ #x = 1 #y = 2 }.is? Line)", false)
+	wantBool(t, decls+"(Point.{ #x = 1 #y = 2 }.is? Unknown)", true)
 	wantBool(t, decls+"(subtype? Point Unknown)", true)
 	wantStr(t, decls+`'%Point'`, "Point")
 }
@@ -93,7 +96,7 @@ func TestStructMembership(t *testing.T) {
 // so it works in typeof/Is?/subtype? — not only on instances. The same name is
 // still constructible.
 func TestStructTypeFirstClass(t *testing.T) {
-	const d = "(struct Point x y)\n(struct Line #a #b)\n(let var p = Point.{ x 1 y 2 })\n"
+	const d = "(struct Point x y)\n(struct Line #a #b)\n(let var p = Point.{ x = 1 y = 2 })\n"
 	// The struct name is a type; an instance inhabits it.
 	wantBool(t, d+"(p.is? Point)", true)
 	wantBool(t, d+"(p.is? Line)", false)
@@ -112,7 +115,7 @@ func TestStructTypeFirstClass(t *testing.T) {
 // A struct type stays constructible and dispatches its methods after the
 // KindConstructor→KindType migration.
 func TestStructTypeConstructsAndDispatches(t *testing.T) {
-	const d = "(struct Vec #x #y)\n(method Vec.sum (self) (+ self.#x self.#y))\n(let var v = Vec.{ #x 3 #y 4 })\n"
+	const d = "(struct Vec #x #y)\n(let Vec.sum (self) = (+ self.#x self.#y))\n(let var v = Vec.{ #x = 3 #y = 4 })\n"
 	wantBool(t, d+"(== (v.sum) 7)", true)
 	wantBool(t, d+"(v.is? Vec)", true)
 }
@@ -141,10 +144,10 @@ func TestConnectives(t *testing.T) {
 	// Identities via structural (interned) equality.
 	wantBool(t, "(== (And (Or Number String) Number) Number)", true)
 	wantBool(t, "(== (Diff (Or Number String) String) Number)", true)
-	wantBool(t, "(== (Or) None)", true)     // empty union = ⊥
+	wantBool(t, "(== (Or) Never)", true)    // empty union = ⊥
 	wantBool(t, "(== (And) Unknown)", true) // empty intersection = ⊤
-	wantBool(t, "(== (Not Unknown) None)", true)
-	wantBool(t, "(== (Not None) Unknown)", true)
+	wantBool(t, "(== (Not Unknown) Never)", true)
+	wantBool(t, "(== (Not Never) Unknown)", true)
 	// Collection and Dynamic.
 	wantBool(t, "([1 2].is? Collection)", true)
 	wantBool(t, `('s'.is? Collection)`, true)
@@ -175,13 +178,13 @@ func TestConnectiveTypeError(t *testing.T) {
 func TestGenericCollectionMethod(t *testing.T) {
 	num := func(recv string, want float64) {
 		t.Helper()
-		v := evalInPackage(t, "(method Collection.doubled (self) (* self.size 2))\n"+recv, nil)
+		v := evalInPackage(t, "(let Collection.doubled (self) = (* self.size 2))\n"+recv, nil)
 		if v.Kind != core.KindNum || v.Val.(float64) != want {
 			t.Errorf("%s = %v (%s), want %v", recv, v.Val, v.Kind, want)
 		}
 	}
-	num("([1 2 3].doubled)", 6)   // list
-	num(`('ab'.doubled)`, 4)      // string
+	num("([1 2 3].doubled)", 6)      // list
+	num(`('ab'.doubled)`, 4)         // string
 	num(`([ 'k' -> 1 ].doubled)`, 2) // map
 }
 
@@ -189,9 +192,9 @@ func TestGenericCollectionMethod(t *testing.T) {
 // gradual type) is rejected.
 func TestCollectionMethodBadReceiver(t *testing.T) {
 	var codes []string
-	evalInPackage(t, "(method None.x (self) self)", func(c string) { codes = append(codes, c) })
+	evalInPackage(t, "(let Never.x (self) = self)", func(c string) { codes = append(codes, c) })
 	if !hasCode(codes, core.ErrType) {
-		t.Errorf("(method None.X …) should be a type error; got %v", codes)
+		t.Errorf("(method Never.X …) should be a type error; got %v", codes)
 	}
 }
 
@@ -216,9 +219,9 @@ func TestParametricCollectionTypes(t *testing.T) {
 	// A list still inhabits the bare List type; List remains a type constant.
 	wantBool(t, "([1 2 3].is? List)", true)
 	// A union with a parametric member.
-	wantBool(t, "([1 2].is? (Or (List Number) NilT))", true)
-	wantBool(t, "(none.is? (Or (List Number) NilT))", true)
-	wantBool(t, `(['x'].is? (Or (List Number) NilT))`, false)
+	wantBool(t, "([1 2].is? (Or (List Number) None))", true)
+	wantBool(t, "(none.is? (Or (List Number) None))", true)
+	wantBool(t, `(['x'].is? (Or (List Number) None))`, false)
 	// Stringify renders the element type.
 	wantStr(t, `'%(List Number)'`, "[Number]")
 }

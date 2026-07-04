@@ -23,7 +23,7 @@ func TestBuiltinNamesMatchRuntime(t *testing.T) {
 		// behind `[…]`/`{…}`) are deliberately hidden from user code, so they
 		// are intentionally absent from builtinNames.
 		switch name {
-		case core.Dot, core.Do, core.Strinterp, core.Strcoerce, core.Macrocall, core.Slice, core.Map:
+		case core.Dot, core.Do, core.Strinterp, core.Strcoerce, core.Macrocall, core.Slice, core.Map, core.Slash:
 			continue
 		}
 		registered[name] = true
@@ -34,8 +34,7 @@ func TestBuiltinNamesMatchRuntime(t *testing.T) {
 	// `do` — now a syntactic keyword (the lower pass rewrites it to the
 	// hidden core.Do primitive) rather than a directly registered builtin.
 	softKeyword := map[string]bool{
-		"True": true, "False": true, "Nil": true,
-		// New literal spellings (Doc/PlanV1/Syntax.md, Phase 2).
+		// Value literals (the capitalized Nil/True/False are no longer values).
 		"none": true, "true": true, "false": true,
 		"self": true, "do": true,
 	}

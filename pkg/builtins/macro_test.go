@@ -25,7 +25,7 @@ func TestMacroCallSyntaxEnforced(t *testing.T) {
 	if _, codes := evalProgramDiag(t, "(macro ~m (e) e)\n(m 1)"); !hasCode(codes, core.ErrNotCallable) {
 		t.Errorf("calling a macro without '~' should be not-callable, got %v", codes)
 	}
-	if _, codes := evalProgramDiag(t, "(fun f (e) e)\n(~f 1)"); !hasCode(codes, core.ErrNotCallable) {
+	if _, codes := evalProgramDiag(t, "(let f (e) = e)\n(~f 1)"); !hasCode(codes, core.ErrNotCallable) {
 		t.Errorf("calling a function with '~' should error, got %v", codes)
 	}
 }

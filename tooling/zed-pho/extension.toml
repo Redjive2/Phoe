@@ -27,7 +27,7 @@ repository = "https://github.com/Redjive2/Phoe"
 #
 [grammars.pho]
 repository = "file:///Users/redjive2/Dev/Pho/tooling/tree-sitter-pho"
-commit = "909249706786f877d8f578962eeb484f533bfe2a"
+commit = "b5c81da05127085a9cb9d8ef2313f2c20c39c47d"
 
 # Language server. The implementation lives in cmd/pho-lsp/ (Go); this
 # block tells Zed it exists and which language(s) to attach it to. The

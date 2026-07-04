@@ -14,11 +14,11 @@ import (
 // an enclosing scope. A const in a function body shadows an outer const of
 // the same name, and the outer binding is unaffected.
 func TestDeclareShadowsEnclosing(t *testing.T) {
-	inner := evalProgram(t, "(let y = 10)\n(fun f () (identity do (let y = 20) y))\n(f)")
+	inner := evalProgram(t, "(let y = 10)\n(let f () = (identity do (let y = 20) y))\n(f)")
 	if inner.Kind != core.KindNum || inner.Val != float64(20) {
 		t.Fatalf("shadowed y inside f = %#v, want 20", inner)
 	}
-	outer := evalProgram(t, "(let y = 10)\n(fun f () (identity do (let y = 20) y))\n(f)\ny")
+	outer := evalProgram(t, "(let y = 10)\n(let f () = (identity do (let y = 20) y))\n(f)\ny")
 	if outer.Kind != core.KindNum || outer.Val != float64(10) {
 		t.Fatalf("outer y after f = %#v, want 10 (shadow must not mutate the enclosing binding)", outer)
 	}

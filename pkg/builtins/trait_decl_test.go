@@ -16,9 +16,9 @@ func TestNamedTraitRuntime(t *testing.T) {
 			t.Errorf("%s\n = %q, want %q", src, got, want)
 		}
 	}
-	circle := "(struct Circle.{ r Number })\n(method Circle.draw (self) self.r)\n"
-	eq(circle+"(trait Drawable (method self.draw (self)))\n(Circle.{ r 5 }.is? Drawable)", "True")
-	eq("(struct Square.{ s Number })\n(trait Drawable (method self.draw (self)))\n(Square.{ s 1 }.is? Drawable)", "False")
-	eq(circle+"(trait Drawable () (method self.draw (self)))\n(Circle.{ r 5 }.is? Drawable)", "True") // empty extends
-	eq("(struct P.{ x Number })\n(trait Memo (static method self.calc (self) P) (static property self.cached get))\ntrue", "True")
+	circle := "(struct Circle.{ Number r })\n(let Circle.draw (self) = self.r)\n"
+	eq(circle+"(trait Drawable (method self.draw (self)))\n(Circle.{ r = 5 }.is? Drawable)", "true")
+	eq("(struct Square.{ Number s })\n(trait Drawable (method self.draw (self)))\n(Square.{ s = 1 }.is? Drawable)", "false")
+	eq(circle+"(trait Drawable () (method self.draw (self)))\n(Circle.{ r = 5 }.is? Drawable)", "true") // empty extends
+	eq("(struct P.{ Number x })\n(trait Memo (static method self.calc (self) P) (static property self.cached get))\ntrue", "true")
 }

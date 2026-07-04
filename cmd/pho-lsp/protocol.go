@@ -39,6 +39,15 @@ type serverCapabilities struct {
 	DefinitionProvider               bool                             `json:"definitionProvider,omitempty"`
 	DocumentSymbolProvider           bool                             `json:"documentSymbolProvider,omitempty"`
 	ReferencesProvider               bool                             `json:"referencesProvider,omitempty"`
+	DocumentHighlightProvider        bool                             `json:"documentHighlightProvider,omitempty"`
+	RenameProvider                   *renameOptions                   `json:"renameProvider,omitempty"`
+	InlayHintProvider                bool                             `json:"inlayHintProvider,omitempty"`
+	SignatureHelpProvider            *signatureHelpOptions            `json:"signatureHelpProvider,omitempty"`
+	ImplementationProvider           bool                             `json:"implementationProvider,omitempty"`
+}
+
+type signatureHelpOptions struct {
+	TriggerCharacters []string `json:"triggerCharacters,omitempty"`
 }
 
 type documentOnTypeFormattingOptions struct {
@@ -172,6 +181,61 @@ type documentOnTypeFormattingParams struct {
 type textEdit struct {
 	Range   lspRange `json:"range"`
 	NewText string   `json:"newText"`
+}
+
+// ----- textDocument/documentHighlight -----
+
+type documentHighlight struct {
+	Range lspRange `json:"range"`
+	Kind  int      `json:"kind,omitempty"` // 1 text, 2 read, 3 write
+}
+
+// ----- textDocument/rename & prepareRename -----
+
+type renameParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+	Position     lspPosition            `json:"position"`
+	NewName      string                 `json:"newName"`
+}
+
+type workspaceEdit struct {
+	Changes map[string][]textEdit `json:"changes"`
+}
+
+type renameOptions struct {
+	PrepareProvider bool `json:"prepareProvider"`
+}
+
+// ----- textDocument/inlayHint -----
+
+type inlayHintParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+	Range        lspRange               `json:"range"`
+}
+
+type inlayHint struct {
+	Position     lspPosition `json:"position"`
+	Label        string      `json:"label"`
+	Kind         int         `json:"kind,omitempty"` // 1 type, 2 parameter
+	PaddingLeft  bool        `json:"paddingLeft,omitempty"`
+	PaddingRight bool        `json:"paddingRight,omitempty"`
+}
+
+// ----- textDocument/signatureHelp -----
+
+type signatureHelp struct {
+	Signatures      []signatureInformation `json:"signatures"`
+	ActiveSignature int                    `json:"activeSignature"`
+	ActiveParameter int                    `json:"activeParameter"`
+}
+
+type signatureInformation struct {
+	Label      string                 `json:"label"`
+	Parameters []parameterInformation `json:"parameters,omitempty"`
+}
+
+type parameterInformation struct {
+	Label string `json:"label"`
 }
 
 // ----- textDocument/{hover,definition,references,documentSymbol} -----

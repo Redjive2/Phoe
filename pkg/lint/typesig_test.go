@@ -18,7 +18,7 @@ func TestTypedBindingRecognized(t *testing.T) {
 		"(let var (String s) = 'hi')\ns.size",
 		"(let var (Number a) = 1 (Number b) = 2)\n(+ a b)",
 		"(let ((Or Number String) u) = 5)\nu", // a type-FORM in the type slot
-		"(let x = 5)\nx",                      // untyped still clean
+		"(let x = 5)\nx",                    // untyped still clean
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); len(d) != 0 {
@@ -38,19 +38,27 @@ func TestTypedBindingNameIsSecond(t *testing.T) {
 }
 
 // A function SIGNATURE `(fun add (T…) R)` is recognized (types in the param
-// list, a type return) and erased: only the implementation binds the name, so
-// a sig + impl pair lints clean regardless of order.
+// list, a type return) and erased: only the implementation binds the name.
+// Clauses are expected to sit DIRECTLY UNDER their signature (Features.md §1);
+// an impl-before-sig layout still resolves but draws impl-not-adjacent.
 func TestFunSignatureRecognized(t *testing.T) {
 	clean := []string{
-		"(fun add (Number Number) Number)\n(fun add (a b) (+ a b))\n(add 1 2)",
-		"(fun add (a b) (+ a b))\n(fun add (Number Number) Number)\n(add 1 2)", // impl first
-		"(fun id (Self) Self)\n(fun id (x) x)\n(id 5)",
-		"(fun pick () (Or Number none))\n(fun pick () none)\n(pick)", // type-form return
+		"(fun add (Number Number) Number)\n(let add (a b) = (+ a b))\n(add 1 2)",
+		"(fun id (Self) Self)\n(let id (x) = x)\n(id 5)",
+		"(fun pick () (Or Number None))\n(let pick () = none)\n(pick)", // type-form return
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); len(d) != 0 {
 			t.Errorf("expected clean for %q, got %v", src, d)
 		}
+	}
+	// Impl before its sig: everything resolves, but the layout is flagged.
+	d := AnalyzeFile("t.pho", []byte("(let add (a b) = (+ a b))\n(fun add (Number Number) Number)\n(add 1 2)"))
+	if !hasDiag(d, "impl-not-adjacent") {
+		t.Errorf("clauses before their sig should draw impl-not-adjacent, got %v", d)
+	}
+	if hasDiag(d, "unresolved-identifier") || hasDiag(d, "missing-implementation") {
+		t.Errorf("impl-before-sig still resolves, got %v", d)
 	}
 }
 
@@ -59,10 +67,12 @@ func TestFunSignatureRecognized(t *testing.T) {
 // capitalized VALUE literal (Nil/True/False), is an impl, not a return type.
 func TestFunImplNotMistakenForSig(t *testing.T) {
 	// `(use)` resolves only if `(fun use () (Helper))` was registered as an impl.
+	// Each impl carries its signature (impls always need one); the point is that
+	// the impl BODY — `(helper)`, `true`, `none` — isn't itself read as a sig.
 	clean := []string{
-		"(fun helper () 1)\n(fun use () (helper))\n(use)",
-		"(fun ok () true)\n(ok)",
-		"(fun no () none)\n(no)",
+		"(fun helper () Number)\n(let helper () = 1)\n(fun use () Number)\n(let use () = (helper))\n(use)",
+		"(fun ok () Boolean)\n(let ok () = true)\n(ok)",
+		"(fun no () None)\n(let no () = none)\n(no)",
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); len(d) != 0 {
@@ -75,8 +85,7 @@ func TestFunImplNotMistakenForSig(t *testing.T) {
 // 0) is recognized and erased; the `self`-bodied implementation registers it.
 func TestMethodSignatureRecognized(t *testing.T) {
 	clean := []string{
-		"(struct P x)\n(method P.show (Self) Number)\n(method P.show (self) self.x)\n(let var p = P.{ x 5 })\np.show",
-		"(struct P x)\n(method P.show (self) self.x)\n(let var p = P.{ x 5 })\np.show", // impl-only
+		"(struct P x)\n(method P.show (Self) Number)\n(let P.show (self) = self.x)\n(let var p = P.{ x = 5 })\np.show",
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); len(d) != 0 {
@@ -101,9 +110,9 @@ func TestMissingImplementation(t *testing.T) {
 		}
 	}
 	clean := []string{
-		"(fun add (Number Number) Number)\n(fun add (a b) (+ a b))", // sig then impl
-		"(fun add (a b) (+ a b))\n(fun add (Number Number) Number)", // impl then sig (hoist)
-		"(struct P x)\n(method P.show (Self) Number)\n(method P.show (self) self.x)",
+		"(fun add (Number Number) Number)\n(let add (a b) = (+ a b))", // sig then impl
+		"(let add (a b) = (+ a b))\n(fun add (Number Number) Number)", // impl then sig (hoist)
+		"(struct P x)\n(method P.show (Self) Number)\n(let P.show (self) = self.x)",
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); hasDiag(d, "missing-implementation") {
@@ -117,7 +126,7 @@ func TestMissingImplementation(t *testing.T) {
 func TestSigImplCrossFile(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"lib/a.phl": "(fun add (Number Number) Number)\n", // sig
-		"lib/b.phl": "(fun add (x y) (+ x y))\n",          // impl in sibling
+		"lib/b.phl": "(let add (x y) = (+ x y))\n",        // impl in sibling
 	})
 	a := filepath.Join(root, "lib/a.phl")
 	if d := AnalyzeFile(a, []byte("(fun add (Number Number) Number)\n")); hasDiag(d, "missing-implementation") {
@@ -133,15 +142,19 @@ func TestSigImplCrossFile(t *testing.T) {
 
 // §3 enforcement: a Capitalized identifier used as an implementation parameter
 // name is flagged (it reads as a type — a probable mistaken signature). The
-// receiver name `Self` and the value literals are excluded.
+// receiver name `Self` and the value literals are excluded. In a CLAUSE param
+// list a Capitalized leaf / `(Type name)` group is a legal PATTERN (a type
+// value / type test), so the check applies only to non-clause param lists —
+// an anonymous fun's, a macro's, an accessor's.
 func TestCapitalizedParamFlagged(t *testing.T) {
-	if d := AnalyzeFile("t.pho", []byte("(fun add (Number b) (+ b 1))")); !hasDiag(d, "capitalized-param") {
+	if d := AnalyzeFile("t.pho", []byte("(let apply = (fun (Q) 5))")); !hasDiag(d, "capitalized-param") {
 		t.Errorf("expected capitalized-param, got %v", d)
 	}
 	clean := []string{
-		"(fun add (a b) (+ a b))",
-		"(fun add (Number Number) Number)\n(fun add (a b) (+ a b))",                 // the sig is skipped, not flagged
-		"(struct C n)\n(static property C.zero get (method C (self) self.{ n 0 }))", // Self ok
+		"(let add (a b) = (+ a b))",
+		"(fun add (Number Number) Number)\n(let add (a b) = (+ a b))",        // the sig is skipped, not flagged
+		"(let add (Number b) = (+ b 1))",                                     // a clause (Type name) pattern is a type test
+		"(struct C n)\n(static property C.zero (get (self) self.{ n = 0 }))", // Self ok
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.pho", []byte(src)); hasDiag(d, "capitalized-param") {
@@ -156,8 +169,8 @@ func TestCapitalizedParamFlagged(t *testing.T) {
 // and the implementation's return are validated against it.
 func TestInlineFunSigChecks(t *testing.T) {
 	bad := []string{
-		"(fun f (Number) Number)\n(fun f (n) n)\n(f 'hi')", // arg mismatch
-		"(fun f (Number) String)\n(fun f (n) n)",           // return mismatch
+		"(fun f (Number) Number)\n(let f (n) = n)\n(f 'hi')", // arg mismatch
+		"(fun f (Number) String)\n(let f (n) = n)",           // return mismatch
 	}
 	for _, src := range bad {
 		if !hasDiag(AnalyzeFile("t.pho", []byte(src)), "type-mismatch") {
@@ -165,9 +178,9 @@ func TestInlineFunSigChecks(t *testing.T) {
 		}
 	}
 	good := []string{
-		"(fun f (Number) Number)\n(fun f (n) n)\n(f 5)",
-		"(fun f (Number) Number)\n(fun f (n) n)",
-		"(fun g (a) a)\n(g 'hi')", // un-typed: gradual, never fires
+		"(fun f (Number) Number)\n(let f (n) = n)\n(f 5)",
+		"(fun f (Number) Number)\n(let f (n) = n)",
+		"(let g (a) = a)\n(g 'hi')", // un-typed: gradual, never fires
 	}
 	for _, src := range good {
 		if hasDiag(AnalyzeFile("t.pho", []byte(src)), "type-mismatch") {
@@ -189,7 +202,7 @@ func TestInlineTypedBindingChecks(t *testing.T) {
 // An inline method signature checks method-call arguments; param 0 is the
 // receiver type, excluded from the call signature.
 func TestInlineMethodSigChecks(t *testing.T) {
-	base := "(struct P x)\n(method P.take (Self Number) Number)\n(method P.take (self n) n)\n(let var p = P.{ x 1 })\n"
+	base := "(struct P x)\n(method P.take (Self Number) Number)\n(let P.take (self n) = n)\n(let var p = P.{ x = 1 })\n"
 	if !hasDiag(AnalyzeFile("t.pho", []byte(base+"(p.take 'hi')")), "type-mismatch") {
 		t.Error("expected type-mismatch for (p.Take 'hi')")
 	}

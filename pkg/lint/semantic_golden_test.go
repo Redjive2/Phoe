@@ -11,10 +11,10 @@ import "testing"
 func TestSemanticTokensGolden(t *testing.T) {
 	src := "(import 'std/io')\n" +
 		"(struct Point x #y)\n" +
-		"(method Point.shift (self n) (+ self.x n))\n" +
+		"(let Point.shift (self n) = (+ self.x n))\n" +
 		"(fun main (a) (identity do\n" +
-		"\t(let var p = Point.{ x 1 #y 2 })\n" +
-		"\t(foreach i in (range a) (io.print_line i))\n" +
+		"\t(let var p = Point.{ x = 1 #y = 2 })\n" +
+		"\t(foreach i in (range a) (io/print-line i))\n" +
 		"))\n" +
 		"(let pi = 3)\n"
 
@@ -26,15 +26,16 @@ func TestSemanticTokensGolden(t *testing.T) {
 		{1, 2, 8, SemTokKeyword},     // import
 		{2, 2, 8, SemTokKeyword},     // struct
 		{2, 9, 14, SemTokType},       // Point
-		{3, 2, 8, SemTokKeyword},     // method
-		{3, 9, 14, SemTokType},       // Point (owner)
-		{3, 15, 20, SemTokMethod},    // Shift
-		{3, 22, 26, SemTokFunction},  // self
-		{3, 27, 28, SemTokParameter}, // n
-		{3, 31, 32, SemTokOperator},  // +
-		{3, 33, 37, SemTokFunction},  // self (body)
-		{3, 38, 39, SemTokProperty},  // X
-		{3, 40, 41, SemTokParameter}, // n
+		{3, 2, 5, SemTokKeyword},     // let (clause head)
+		{3, 6, 11, SemTokType},       // Point (owner)
+		{3, 12, 17, SemTokMethod},    // shift
+		{3, 19, 23, SemTokParameter}, // self (the receiver binder)
+		{3, 24, 25, SemTokParameter}, // n
+		{3, 27, 28, SemTokKeyword},   // = (the clause's body marker)
+		{3, 30, 31, SemTokOperator},  // +
+		{3, 32, 36, SemTokParameter}, // self (body)
+		{3, 37, 38, SemTokProperty},  // x
+		{3, 39, 40, SemTokParameter}, // n
 		{4, 2, 5, SemTokKeyword},     // fun
 		{4, 6, 10, SemTokFunction},   // main
 		{4, 12, 13, SemTokParameter}, // a
@@ -49,8 +50,8 @@ func TestSemanticTokensGolden(t *testing.T) {
 		{6, 13, 15, SemTokKeyword},   // in
 		{6, 17, 22, SemTokFunction},  // range (builtin)
 		{6, 23, 24, SemTokParameter}, // a
-		{6, 27, 29, SemTokNamespace}, // io
-		{6, 30, 40, SemTokProperty},  // print_line
+		{6, 27, 29, SemTokNamespace}, // io (package segment)
+		{6, 30, 40, SemTokFunction},  // print-line (final export — a function, not a namespace)
 		{6, 41, 42, SemTokVariable},  // i
 		{8, 2, 5, SemTokKeyword},     // let
 		{8, 6, 8, SemTokVariable},    // pi
@@ -70,6 +71,43 @@ func TestSemanticTokensGolden(t *testing.T) {
 	}
 }
 
+// TestSemanticTokensSlashChain pins that a package path `a/b/c` classifies
+// every INTERMEDIATE segment as a namespace but the FINAL export by its kind —
+// a function for a kebab-case name, a type for a Title-Kebab-Case one. This
+// guards against the whole path reading as @namespace (which italicizes the
+// trailing function/type in most themes). Depth is exercised (3 segments) so
+// the inner-chain segments are covered, not just the leftmost.
+func TestSemanticTokensSlashChain(t *testing.T) {
+	src := "(std/core/print-line 1)\n" +
+		"(std/io/Reader)\n"
+
+	got := SemanticTokens("slash.phl", []byte(src))
+
+	// text -> classification, resolved by slicing the source at each span.
+	byText := map[string]SemanticTokenType{}
+	for _, g := range got {
+		if g.Span.StartLine < 1 {
+			continue
+		}
+		lines := []string{"", "(std/core/print-line 1)", "(std/io/Reader)"}
+		line := lines[g.Span.StartLine]
+		byText[line[g.Span.StartCol-1:g.Span.EndCol-1]] = g.Type
+	}
+
+	want := map[string]SemanticTokenType{
+		"std":        SemTokNamespace, // leftmost package
+		"core":       SemTokNamespace, // inner subpackage
+		"print-line": SemTokFunction,  // final export (function — NOT a namespace)
+		"io":         SemTokNamespace, // inner subpackage
+		"Reader":     SemTokType,      // final export (Capitalized → type)
+	}
+	for text, wt := range want {
+		if got := byText[text]; got != wt {
+			t.Errorf("%q classified %v, want %v", text, got, wt)
+		}
+	}
+}
+
 // TestSemanticTokensInterpolation pins that identifiers embedded in a
 // string's `%...` interpolation chunks are classified — `%name`,
 // `%a.b.c`, and `%(call args)` — so the editor highlights them the same
@@ -79,7 +117,7 @@ func TestSemanticTokensGolden(t *testing.T) {
 func TestSemanticTokensInterpolation(t *testing.T) {
 	// One line, so columns are easy to verify. `who` is a parameter;
 	// `range` is a builtin; `p` a parameter, `X` a property via dot.
-	src := "(fun f (who p) (io.print 'hi %who n=%(range who) d=%p.X'))\n"
+	src := "(let f (who p) = (io.print 'hi %who n=%(range who) d=%p.X'))\n"
 
 	got := SemanticTokens("interp.phl", []byte(src))
 

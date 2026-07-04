@@ -1,3 +1,4 @@
 -- pins the deliberate ParseArgs tightening: surplus arguments to a
--- non-variadic builtin are an arity error, not silently ignored
-(= x 1 2)
+-- non-variadic builtin are an arity error, not silently ignored.
+-- `=` is reassignment (2-arg); 4 args is surplus and must be flagged.
+(= x 1 2 3)

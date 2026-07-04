@@ -18,24 +18,24 @@ func TestInBodyInference(t *testing.T) {
 	}
 	defer annot.SetDefault(annot.New(nil))
 
-	g := "(fun g (Number) none)\n(fun g (n) none)\n"    // g  : Number -> Nil
-	gs := "(fun gs (String) none)\n(fun gs (s) none)\n" // gs : String -> Nil
-	h := "(fun h (Number) String)\n(fun h (n) 's')\n" // h  : Number -> String
+	g := "(fun g (Number) None)\n(let g (n) = none)\n"    // g  : Number -> Nil
+	gs := "(fun gs (String) None)\n(let gs (s) = none)\n" // gs : String -> Nil
+	h := "(fun h (Number) String)\n(let h (n) = 's')\n"   // h  : Number -> String
 	cases := []struct {
 		name    string
 		src     string
 		wantErr bool
 	}{
 		// New in-body coverage.
-		{"typed param misused in body", g + "(fun f (String) none)\n(fun f (x) (g x))\n", true},
-		{"in-body const chain", g + h + "(fun f (n) do (let a = (h n)) (g a))\n", true},
-		{"in-body literal const", gs + "(fun f () do (let a = 5) (gs a))\n", true},
-		{"local const shadow is used", "(let x = 5)\n" + g + "(fun f () do (let x = 's') (g x))\n", true},
+		{"typed param misused in body", g + "(fun f (String) None)\n(let f (x) = (g x))\n", true},
+		{"in-body const chain", g + h + "(let f (n) = do (let a = (h n)) (g a))\n", true},
+		{"in-body literal const", gs + "(let f () = do (let a = 5) (gs a))\n", true},
+		{"local const shadow is used", "(let x = 5)\n" + g + "(let f () = do (let x = 's') (g x))\n", true},
 
 		// Soundness.
-		{"typed param used correctly", g + "(fun f (Number) none)\n(fun f (x) (g x))\n", false},
-		{"in-body var is not propagated", g + h + "(fun f () do (let var a = (h 5)) (g a))\n", false},
-		{"local shadow resolved in body scope, not file scope", "(let x = 's')\n" + g + "(fun f () do (let x = 5) (g x))\n", false},
+		{"typed param used correctly", g + "(fun f (Number) None)\n(let f (x) = (g x))\n", false},
+		{"in-body var is not propagated", g + h + "(let f () = do (let var a = (h 5)) (g a))\n", false},
+		{"local shadow resolved in body scope, not file scope", "(let x = 's')\n" + g + "(let f () = do (let x = 5) (g x))\n", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

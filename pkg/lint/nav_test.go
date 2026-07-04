@@ -8,30 +8,30 @@ import (
 )
 
 const navSrc = `-- Adds one to a number.
-(fun add_one (n) (+ n 1))
+(fun add-one (n) (+ n 1))
 (struct Point x #y)
-(method Point.shift (self d) (+ self.x d))
-(let var p = Point.{ x 10 #y 20 })
-(let var total = (add_one p.x))
+(let Point.shift (self d) = (+ self.x d))
+(let var p = Point.{ x = 10 #y = 20 })
+(let var total = (add-one p.x))
 (= total 5)
 `
 
 // Cursor on the `AddOne` call site jumps to the fun declaration.
 func TestDefinitionAtFunction(t *testing.T) {
-	// Line 6 `(let var total = (add_one p.x))` — cursor inside add_one.
+	// Line 6 `(let var total = (add-one p.x))` — cursor inside add-one.
 	site, ok := DefinitionAt("main.pho", []byte(navSrc), 6, 21)
 	if !ok {
-		t.Fatal("expected a definition for add_one call")
+		t.Fatal("expected a definition for add-one call")
 	}
 	if site.Span.StartLine != 2 {
-		t.Fatalf("expected add_one decl on line 2, got %d", site.Span.StartLine)
+		t.Fatalf("expected add-one decl on line 2, got %d", site.Span.StartLine)
 	}
 }
 
 // Cursor on `p.X` member access jumps to the field declaration in the
 // struct.
 func TestDefinitionAtStructField(t *testing.T) {
-	col := strings.Index("(let var total = (add_one p.x))", "x)") + 1
+	col := strings.Index("(let var total = (add-one p.x))", "x)") + 1
 	site, ok := DefinitionAt("main.pho", []byte(navSrc), 6, col)
 	if !ok {
 		t.Fatal("expected a definition for p.x member")
@@ -70,7 +70,7 @@ func TestDefinitionAtImportMember(t *testing.T) {
 		t.Fatal(err)
 	}
 	lib := filepath.Join(pkgDir, "lib.phl")
-	if err := os.WriteFile(lib, []byte("(fun visible () 1)\n"), 0o644); err != nil {
+	if err := os.WriteFile(lib, []byte("(let visible () = 1)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	main := filepath.Join(dir, "main.pho")
@@ -96,9 +96,9 @@ func TestDefinitionAtImportMember(t *testing.T) {
 func TestHoverAtFunction(t *testing.T) {
 	md, _, ok := HoverAt("main.pho", []byte(navSrc), 6, 19)
 	if !ok {
-		t.Fatal("expected hover for add_one")
+		t.Fatal("expected hover for add-one")
 	}
-	if !strings.Contains(md, "(fun add_one (n) ...)") {
+	if !strings.Contains(md, "(fun add-one (n) ...)") {
 		t.Fatalf("expected signature in hover, got %q", md)
 	}
 	if !strings.Contains(md, "Adds one to a number.") {
@@ -117,8 +117,8 @@ func TestHoverStructExcludesSwallowedForms(t *testing.T) {
 	if !ok {
 		t.Fatal("expected hover on the struct name")
 	}
-	if !strings.Contains(md, "(struct File id path)") {
-		t.Fatalf("expected fields-only header, got %q", md)
+	if !strings.Contains(md, "**struct**") || !strings.Contains(md, "`id`") || !strings.Contains(md, "`path`") {
+		t.Fatalf("expected a struct hover listing fields id + path, got %q", md)
 	}
 	if strings.Contains(md, "fun") || strings.Contains(md, "dep.") {
 		t.Fatalf("swallowed code leaked into struct hover: %q", md)
@@ -132,20 +132,93 @@ func TestHoverStructValidFields(t *testing.T) {
 	if !ok {
 		t.Fatal("expected hover on the struct name")
 	}
-	if !strings.Contains(md, "(struct Point #x #y #z)") {
-		t.Fatalf("expected all fields in header, got %q", md)
+	for _, f := range []string{"#x", "#y", "#z"} {
+		if !strings.Contains(md, "`"+f+"`") {
+			t.Fatalf("expected field %s in hover, got %q", f, md)
+		}
 	}
 }
 
-// Hover on a shaped var names the struct it holds.
+// Hover on a type symbol renders a rich body: its kind, generic template
+// parameters (with bounds), and members — struct fields+methods, trait
+// methods+properties, or a type alias's target.
+func TestTypeHoverRichBody(t *testing.T) {
+	mustContain := func(t *testing.T, md string, subs ...string) {
+		t.Helper()
+		for _, s := range subs {
+			if !strings.Contains(md, s) {
+				t.Errorf("hover missing %q\n%s", s, md)
+			}
+		}
+	}
+
+	// Generic struct: kind, bound generic params, fields with types, a method
+	// signature (result from the sig form).
+	gs := "(template U (Some-Type B))\n(struct Container.{ U u B v })\n" +
+		"(method Container.wrap (Self) B)\n(let Container.wrap (self) = self.v)\n"
+	md, _, ok := HoverAt("t.pho", []byte(gs), 2, 10)
+	if !ok {
+		t.Fatal("expected hover on the struct name")
+	}
+	mustContain(t, md, "**struct**", "generic", "B <: Some-Type", "**fields**", "`u`: U", "**methods**", "(wrap) → B")
+
+	// Trait: methods with result types, typed property with accessors.
+	tr := "(trait Drawable (method self.area (self) Number) (property (String self.name) get))\n"
+	md, _, ok = HoverAt("t.pho", []byte(tr), 1, 10)
+	if !ok {
+		t.Fatal("expected hover on the trait name")
+	}
+	mustContain(t, md, "**trait**", "**methods**", "area() → Number", "**properties**", "name: String (get)")
+
+	// Type alias: what it equals.
+	al := "(type Collection (Or String List Map))\n"
+	md, _, ok = HoverAt("t.pho", []byte(al), 1, 8)
+	if !ok {
+		t.Fatal("expected hover on the alias name")
+	}
+	mustContain(t, md, "**type alias**", "(Or String List Map)")
+}
+
+// Hover on a shaped var names the struct-type it holds (the type label, not the
+// coarse shape word).
 func TestHoverAtShapedVar(t *testing.T) {
-	col := strings.Index("(let var total = (add_one p.x))", "p.x") + 1
+	col := strings.Index("(let var total = (add-one p.x))", "p.x") + 1
 	md, _, ok := HoverAt("main.pho", []byte(navSrc), 6, col)
 	if !ok {
 		t.Fatal("expected hover for p")
 	}
-	if !strings.Contains(md, "instance of Point") {
-		t.Fatalf("expected inferred shape in hover, got %q", md)
+	if !strings.Contains(md, "— Point") {
+		t.Fatalf("expected inferred type in hover, got %q", md)
+	}
+}
+
+// Hover on a function parameter shows ONLY the parameter (not the whole
+// enclosing function) plus its declared type from the signature. Covers a free
+// function's param, a method's typed param, and the method receiver `self`.
+func TestHoverAtParam(t *testing.T) {
+	fn := "(fun scale (Number String) Boolean)\n(let scale (factor label) = (== factor 1))\n"
+	cf := strings.Index("(let scale (factor label) = (== factor 1))", "factor") + 1
+	md, _, ok := HoverAt("t.pho", []byte(fn), 2, cf)
+	if !ok {
+		t.Fatal("expected hover for param 'factor'")
+	}
+	if strings.Contains(md, "let scale") {
+		t.Fatalf("param hover must show only the param, not the function: %q", md)
+	}
+	if !strings.Contains(md, "parameter — Number") {
+		t.Fatalf("expected 'parameter — Number', got %q", md)
+	}
+
+	me := "(method Box.at (Self Number) String)\n(let Box.at (self i) = self.n)\n"
+	ci := strings.Index("(let Box.at (self i) = self.n)", " i)") + 2
+	md2, _, _ := HoverAt("t.pho", []byte(me), 2, ci)
+	if !strings.Contains(md2, "parameter — Number") {
+		t.Fatalf("method param 'i' expected 'parameter — Number', got %q", md2)
+	}
+	cs := strings.Index("(let Box.at (self i) = self.n)", "self") + 1
+	md3, _, _ := HoverAt("t.pho", []byte(me), 2, cs)
+	if !strings.Contains(md3, "parameter — Box") {
+		t.Fatalf("receiver 'self' expected 'parameter — Box', got %q", md3)
 	}
 }
 
@@ -165,7 +238,7 @@ func TestReferencesAtVar(t *testing.T) {
 // References on a struct member finds dot accesses plus the decl.
 func TestReferencesAtMember(t *testing.T) {
 	src := navSrc + "(let var more = p.x)\n"
-	col := strings.Index("(let var total = (add_one p.x))", "x)") + 1
+	col := strings.Index("(let var total = (add-one p.x))", "x)") + 1
 	sites := ReferencesAt("", "main.pho", []byte(src), 6, col)
 	// self.X (line 4), p.X (line 6), p.X (line 8), decl X (line 3).
 	if len(sites) != 4 {
@@ -187,7 +260,7 @@ func TestDocumentSymbols(t *testing.T) {
 			point = &syms[i]
 		}
 	}
-	for _, want := range []string{"add_one", "Point", "p", "total"} {
+	for _, want := range []string{"add-one", "Point", "p", "total"} {
 		found := false
 		for _, n := range names {
 			if n == want {

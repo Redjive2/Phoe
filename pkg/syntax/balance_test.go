@@ -122,7 +122,7 @@ func TestBalancePartialDedent(t *testing.T) {
 func TestBalanceNoOpOnBalancedCode(t *testing.T) {
 	cases := []string{
 		"(print x)",
-		"(fun f (x)\n  (do\n    (print x)))\n",
+		"(= f (x)\n  (do\n    (print x)))\n",
 		"(print\n'weird indent')",
 		"(a\n  (b x\n  y\n)\n)",
 	}

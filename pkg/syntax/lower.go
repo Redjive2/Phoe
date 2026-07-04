@@ -44,15 +44,16 @@ func Lower(top []ast.PNode) core.Node {
 
 // isDoBoundary reports whether n is a bare keyword leaf that terminates a
 // `do`-arm's capture. A `do` inside an if/unless branch must stop at the next
-// branch separator — `elif` or `else` — instead of swallowing the sibling
-// branches into its body (the "context-aware do" of Doc/Features.md). The
+// branch separator — `elif` or `else` — and a `do` in a `select` case's
+// result stops at the next `case` (Features.md §3) — instead of swallowing
+// the sibling branches into its body (the "context-aware do"). The
 // loop forms put `do` last (`while cond then do …`), so they never reach one.
 func isDoBoundary(n ast.PNode) bool {
 	lf, ok := n.(*ast.PLeaf)
 	if !ok {
 		return false
 	}
-	return lf.Value == "elif" || lf.Value == "else"
+	return lf.Value == "elif" || lf.Value == "else" || lf.Value == "case"
 }
 
 // splitDoForm implements `do` notation. Within a call form, a bare `do`
@@ -212,6 +213,9 @@ func normalizeDoNode(n ast.PNode) ast.PNode {
 	case *ast.PDot:
 		v.LHS = normalizeDoNode(v.LHS)
 		v.RHS = normalizeDoNode(v.RHS)
+	case *ast.PSlash:
+		v.LHS = normalizeDoNode(v.LHS)
+		v.RHS = normalizeDoNode(v.RHS)
 	case *ast.PMacroCall:
 		v.Head = normalizeDoNode(v.Head)
 		for i, a := range v.Args {
@@ -297,6 +301,10 @@ func lowerNode(p ast.PNode) core.Node {
 		// code can't accidentally call it directly.
 		return spanned(core.Branch{core.Leaf(core.Dot), lowerNode(n.LHS), lowerNode(n.RHS)}, n.Span)
 
+	case *ast.PSlash:
+		// a/b → (Slash a b). Package/subpackage navigation; mangled like Dot.
+		return spanned(core.Branch{core.Leaf(core.Slash), lowerNode(n.LHS), lowerNode(n.RHS)}, n.Span)
+
 	case *ast.PMacroCall:
 		// (~head a b ...) → (Macrocall head 'a 'b ...): the macro's arguments
 		// are quoted, and the Macrocall builtin resolves head to a macro,
@@ -372,7 +380,7 @@ func listifyP(p ast.PNode) core.Node {
 			out = append(out, listifyP(c))
 		}
 		return spanned(out, n.Span)
-	case *ast.PSigil, *ast.PDot, *ast.PMacroCall:
+	case *ast.PSigil, *ast.PDot, *ast.PSlash, *ast.PMacroCall:
 		return listifyNode(lowerNode(p))
 	}
 	return nil

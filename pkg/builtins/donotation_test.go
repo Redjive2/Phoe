@@ -23,10 +23,10 @@ func TestDoNotationSequencesAndReturnsLast(t *testing.T) {
 // A multi-statement function body uses (identity do …) to sequence its
 // forms and yield the last; bodies are bare expressions post-cutover.
 func TestDoNotationInFunBody(t *testing.T) {
-	src := "(fun add_with_log (a b) (identity do\n" +
+	src := "(let add-with-log (a b) = (identity do\n" +
 		"  (+ a 0)\n" +
 		"  (+ a b)))\n" +
-		"(add_with_log 3 4)"
+		"(add-with-log 3 4)"
 	if v := evalProgram(t, src); v.Kind != core.KindNum || v.Val.(float64) != 7 {
 		t.Fatalf("addWithLog 3 4 = %v (kind %s), want 7", v.Val, v.Kind)
 	}

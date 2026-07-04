@@ -101,12 +101,12 @@ func Derepr(node core.Node) core.Node {
 }
 
 // isDoBoundaryNode is the core.Node counterpart of isDoBoundary
-// (pkg/syntax/lower.go): a bare `elif`/`else` keyword leaf that terminates a
-// `do`-arm's capture, so a macro-generated if/unless splits its arms the same
-// way source does.
+// (pkg/syntax/lower.go): a bare `elif`/`else`/`case` keyword leaf that
+// terminates a `do`-arm's capture, so a macro-generated if/unless/select
+// splits its arms the same way source does.
 func isDoBoundaryNode(n core.Node) bool {
 	lf, ok := core.AsLeaf(n)
-	return ok && (string(lf) == "elif" || string(lf) == "else")
+	return ok && (string(lf) == "elif" || string(lf) == "else" || string(lf) == "case")
 }
 
 // splitDoNode is the runtime counterpart of splitDoForm (pkg/syntax/lower.go):

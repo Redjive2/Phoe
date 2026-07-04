@@ -1,0 +1,24 @@
+-- a defaulted-optional parameter, spelled sig-side as (optional T else D),
+-- substitutes the default when the argument is `none` (omitted or an explicit
+-- none). This exercises the fun/= and method impls, and must run clean (exit 0,
+-- silent stderr) end to end (lint-on-run + runtime). The defaulted slots are
+-- typed Dynamic so an explicit-none argument coalesces rather than tripping the
+-- linter's call-type check.
+(fun add (Number (optional Dynamic else 0)) Number)
+(let add (a b) = (+ a b))
+(add 5)          -- b omitted -> 0
+(add 5 3)        -- b provided
+(add 5 none)     -- explicit none coalesces to the default
+(add 5 0)        -- a real 0 is kept (none-coalescing, not falsy)
+
+(fun scale (Number (optional Dynamic else 2)) Number)
+(let scale (x factor) = (* x factor))
+(scale 10)
+(scale 10 5)
+
+(struct Box.{ Number n })
+(method Box.plus (Self (optional Dynamic else 1)) Number)
+(let Box.plus (self k) = (+ self.n k))
+(let b = Box.{ n = 4 })
+(b.plus)
+(b.plus 10)

@@ -11,9 +11,9 @@ import (
 // instance.
 func TestStructRecordLintsClean(t *testing.T) {
 	clean := []string{
-		"(struct P x y)\n(let r = (P.{ x 1 y 2 }.is? Struct.{ x Number }))\n",
-		"(struct P x)\n(let p = P.{ x 1 })\n(let r = (p.is? Struct.{ x Number y String }))\n",
-		"(struct P x)\n(let p = P.{ x 1 })\n(let r = (p.is? Struct))\n",
+		"(struct P x y)\n(let r = (P.{ x = 1 y = 2 }.is? Struct.{ x = Number }))\n",
+		"(struct P x)\n(let p = P.{ x = 1 })\n(let r = (p.is? Struct.{ x = Number y = String }))\n",
+		"(struct P x)\n(let p = P.{ x = 1 })\n(let r = (p.is? Struct))\n",
 	}
 	for _, src := range clean {
 		if d := AnalyzeFile("t.phl", []byte(src)); len(d) != 0 {
@@ -35,9 +35,9 @@ func TestStructRecordChecking(t *testing.T) {
 		src     string
 		wantErr bool
 	}{
-		{"conforming struct arg", "(struct P x)\n(fun f (Struct.{ x Number }) none)\n(fun f (p) none)\n(f P.{ x 1 })", false},
-		{"non-struct literal arg", "(fun f (Struct.{ x Number }) none)\n(fun f (p) none)\n(f 5)", true},
-		{"record var annotation clean", "(struct P x)\n(let var (Struct.{ x Number } p) = P.{ x 1 })", false},
+		{"conforming struct arg", "(struct P x)\n(fun f (Struct.{ x = Number }) None)\n(let f (p) = none)\n(f P.{ x = 1 })", false},
+		{"non-struct literal arg", "(fun f (Struct.{ x = Number }) None)\n(let f (p) = none)\n(f 5)", true},
+		{"record var annotation clean", "(struct P x)\n(let var Struct.{ x = Number } p = P.{ x = 1 })", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

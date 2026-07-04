@@ -172,9 +172,17 @@ func readAtom(body string, pos int) (int, error) {
 		for end < len(body) && isIdentCont(body[end]) {
 			end++
 		}
-		// A single optional trailing '?' (the predicate convention), so
-		// `%done?` interpolates the `done?` variable.
+		// An optional trailing '?' (predicate convention) and/or '!' (effect
+		// convention), always ordered `name?!` — so `%done?` interpolates the
+		// `done?` variable and `%flush!` the `flush!` one. The self-mutation '='
+		// suffix is NOT consumed here: a bare `%name` interpolates a value, and a
+		// trailing '=' in a string is almost always a literal (`%a=%b` shows a
+		// key/value). A `=`-method reference can still be interpolated via the
+		// explicit `%(expr)` form, which lexes through the full lexer.
 		if end < len(body) && body[end] == '?' {
+			end++
+		}
+		if end < len(body) && body[end] == '!' {
 			end++
 		}
 		return end, nil
@@ -362,6 +370,10 @@ func OffsetSpans(n ast.PNode, lineDelta, firstColDelta int) {
 		shift(&t.Span)
 		OffsetSpans(t.Inner, lineDelta, firstColDelta)
 	case *ast.PDot:
+		shift(&t.Span)
+		OffsetSpans(t.LHS, lineDelta, firstColDelta)
+		OffsetSpans(t.RHS, lineDelta, firstColDelta)
+	case *ast.PSlash:
 		shift(&t.Span)
 		OffsetSpans(t.LHS, lineDelta, firstColDelta)
 		OffsetSpans(t.RHS, lineDelta, firstColDelta)

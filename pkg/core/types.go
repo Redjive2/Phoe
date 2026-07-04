@@ -56,6 +56,40 @@ type tenv struct {
 	// are an intentional overlay that shadows same-named builtins in the
 	// isolated annotation env, keeping `~type` and the `type` builtin distinct.
 	AllowShadow bool
+
+	// FunDecls links signatures to their adjacent implementation clauses at
+	// definition time (Features.md §1/§9), keyed "name" / "Owner.name" /
+	// "Owner/name". Dispatch never consults this — dispatchers capture their
+	// *FunDecl. See fundecl.go.
+	FunDecls map[string]*FunDecl
+
+	// RecvRebind, when non-nil, is the slot the currently running `(var self)`
+	// method call reports a whole-value receiver reassignment into. The dot
+	// accessor's method wrapper installs a fresh slot before each method call;
+	// the clause dispatcher records the rebound receiver here; the wrapper
+	// writes it back to the receiver lvalue. See RecvRebind, RecordRecvRebind.
+	RecvRebind *RecvRebind
+
+	// FrameSink is a one-shot mailbox: when non-nil, the next function body to
+	// bind its arguments stores its argument-frame map here and clears the
+	// mailbox. BindClauseBody uses it to read a clause's `(var param)` final
+	// values after the body runs (the map is mutated in place by `=`, so it
+	// outlives the frame pop). Nothing else runs between the set and the
+	// consume, so it never leaks to an unrelated call.
+	FrameSink *map[string]tStackEntry
+}
+
+// RecvRebind carries a `(var self)` method's whole-value receiver reassignment
+// back to the call site. A method body that rebinds its receiver (`(= self v)`,
+// as opposed to an in-place field write that already shares the pointer) has no
+// visible caller binding — the body runs with the caller's frames hidden — so
+// the dispatcher records the new value here and the dot accessor's wrapper
+// assigns it back to the receiver lvalue. Set is the explicit "did rebind"
+// signal, distinguishing a genuine reassignment from an unchanged receiver
+// without an unreliable value comparison. See Effects.md `(var self)`.
+type RecvRebind struct {
+	Set bool
+	Val Tval
 }
 
 type tpackage struct {

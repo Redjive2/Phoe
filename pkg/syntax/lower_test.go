@@ -46,16 +46,16 @@ func TestLowerDotChain(t *testing.T) {
 	}
 }
 
-// Dot-brace construction — `LHS.{ field value … }` lowers to a plain call of
+// Dot-brace construction — `LHS.{ field = value … }` lowers to a plain call of
 // LHS with each bare key rewritten to a string-literal field name:
-// `Point.{ X 10 y 20 }` becomes `(Point "X" 10 "y" 20)`. It is NOT a (Dot …)
+// `Point.{ x = 10 y = 20 }` becomes `(Point "x" 10 "y" 20)`. It is NOT a (Dot …)
 // member access, and NOT a call with a single (map …) argument — that was the
 // retired `(LHS { … })` construction form.
 func TestLowerDotBraceConstruction(t *testing.T) {
-	got := dumpTree(lower(`Point.{ X 10 y 20 }`))
-	want := dumpTree(lower(`(Point 'X' 10 'y' 20)`))
+	got := dumpTree(lower(`Point.{ x = 10 y = 20 }`))
+	want := dumpTree(lower(`(Point 'x' 10 'y' 20)`))
 	if got != want {
-		t.Fatalf("Point.{...} should lower to (Point \"X\" 10 \"y\" 20)\n  got:  %s\n  want: %s", got, want)
+		t.Fatalf("Point.{...} should lower to (Point \"x\" 10 \"y\" 20)\n  got:  %s\n  want: %s", got, want)
 	}
 	if strings.Contains(got, core.Dot) {
 		t.Errorf("dot-brace construction must not lower to a Dot access, got: %s", got)
@@ -69,14 +69,14 @@ func TestLowerDotBraceConstruction(t *testing.T) {
 // struct (`pkg.Struct.{…}`) builds through the resolved constructor, and field
 // access on the freshly built instance (`Struct.{…}.Field`) reads it back.
 func TestLowerDotBraceChains(t *testing.T) {
-	got := dumpTree(lower(`io.Writer.{ id 3 }`))
+	got := dumpTree(lower(`io.Writer.{ id = 3 }`))
 	want := dumpTree(lower(`(io.Writer 'id' 3)`))
 	if got != want {
 		t.Fatalf("pkg.Struct.{...} mismatch\n  got:  %s\n  want: %s", got, want)
 	}
 
-	got = dumpTree(lower(`Point.{ X 1 }.X`))
-	want = dumpTree(lower(`(Point 'X' 1).X`))
+	got = dumpTree(lower(`Point.{ x = 1 }.x`))
+	want = dumpTree(lower(`(Point 'x' 1).x`))
 	if got != want {
 		t.Fatalf("Struct.{...}.Field mismatch\n  got:  %s\n  want: %s", got, want)
 	}

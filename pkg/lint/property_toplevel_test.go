@@ -13,15 +13,15 @@ import (
 // boundary, mirroring the runtime loader's allow-list.
 func TestTopLevelPropertyInLibrary(t *testing.T) {
 	lib := `(let var n = 5)
-(property twice get (fun () (* n 2)) set (fun (v) (= n (/ v 2))))
+(property twice (get () (* n 2)) (set (v) (= n (/ v 2))))
 (struct Box v)
-(property Box.sq get (method Box (self) (* self.v self.v)))
+(property Box.sq (get (self) (* self.v self.v)))
 `
 	root := writeTree(t, map[string]string{
 		"script/std/mylib/lib.phl": lib,
 		"script/app.pho": "(import ('std/mylib' m))\n" +
 			"(let var a = m.twice)\n" + // free-standing property export resolves
-			"(let var b = m.Box.{ v 6 })\n" +
+			"(let var b = m.Box.{ v = 6 })\n" +
 			"(let var c = b.sq)\n" + // attached property member resolves on instance
 			"(let var d = m.nope)\n", // sanity: a real unknown export still fires
 	})

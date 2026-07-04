@@ -30,8 +30,8 @@ func TestLiteralSingletonResolution(t *testing.T) {
 	if got := resolveTypeNode(&ast.PLeaf{Value: `'GET'`}, nil); got != core.StrSingleton("GET") {
 		t.Errorf(`resolveTypeNode("GET") = %s, want "GET"`, got.Name())
 	}
-	if got := resolveTypeNode(&ast.PLeaf{Value: "True"}, nil); got != core.BoolSingleton(true) {
-		t.Errorf("resolveTypeNode(True) = %s, want True", got.Name())
+	if got := resolveTypeNode(&ast.PLeaf{Value: "true"}, nil); got != core.BoolSingleton(true) {
+		t.Errorf("resolveTypeNode(true) = %s, want true", got.Name())
 	}
 	// A bare name is still a type name, not a literal.
 	if got := resolveTypeNode(&ast.PLeaf{Value: "Number"}, nil); got != core.TypeNumber {

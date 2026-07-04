@@ -55,6 +55,17 @@ func CompletionsAt(path string, src []byte, line, col int) (defs []Definition) {
 				if s := bodyScopeFor(w, root, br, true, line, col); s != nil {
 					cursor = s
 				}
+			case "=", "let":
+				// A clause `(let name (patterns) [where g] = body)` — or the retired
+				// 4-child `(= name (params) body)` — is a fun/method IMPLEMENTATION
+				// (declOf normalizes it); open its body scope so params/pattern
+				// binders complete. isMethod = the target is a dot. Value-binding
+				// lets open no body scope (declOf gives Head const/var).
+				if d, ok := declOf(br); ok && (d.Head == "fun" || d.Head == "method") {
+					if s := bodyScopeFor(w, root, br, d.Head == "method", line, col); s != nil {
+						cursor = s
+					}
+				}
 			case "property":
 				if s := propertyBodyScope(w, root, br, line, col); s != nil {
 					cursor = s
@@ -145,21 +156,25 @@ func dotReceiverAt(tokens []syntax.Token, line, col int) (recv string, inDot boo
 	// recvOf returns the identifier at index i — but only as a genuine
 	// receiver, not a chain segment that is itself preceded by a dot
 	// (a.b.), since the chain's intermediate type isn't tracked.
+	// The member operators: `.` reaches a value's fields/methods, `/` reaches an
+	// imported package's exports (the kebab-slash cutover). Completion fires after
+	// either.
+	isMemberOp := func(v string) bool { return v == "." || v == "/" }
 	recvOf := func(i int) string {
 		if i < 0 || !looksLikeIdentifier(tokens[i].Value) {
 			return ""
 		}
-		if i >= 1 && tokens[i-1].Value == "." {
+		if i >= 1 && isMemberOp(tokens[i-1].Value) {
 			return ""
 		}
 		return tokens[i].Value
 	}
-	// `recv.|` — last token is the dot itself.
-	if tokens[k].Value == "." {
+	// `recv.|` / `recv/|` — last token is the operator itself.
+	if isMemberOp(tokens[k].Value) {
 		return recvOf(k - 1), true
 	}
-	// `recv.par|tial` — last token is the partial member, preceded by a dot.
-	if k >= 2 && tokens[k-1].Value == "." && looksLikeIdentifier(tokens[k].Value) &&
+	// `recv.par|tial` / `recv/par|tial` — last token is the partial member.
+	if k >= 2 && isMemberOp(tokens[k-1].Value) && looksLikeIdentifier(tokens[k].Value) &&
 		tokens[k].Span.EndLine == line && tokens[k].Span.EndCol == col {
 		return recvOf(k - 2), true
 	}
@@ -274,18 +289,50 @@ func isHashPrivate(name string) bool {
 }
 
 // propertyBodyScope opens the body scope when the cursor sits inside a
-// property's getter or setter — anonymous fun/method forms at children 3 and
-// 5 of (property <Receiver.>Name get getter [set setter]).
+// property's getter or setter — the `(get (params) body)` / `(set (params) body)`
+// accessor sub-forms of (property <Receiver.>Name (get …) [(set …)]).
 func propertyBodyScope(w *walker, parent *Scope, br *ast.PBranch, line, col int) *Scope {
-	for i := 3; i < len(br.Children); i += 2 {
-		if !spanContains(br.Children[i].GetSpan(), line, col) {
+	if len(br.Children) < 3 || !isAccessorSublist(br.Children[2], "get") {
+		return nil
+	}
+	// Each accessor is a sublist; open a scope binding its params (+ self for a struct).
+	owner := ""
+	if d, ok := declOf(br); ok {
+		owner = d.Owner
+	}
+	for _, ch := range br.Children[2:] {
+		acc, ok := asList(ch)
+		if !ok || len(acc.Children) != 3 || !spanContains(acc.Children[2].GetSpan(), line, col) {
 			continue
 		}
-		if ibr, ok := asList(br.Children[i]); ok {
-			return bodyScopeFor(w, parent, ibr, headIdent(ibr) == "method", line, col)
-		}
+		return accessorBodyScope(w, parent, acc.Children[1], acc.Children[2], owner, line, col)
 	}
 	return nil
+}
+
+// accessorBodyScope opens the completion scope for a NEW-form property accessor
+// `(get (params) body)` / `(set (params) body)`: binds each param, gives `self` the
+// owner's instance shape (struct property), and hoists body declarations.
+func accessorBodyScope(w *walker, parent *Scope, params, body ast.PNode, owner string, line, col int) *Scope {
+	bodyScope := newScope(parent)
+	if items, ok := declList(params); ok {
+		for _, item := range items {
+			if leaf, ok := item.(*ast.PLeaf); ok && looksLikeIdentifier(leaf.Value) {
+				bodyScope.Defs[leaf.Value] = Definition{Name: leaf.Value, Kind: DefParam, Span: leaf.Span}
+			}
+		}
+	}
+	if looksLikeIdentifier(owner) {
+		if d, ok := bodyScope.Defs["self"]; ok {
+			d.Shape = selfShapeForOwner(parent, owner)
+			bodyScope.Defs["self"] = d
+		}
+	}
+	if items, ok := declList(body); ok {
+		w.collect(bodyScope, items)
+		w.assignDeclShapes(bodyScope, items)
+	}
+	return bodyScope
 }
 
 // bodyScopeFor opens a body scope for a fun/method form when the
@@ -294,28 +341,39 @@ func propertyBodyScope(w *walker, parent *Scope, br *ast.PBranch, line, col int)
 // inside.
 func bodyScopeFor(w *walker, parent *Scope, br *ast.PBranch, isMethod bool, line, col int) *Scope {
 	var argList, body ast.PNode
+	isClause := false
 
-	switch {
-	case isMethod:
-		// (method Receiver.Name (args) body) — argList@2, body@3.
-		if len(br.Children) < 4 {
+	if headIdent(br) == "let" || headIdent(br) == "=" {
+		// A clause `(let [Owner.]name (patterns) [where g] = body)` (or the
+		// retired `=` impl form) — declOf resolves the pattern list and body.
+		d, ok := declOf(br)
+		if !ok || d.ArgList == nil || d.Body == nil {
 			return nil
 		}
-		argList, body = br.Children[2], br.Children[3]
-	case headIdent(br) == "macro":
-		// (macro ~name (params) body) — argList@3, body@4 (`~`@1, name@2).
-		if len(br.Children) < 5 {
-			return nil
-		}
-		argList, body = br.Children[3], br.Children[4]
-	default:
-		switch len(br.Children) {
-		case 3:
-			argList, body = br.Children[1], br.Children[2]
-		case 4:
+		argList, body, isClause = d.ArgList, d.Body, d.IsClause
+	} else {
+		switch {
+		case isMethod:
+			// (method Receiver.Name (args) body) — argList@2, body@3.
+			if len(br.Children) < 4 {
+				return nil
+			}
 			argList, body = br.Children[2], br.Children[3]
+		case headIdent(br) == "macro":
+			// (macro ~name (params) body) — argList@3, body@4 (`~`@1, name@2).
+			if len(br.Children) < 5 {
+				return nil
+			}
+			argList, body = br.Children[3], br.Children[4]
 		default:
-			return nil
+			switch len(br.Children) {
+			case 3:
+				argList, body = br.Children[1], br.Children[2]
+			case 4:
+				argList, body = br.Children[2], br.Children[3]
+			default:
+				return nil
+			}
 		}
 	}
 
@@ -323,15 +381,30 @@ func bodyScopeFor(w *walker, parent *Scope, br *ast.PBranch, isMethod bool, line
 
 	if items, ok := declList(argList); ok {
 		for _, item := range items {
+			if isClause {
+				// A clause param slot is a PATTERN: its binders (bare lowercase
+				// names, `(Type name)` tests, list/struct destructure leaves)
+				// become params; literals bind nothing.
+				w.collectPatternBinders(bodyScope, item, true)
+				continue
+			}
 			if leaf, ok := item.(*ast.PLeaf); ok && looksLikeIdentifier(leaf.Value) {
 				bodyScope.Defs[leaf.Value] = Definition{Name: leaf.Value, Kind: DefParam, Span: leaf.Span}
 				continue
 			}
-			if abr, ok := item.(*ast.PBranch); ok && abr.Open == "(" && len(abr.Children) == 2 {
-				if h, ok := abr.Children[0].(*ast.PLeaf); ok && (h.Value == "spread" || h.Value == "optional") {
-					if name, ok := abr.Children[1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) {
-						bodyScope.Defs[name.Value] = Definition{Name: name.Value, Kind: DefParam, Span: name.Span}
-					}
+			if abr, ok := item.(*ast.PBranch); ok && abr.Open == "(" && len(abr.Children) > 0 {
+				h, ok := abr.Children[0].(*ast.PLeaf)
+				if !ok {
+					continue
+				}
+				// (spread/optional/var name) binds `name`.
+				switch {
+				case (h.Value == "spread" || h.Value == "optional" || h.Value == "var") && len(abr.Children) == 2:
+				default:
+					continue
+				}
+				if name, ok := abr.Children[1].(*ast.PLeaf); ok && looksLikeIdentifier(name.Value) {
+					bodyScope.Defs[name.Value] = Definition{Name: name.Value, Kind: DefParam, Span: name.Span}
 				}
 			}
 		}
@@ -379,6 +452,14 @@ func bodyScopeFor(w *walker, parent *Scope, br *ast.PBranch, isMethod bool, line
 			if ibr, ok := asList(inner); ok {
 				head := headIdent(ibr)
 				switch head {
+				case "=", "let":
+					// A nested clause `(let name (patterns) = body)` (or retired
+					// `(= …)` impl) is a fun/method IMPLEMENTATION; open its body.
+					if d, ok := declOf(ibr); ok && (d.Head == "fun" || d.Head == "method") {
+						if s := bodyScopeFor(w, bodyScope, ibr, d.Head == "method", line, col); s != nil {
+							return s
+						}
+					}
 				case "fun", "macro":
 					if s := bodyScopeFor(w, bodyScope, ibr, false, line, col); s != nil {
 						return s
@@ -426,6 +507,14 @@ func forBodyScope(w *walker, parent *Scope, br *ast.PBranch, line, col int) *Sco
 	}
 	if ibr, ok := asList(inner); ok && spanContains(ibr.GetSpan(), line, col) {
 		switch headIdent(ibr) {
+		case "=":
+			// A nested `(= name (params) body)` / `(= Owner.name …)` impl inside
+			// the foreach body — open its body scope so its params complete.
+			if d, ok := declOf(ibr); ok && (d.Head == "fun" || d.Head == "method") {
+				if s := bodyScopeFor(w, bodyScope, ibr, d.Head == "method", line, col); s != nil {
+					return s
+				}
+			}
 		case "fun", "macro":
 			if s := bodyScopeFor(w, bodyScope, ibr, false, line, col); s != nil {
 				return s

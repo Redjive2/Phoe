@@ -6,24 +6,18 @@ import (
 	"pho/pkg/core"
 )
 
-// TestNoneTrueFalseLiterals proves the new lowercase literal spellings
-// (`none`/`true`/`false`) evaluate to the same runtime values as the
-// capitalized forms, which stay accepted during the syntax migration. The
-// expected strings use core.Stringify's still-capitalized rendering — the
-// inspect/Stringify switch happens at the hard cutover, not in Phase 2
-// (Doc/PlanV1/Syntax.md).
+// TestNoneTrueFalseLiterals proves the value literals `none`/`true`/`false`
+// evaluate to their runtime values and render lowercase. The capitalized forms
+// Nil/True/False are no longer values — a bare one is an undefined identifier;
+// only the lowercase spellings are valid references.
 func TestNoneTrueFalseLiterals(t *testing.T) {
 	cases := []struct {
 		src  string
 		want string
 	}{
-		{"none", "Nil"},
-		{"true", "True"},
-		{"false", "False"},
-		// Capitalized forms still work transitionally.
-		{"Nil", "Nil"},
-		{"True", "True"},
-		{"False", "False"},
+		{"none", "none"},
+		{"true", "true"},
+		{"false", "false"},
 	}
 	for _, tc := range cases {
 		if got := core.Stringify(evalProgram(t, tc.src)); got != tc.want {

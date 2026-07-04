@@ -5,7 +5,7 @@ import "pho/pkg/core"
 // typeBuiltins installs the first-class type values and the runtime type
 // operations of the set-theoretic gradual type system (Stage A1):
 //
-//	Number String List Map Boolean Char Atom Function NilT Type Unknown None
+//	Number String List Map Boolean Char Atom Function None Type Unknown Never
 //	    -- type VALUES (KindType), usable in (x.Is? T)/subtype? and in --@
 //	       annotations. Capitalized: they install in Globals and are never
 //	       re-exported by a module nor shadowable.
@@ -21,9 +21,9 @@ import "pho/pkg/core"
 // questions with x.Is?/subtype? instead. (core.TvTypeOf stays internal, backing
 // dispatch.)
 //
-// The nil type is bound as `NilT` (printing as "Nil"): the bare leaf `Nil` is
-// intercepted by the evaluator as the nil literal before name resolution, so a
-// `Nil` binding would be unreachable.
+// The nil type is bound as `None` (the type of the `none` value): `none`/`Nil`
+// are intercepted by the evaluator as the nil literal before name resolution.
+// The empty (bottom ⊥) type is bound as `Never`.
 func typeBuiltins() map[string]core.StackEntry {
 	konst := func(t *core.PhoType) core.StackEntry {
 		return core.StackEntry{Val: core.TvType(t), IsConstant: true}
@@ -38,10 +38,10 @@ func typeBuiltins() map[string]core.StackEntry {
 		"Char":       konst(core.TypeChar),
 		"Atom":       konst(core.TypeAtom),
 		"Function":   konst(core.TypeFunction),
-		"NilT":       konst(core.TypeNil),
+		"None":       konst(core.TypeNil),
 		"Type":       konst(core.TypeType),
 		"Unknown":    konst(core.TypeUnknown),
-		"None":       konst(core.TypeNone),
+		"Never":      konst(core.TypeNone),
 		"Collection": konst(core.TypeCollection),
 		"Dynamic":    konst(core.TypeDynamic),
 		// Struct is the open-record base; `Struct.{ X Number Y Number }` (parsed
@@ -178,7 +178,7 @@ func unknownIsMethod(ctx core.Context, argv []core.Node) core.Value {
 // asType asserts that v is usable as a type, reporting a diagnostic otherwise.
 // A LITERAL value in a type position (atom, number, string, or bool) is coerced
 // to its SINGLETON type, so a literal doubles as an enum member — `(x.Is? :ok)`,
-// `(Or :ok :error)`, `(n.Is? 5)`, `(Or "GET" "POST")`, `(b.Is? True)`.
+// `(Or :ok :error)`, `(n.Is? 5)`, `(Or "GET" "POST")`, `(b.Is? true)`.
 func asType(ctx core.Context, v core.Value, caller string) (*core.PhoType, bool) {
 	switch v.Kind {
 	case core.KindType:
@@ -191,11 +191,9 @@ func asType(ctx core.Context, v core.Value, caller string) (*core.PhoType, bool)
 		return core.StrSingleton(v.Val.(string)), true
 	case core.KindBool:
 		return core.BoolSingleton(v.Val.(bool)), true
-	case core.KindNil:
-		// `Nil` is the sole value of NilT, so the nil literal in a type position
-		// is the nil type — making `(x.Is? Nil)` the natural nil test.
-		return core.TypeNil, true
 	}
+	// A `none` VALUE is NOT a type — the nil TYPE is the capitalized `None`.
+	// `(x.Is? none)` is rejected; write `(x.Is? None)`.
 	ctx.Errorf(core.ErrType, "'%s' expected a type, got '%s'", caller, v.Kind)
 	return nil, false
 }

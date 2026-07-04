@@ -4,34 +4,46 @@
 -- subtype of Unknown, these resolve on values of any type. Pure Pho, built on
 -- `foreach`. See Doc/PlanV1/ObjectModel.md.
 --
--- NB: the membership test `(self.Is? type)` is itself a universal method, but a
--- Go-native one registered in builtinmod.go (there is deliberately no `Is?`
--- builtin, so `x.Is? T` is the only way to test a type) — not defined here.
+-- NB: the membership test `(self.is? type)` is itself a universal method, but a
+-- Go-native one registered in builtinmod.go (there is deliberately no `is?`
+-- builtin, so `x.is? T` is the only way to test a type) — not defined here.
 
 -- True iff `self` is an element of `collection` (a list or string, or one of a
 -- dict's keys — whatever `foreach` iterates).
-(method Unknown.in? (self collection) do
+(method Unknown.in? (Self Collection) Boolean)
+(let Unknown.in? (self collection) = do
     (foreach value in collection
-        (if (== self value) then 
+        (if (== self value) then
             (return true)
         )
     )
-    
+
     false
 )
 
-(method Unknown.pipe (self (spread steps)) do
+(method Unknown.pipe (Self (spread Function)) Dynamic)
+(let Unknown.pipe (self steps) = do
     (let var acc = self)
 
     (foreach step in steps
         (= acc (step acc))
     )
-    
+
     acc
 )
 
--- (1.To String) <-> (String.From 1)
---@ (~methodsig i ((From i) o) -> o)
-(method Unknown.to (self type) 
-    (type.from self)
+(template T)
+(trait From
+    (static method Self.from (T) Self)
 )
+
+(template T)
+(trait To
+    (method Self.to (Self (const T)) T)
+)
+
+-- (1.to String) <-> (String.from 1): the constant type argument binds as a
+-- pattern (`t`), so the bridge calls the target type's From impl directly.
+(template I ((From I) O))
+(method I.to (Self (const O)) O)
+(let I.to (self t) = (t.from self))

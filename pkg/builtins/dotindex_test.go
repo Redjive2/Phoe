@@ -69,11 +69,11 @@ func TestBareDynamicIndexIsError(t *testing.T) {
 		src  string
 		code string
 	}{
-		{"array read by var", "(fun f (xs) (identity do (let var i = 0) xs.#i))\n(f [1 2 3])", core.ErrField},
-		{"array read by num", "(fun f (xs) xs.0)\n(f [1 2 3])", core.ErrField},
-		{"string read", "(fun f (s) (identity do (let var i = 0) s.#i))\n(f 'hi')", core.ErrField},
-		{"dict read literal key", "(fun f (d) d.'a')\n(f ['a' -> 1])", core.ErrField},
-		{"array write", "(fun f (xs) (= xs.0 9))\n(f [1 2 3])", core.ErrField},
+		{"array read by var", "(let f (xs) = (identity do (let var i = 0) xs.#i))\n(f [1 2 3])", core.ErrField},
+		{"array read by num", "(let f (xs) = xs.0)\n(f [1 2 3])", core.ErrField},
+		{"string read", "(let f (s) = (identity do (let var i = 0) s.#i))\n(f 'hi')", core.ErrField},
+		{"dict read literal key", "(let f (d) = d.'a')\n(f ['a' -> 1])", core.ErrField},
+		{"array write", "(let f (xs) = (= xs.0 9))\n(f [1 2 3])", core.ErrField},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -110,12 +110,12 @@ func TestBracketFormErrors(t *testing.T) {
 // Field access on structs stays bare; bracketing a struct access is the
 // inverse mistake and is rejected.
 func TestStructFieldAccessStaysBare(t *testing.T) {
-	field := "(struct P x)\n(let var p = P.{ x 7 })\np.x"
+	field := "(struct P x)\n(let var p = P.{ x = 7 })\np.x"
 	if got := evalProgram(t, field); got.Kind != core.KindNum || got.Val.(float64) != 7 {
 		t.Errorf("p.X = %v, want 7", got.Val)
 	}
 
-	bracketed := "(struct P x)\n(let var p = P.{ x 7 })\np.['X']"
+	bracketed := "(struct P x)\n(let var p = P.{ x = 7 })\np.['X']"
 	if _, codes := evalProgramDiag(t, bracketed); !hasCode(codes, core.ErrField) {
 		t.Errorf("p.[\"X\"] should be a no-field error, got codes %v", codes)
 	}

@@ -72,7 +72,7 @@ func isTraitMemberForm(br core.Branch) bool {
 	}
 	head, _ := core.AsLeaf(br[0])
 	switch string(head) {
-	case "method", "property", "static":
+	case "method", "property", "static", "let":
 		return true
 	}
 	return false
@@ -118,12 +118,15 @@ func buildTraitInfo(ctx core.Context, extends []core.Node, members []core.Node) 
 func addTraitMember(ctx core.Context, info *core.TraitInfo, sub core.Node) bool {
 	br, ok := core.AsBranch(sub)
 	if !ok || len(br) < 2 {
-		ctx.Errorf(core.ErrBadForm, "trait members must be (method …), (property …), or (static …) forms")
+		ctx.Errorf(core.ErrBadForm, "trait members must be (method …), (= …), (property …), or (static …) forms")
 		return false
 	}
 	head, _ := core.AsLeaf(br[0])
 	switch string(head) {
 	case "method":
+		// A method REQUIREMENT: `(method Self.name Self args… -> Result)`. The
+		// `->` return-type slot marks it a signature; the requirement carries no
+		// default (defaults are `let` clauses — see below).
 		_, name, named, ok := methodTarget(ctx, br[1])
 		if !ok {
 			return false
@@ -132,15 +135,50 @@ func addTraitMember(ctx core.Context, info *core.TraitInfo, sub core.Node) bool 
 			ctx.Errorf(core.ErrBadForm, "a trait method needs a 'Self.Name' receiver")
 			return false
 		}
-		argList, ok := parseArgList(ctx, br[2], "trait method")
+		params, _, ok := splitArrow(br[2:])
+		if !ok {
+			ctx.Errorf(core.ErrBadForm, "a trait method is written (method Self.%s Self … -> Result)", name)
+			return false
+		}
+		argList, _, ok := parseArgList(ctx, core.Branch(params), "trait method")
 		if !ok || len(argList) == 0 {
 			ctx.Errorf(core.ErrBadForm, "trait method '%s' needs a self receiver", name)
 			return false
 		}
-		m := core.TraitMethod{Arity: len(argList) - 1}
-		if len(br) >= 4 { // a body ⇒ default implementation
-			m.Default = core.BindMethod("Self."+name, br[3], argList, ctx)
+		info.Methods[name] = core.TraitMethod{Arity: len(argList) - 1}
+		return true
+
+	case "let":
+		// A trait member's DEFAULT implementation: `(let Self.name params… =
+		// body)`. Attaches a default to the (possibly already-declared)
+		// requirement so implementers may omit it.
+		_, name, named, ok := methodTarget(ctx, br[1])
+		if !ok {
+			return false
 		}
+		if !named {
+			ctx.Errorf(core.ErrBadForm, "a trait default needs a 'Self.Name' receiver")
+			return false
+		}
+		eqIdx := -1
+		for i := 2; i < len(br); i++ {
+			if lf, ok := core.AsLeaf(br[i]); ok && string(lf) == "=" {
+				eqIdx = i
+				break
+			}
+		}
+		if eqIdx < 0 || eqIdx != len(br)-2 {
+			ctx.Errorf(core.ErrBadForm, "a trait default is written (let Self.%s self … = body)", name)
+			return false
+		}
+		argList, defaults, ok := parseArgList(ctx, core.Branch(br[2:eqIdx]), "trait default")
+		if !ok || len(argList) == 0 {
+			ctx.Errorf(core.ErrBadForm, "trait default '%s' needs a self receiver", name)
+			return false
+		}
+		m := info.Methods[name] // preserve a prior requirement's arity if present
+		m.Arity = len(argList) - 1
+		m.Default = core.BindMethod("Self."+name, br[eqIdx+1], argList, defaults, ctx)
 		info.Methods[name] = m
 		return true
 
@@ -212,9 +250,9 @@ func traitImplFun(ctx core.Context, form core.Node) (core.Fun, bool) {
 	if head, ok := core.AsLeaf(br[0]); !ok || string(head) != "method" {
 		return nil, false
 	}
-	argList, ok := parseArgList(ctx, br[2], "trait default")
+	argList, defaults, ok := parseArgList(ctx, br[2], "trait default")
 	if !ok || len(argList) == 0 {
 		return nil, false
 	}
-	return core.BindMethod("trait-default", br[3], argList, ctx), true
+	return core.BindMethod("trait-default", br[3], argList, defaults, ctx), true
 }

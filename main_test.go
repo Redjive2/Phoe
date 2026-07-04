@@ -62,6 +62,19 @@ func TestCLIDiagnostics(t *testing.T) {
 		}
 	})
 
+	t.Run("(or name default) parameter defaults are clean", func(t *testing.T) {
+		// A sig-side (optional T else default) slot substitutes `default` when
+		// the arg is none — omitted or explicit. Exercises fun/=/method impls;
+		// clean end to end (lint-on-run + runtime).
+		_, stderr, code := run(t, "or_default.pho")
+		if code != 0 {
+			t.Errorf("exit code = %d, want 0; stderr:\n%s", code, stderr)
+		}
+		if stderr != "" {
+			t.Errorf("stderr = %q, want empty", stderr)
+		}
+	})
+
 	t.Run("runtime error renders block and exits 1", func(t *testing.T) {
 		stdout, stderr, code := run(t, "runtime_err.pho")
 		if code != 1 {
@@ -90,7 +103,7 @@ func TestCLIDiagnostics(t *testing.T) {
 		if code != 1 {
 			t.Errorf("exit code = %d, want 1", code)
 		}
-		if !strings.Contains(stderr, "error[bad-form-arity]: '=' expects 2 argument(s); got 3") {
+		if !strings.Contains(stderr, "error[bad-form-arity]: '=' expects 2 argument(s); got 4") {
 			t.Errorf("missing arity diagnostic; stderr:\n%s", stderr)
 		}
 	})
@@ -126,9 +139,9 @@ func TestCLIDiagnostics(t *testing.T) {
 			t.Errorf("exit code = %d, want 1", code)
 		}
 		for _, want := range []string{
-			"--> body_span.pho:3:15",
-			"3 | (fun half (n) (/ n 'x'))",
-			"  |               ^^^^^^^^^",
+			"--> body_span.pho:4:17",
+			"4 | (let half (n) = (/ n 'x'))",
+			"  |                 ^^^^^^^^^",
 		} {
 			if !strings.Contains(stderr, want) {
 				t.Errorf("stderr missing %q; got:\n%s", want, stderr)
@@ -143,8 +156,8 @@ func TestCLIDiagnostics(t *testing.T) {
 		}
 		for _, want := range []string{
 			"error[unresolved]: operation 'fakeFunctionName' is not defined",
-			"4 | (~evil_macro)", // the call site, as normal
-			"= expanded from macro 'evil_macro':",
+			"4 | (~evil-macro)", // the call site, as normal
+			"= expanded from macro 'evil-macro':",
 			"1 | (fakeFunctionName fakeArgumentName)", // the generated code
 		} {
 			if !strings.Contains(stderr, want) {
@@ -178,9 +191,9 @@ func TestCLIDiagnostics(t *testing.T) {
 		}
 		for _, want := range []string{
 			"trace (most recent call first):",
-			"0: double       trace.pho:4:17",
-			"1: tally        trace.pho:5:35",
-			"2: <top level>  trace.pho:6:1",
+			"0: double       trace.pho:5:19",
+			"1: tally        trace.pho:7:37",
+			"2: <top level>  trace.pho:8:1",
 		} {
 			if !strings.Contains(stderr, want) {
 				t.Errorf("stderr missing %q; got:\n%s", want, stderr)

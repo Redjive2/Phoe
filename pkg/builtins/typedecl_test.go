@@ -23,10 +23,10 @@ func TestTypeDeclaration(t *testing.T) {
 	wantBool(t, "(type Five 5)\n(6.is? Five)", false)
 
 	// Aliases compose: a later alias may reference an earlier one.
-	const opt = "(type Status (Or 200 404))\n(type Maybe_Status (Or Status none))\n"
-	wantBool(t, opt+"(200.is? Maybe_Status)", true)
-	wantBool(t, opt+"(none.is? Maybe_Status)", true)
-	wantBool(t, opt+"(500.is? Maybe_Status)", false)
+	const opt = "(type Status (Or 200 404))\n(type Maybe-Status (Or Status None))\n"
+	wantBool(t, opt+"(200.is? Maybe-Status)", true)
+	wantBool(t, opt+"(none.is? Maybe-Status)", true)
+	wantBool(t, opt+"(500.is? Maybe-Status)", false)
 
 	// subtype? over named types.
 	wantBool(t, "(type Status (Or 200 404))\n(subtype? Status Number)", true)

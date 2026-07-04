@@ -143,7 +143,11 @@ func declEdits(src string, br *ast.PBranch, head *ast.PLeaf) []edit {
 	hs := offsetOf(src, head.Span.StartLine, head.Span.StartCol)
 	out := []edit{{hs, hs + len(head.Value), repl}}
 	for i := 1; i+1 < len(br.Children); i += 2 {
-		nameEnd := endOf(src, br.Children[i])
+		nameNode := br.Children[i]
+		// A typed name slot `(Type name)` stays GROUPED — the grouped form is the
+		// typed `let` binding (the ungrouped `Type name = value` form was retired).
+		// Only the `=` marker is inserted after the name slot.
+		nameEnd := endOf(src, nameNode)
 		out = append(out, edit{nameEnd, nameEnd, " ="})
 	}
 	return out
@@ -474,6 +478,7 @@ func main() {
 	goMode := false
 	recaseMode := false
 	migrateMode := false
+	splitMode := false
 	dry := false
 	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
 		switch args[0] {
@@ -483,6 +488,8 @@ func main() {
 			recaseMode = true
 		case "-migrate":
 			migrateMode = true
+		case "-split":
+			splitMode = true
 		case "-n":
 			dry = true
 		default:
@@ -509,9 +516,14 @@ func main() {
 		}
 		var out string
 		var n int
-		if goMode {
+		switch {
+		case splitMode && goMode:
+			out, n, err = SplitGoFile(string(data))
+		case splitMode:
+			out, n, err = SplitTransform(string(data))
+		case goMode:
 			out, n, err = MigrateGoFile(string(data), nil, nil)
-		} else {
+		default:
 			out, n, err = Transform(string(data))
 		}
 		if err != nil {

@@ -1,19 +1,22 @@
 (goimport ('stdDependencies' dep))
 
--- Just a thin box for an id; all functionality routed through stdDependencies 
+-- Just a thin box for an id; all functionality routed through stdDependencies
 -- Passes strings from writers to readers sharing an id
 (struct Reader
     #id
 )
 
-(method Reader.read_line (self prompt)
-    (dep.IoReadLine self.#id prompt)
+(method Reader.read-line (Self (optional String)) String)
+(let Reader.read-line (self prompt) =
+    (dep/IoReadLine self.#id prompt)
 )
 
-(method Reader.read (self n) 
-    (dep.IoRead self.#id n)
+(method Reader.read (Self Number) String)
+(let Reader.read (self n) =
+    (dep/IoRead self.#id n)
 )
 
-(method Reader.read_until (self stop)
-    (dep.IoReadUntil self.#id stop)
+(method Reader.read-until (Self String) String)
+(let Reader.read-until (self stop) =
+    (dep/IoReadUntil self.#id stop)
 )

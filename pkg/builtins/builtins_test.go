@@ -113,7 +113,7 @@ func TestBindMethodResetsPrivilegedOnReturn(t *testing.T) {
 	// ReturnSignal{Value: TvNum(42)}, BindMethod catches it, returns 42.
 	body := core.Branch{core.Leaf("return"), core.Leaf("42")}
 
-	fn := core.BindMethod("T.m", body, []string{"self"}, ctx)
+	fn := core.BindMethod("T.m", body, []string{"self"}, nil, ctx)
 	result := fn(ctx, nil)
 
 	if result.Kind != core.KindNum {
@@ -139,7 +139,7 @@ func TestBindFunRecoversReturn(t *testing.T) {
 	// (return "hi") with one arg.
 	body := core.Branch{core.Leaf("return"), core.Leaf(`'hi'`)}
 
-	fn := core.BindFun("f", body, []string{}, ctx)
+	fn := core.BindFun("f", body, []string{}, nil, ctx)
 	result := fn(ctx, nil)
 
 	if result.Kind != core.KindStr {
@@ -163,9 +163,9 @@ func TestStringifyValue(t *testing.T) {
 		{"str passthrough", core.TvStr("hi"), "hi"},
 		{"int", core.TvNum(42), "42"},
 		{"float", core.TvNum(3.14), "3.14"},
-		{"true", core.TvBool(true), "True"},
-		{"false", core.TvBool(false), "False"},
-		{"nil", core.TvNil, "Nil"},
+		{"true", core.TvBool(true), "true"},
+		{"false", core.TvBool(false), "false"},
+		{"nil", core.TvNil, "none"},
 		{"chr", core.TvChr('z'), "z"},
 		{"array", core.TvSlice([]core.Value{core.TvNum(1), core.TvNum(2), core.TvStr("x")}), "[1 2 x]"},
 		{"nested array", core.TvSlice([]core.Value{core.TvSlice([]core.Value{core.TvNum(1)})}), "[[1]]"},
@@ -187,7 +187,7 @@ func TestBindFunBareReturn(t *testing.T) {
 
 	body := core.Branch{core.Leaf("return")}
 
-	fn := core.BindFun("f", body, []string{}, ctx)
+	fn := core.BindFun("f", body, []string{}, nil, ctx)
 	result := fn(ctx, nil)
 
 	if result.Kind != core.KindNil {
@@ -209,17 +209,17 @@ func TestInterpolationInFunBody(t *testing.T) {
 	}{
 		{
 			"quoted-string fun body",
-			"(fun greet (who) 'hi %who')\n(greet 'World')",
+			"(let greet (who) = 'hi %who')\n(greet 'World')",
 			"hi World",
 		},
 		{
 			"interp inside (do ...) body",
-			"(fun tag (n) (identity do (let var s = 'n=%n') s))\n(tag 7)",
+			"(let tag (n) = (identity do (let var s = 'n=%n') s))\n(tag 7)",
 			"n=7",
 		},
 		{
 			"paren expr in fun body",
-			"(fun count (xs) 'len=%(+ 0 xs.size)')\n(count [1 2 3 4])",
+			"(let count (xs) = 'len=%(+ 0 xs.size)')\n(count [1 2 3 4])",
 			"len=4",
 		},
 		// NOTE: method-body interpolation uses the exact same quoted-body
@@ -274,14 +274,16 @@ func hasCode(codes []string, want string) bool {
 	return false
 }
 
-// An omitted (optional name) parameter binds to Nil; a supplied one
-// binds the argument. The body `'b` is the identity of the optional
-// parameter, so the returned value is exactly what got bound.
+// An omitted optional parameter (declared in the SIGNATURE, post-cutover)
+// binds to Nil; a supplied one binds the argument. The body `b` is the
+// identity of the optional parameter, so the returned value is exactly what
+// got bound.
 func TestOptionalParamBinding(t *testing.T) {
-	if v := evalProgram(t, "(fun f (a (optional b)) b)\n(f 1)"); v.Kind != core.KindNil {
-		t.Errorf("omitted optional: got kind %q (%v), want Nil", v.Kind, v.Val)
+	const decl = "(fun f (Dynamic (optional Dynamic)) Dynamic)\n(let f (a b) = b)\n"
+	if v := evalProgram(t, decl+"(f 1)"); v.Kind != core.KindNil {
+		t.Errorf("omitted optional: got kind %q (%v), want none", v.Kind, v.Val)
 	}
-	if v := evalProgram(t, "(fun f (a (optional b)) b)\n(f 1 2)"); v.Kind != core.KindNum || v.Val.(float64) != 2 {
+	if v := evalProgram(t, decl+"(f 1 2)"); v.Kind != core.KindNum || v.Val.(float64) != 2 {
 		t.Errorf("supplied optional: got %v, want 2", v.Val)
 	}
 }
@@ -299,7 +301,8 @@ func TestOptionalWithSpread(t *testing.T) {
 		return len(*v.Val.(*[]core.Value))
 	}
 	prog := func(call string) string {
-		return "(fun g (a (optional b) (spread r)) r)\n" + call
+		return "(fun g (Dynamic (optional Dynamic) (spread Dynamic)) List)\n" +
+			"(let g (a b (spread r)) = r)\n" + call
 	}
 	if n := restLen(prog("(g 1)")); n != 0 {
 		t.Errorf("(g 1): rest len = %d, want 0", n)
@@ -313,18 +316,19 @@ func TestOptionalWithSpread(t *testing.T) {
 }
 
 // A required parameter omitted still errors, even when later params are
-// optional — the minimum-arity check counts only required params.
+// optional — signature matching counts only required params as the minimum,
+// and a call below it matches no signature (type-mismatch).
 func TestOptionalRequiredStillEnforced(t *testing.T) {
-	_, codes := evalProgramDiag(t, "(fun need (a (optional b)) a)\n(need)")
-	if !hasCode(codes, core.ErrArity) {
-		t.Errorf("omitting a required arg must raise ErrArity, got %v", codes)
+	_, codes := evalProgramDiag(t, "(fun need (Dynamic (optional Dynamic)) Dynamic)\n(let need (a b) = a)\n(need)")
+	if !hasCode(codes, core.ErrType) {
+		t.Errorf("omitting a required arg must raise a no-matching-signature error, got %v", codes)
 	}
 }
 
 // A required parameter after an optional one is a malformed declaration,
-// rejected by parseArgList when the `fun` form is evaluated.
+// rejected when the `fun` signature form is evaluated.
 func TestOptionalOrderingRejected(t *testing.T) {
-	_, codes := evalProgramDiag(t, "(fun bad ((optional a) b) a)")
+	_, codes := evalProgramDiag(t, "(fun bad ((optional Dynamic) Dynamic) Dynamic)")
 	if !hasCode(codes, core.ErrBadForm) {
 		t.Errorf("required-after-optional must raise ErrBadForm, got %v", codes)
 	}
